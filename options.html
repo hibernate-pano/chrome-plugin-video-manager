@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Video Speed Controller Options</title>
+    <title>视频速度控制器选项</title>
+    <meta charset="UTF-8">
     <link rel="stylesheet" href="style.css">
     <style>
         body {
@@ -11,7 +12,7 @@
             min-width: 300px;
         }
         h1 {
-            font-size: 22px;
+            font-size: 18px;
             color: #333;
         }
         .form-group {
@@ -49,29 +50,29 @@
     </style>
 </head>
 <body>
-    <h1>Shortcut Settings</h1>
+    <h1>快捷键设置</h1>
 
     <div class="form-group">
-        <label for="increase">Increase Speed:</label>
+        <label for="increase">加速:</label>
         <input type="text" id="increase" class="shortcut-input">
     </div>
 
     <div class="form-group">
-        <label for="decrease">Decrease Speed:</label>
+        <label for="decrease">减速:</label>
         <input type="text" id="decrease" class="shortcut-input">
     </div>
 
     <div class="form-group">
-        <label for="reset">Reset Speed:</label>
+        <label for="reset">重置速度:</label>
         <input type="text" id="reset" class="shortcut-input">
     </div>
 
     <div class="form-group">
-        <label for="toggle-play">Toggle Play/Pause:</label>
+        <label for="toggle-play">播放/暂停:</label>
         <input type="text" id="toggle-play" class="shortcut-input">
     </div>
 
-    <button id="save">Save</button>
+    <button id="save">保存</button>
     <div id="status"></div>
 
     <script src="options.js"></script>

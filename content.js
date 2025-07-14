@@ -91,6 +91,11 @@
     });
 
     window.addEventListener('keydown', (e) => {
+        // Ignore shortcuts with modifier keys (Cmd, Ctrl, Alt) to avoid conflicts with browser/OS shortcuts.
+        if (e.metaKey || e.ctrlKey || e.altKey) {
+            return;
+        }
+
         if (e.target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
             return;
         }

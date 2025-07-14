@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         chrome.storage.sync.set({ shortcuts: newShortcuts }, () => {
-            statusDiv.textContent = 'Options saved.';
+            statusDiv.textContent = '设置已保存。';
             setTimeout(() => {
                 statusDiv.textContent = '';
             }, 1500);

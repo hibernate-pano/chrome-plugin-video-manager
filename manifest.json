@@ -3,7 +3,13 @@
   "name": "Video & Audio Speed Controller",
   "version": "1.0.0",
   "description": "Easily control video and audio playback speed with keyboard shortcuts.",
-  "options_page": "options.html",
+  "action": {
+    "default_popup": "options.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    }
+  },
   "permissions": ["storage"],
   "icons": {
     "16": "icons/icon16.png",
