@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Speed Controller Options</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            padding: 10px 20px;
+            background-color: #f0f2f5;
+            min-width: 300px;
+        }
+        h1 {
+            font-size: 22px;
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"] {
+            width: 100px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 15px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #status {
+            margin-top: 15px;
+            color: green;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Shortcut Settings</h1>
+
+    <div class="form-group">
+        <label for="increase">Increase Speed:</label>
+        <input type="text" id="increase" class="shortcut-input">
+    </div>
+
+    <div class="form-group">
+        <label for="decrease">Decrease Speed:</label>
+        <input type="text" id="decrease" class="shortcut-input">
+    </div>
+
+    <div class="form-group">
+        <label for="reset">Reset Speed:</label>
+        <input type="text" id="reset" class="shortcut-input">
+    </div>
+
+    <div class="form-group">
+        <label for="toggle-play">Toggle Play/Pause:</label>
+        <input type="text" id="toggle-play" class="shortcut-input">
+    </div>
+
+    <button id="save">Save</button>
+    <div id="status"></div>
+
+    <script src="options.js"></script>
+</body>
+</html>

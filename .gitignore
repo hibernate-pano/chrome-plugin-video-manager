@@ -1,2 +1,4 @@
-.gimini
-.promptx
+.gemini/
+.promptx/
+
+.DS_Store
