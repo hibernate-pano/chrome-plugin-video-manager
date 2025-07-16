@@ -433,13 +433,41 @@
                 const newLightbox = document.createElement('div');
                 newLightbox.id = 'vsc-lightbox-overlay';
 
-                const handleLightboxVideoClick = () => {
-                    // After a click, blur the video after a delay to allow controls to auto-hide.
-                    setTimeout(() => {
-                        if (document.activeElement === media) {
-                            media.blur();
-                        }
-                    }, 2000);
+                const handleLightboxVideoClick = (e) => {
+                    // 立即检查是否点击了控制条元素
+                    const isControlsClick = e.target !== media;
+                    
+                    if (isControlsClick) {
+                        // 如果点击的是控制条，记录这个状态供键盘事件使用
+                        media.dataset.controlsActive = 'true';
+                        
+                        // 防止控制条抢走焦点导致快捷键失效
+                        setTimeout(() => {
+                            // 仍然允许控制条显示，但确保键盘事件能被正确处理
+                            if (document.activeElement === media || media.contains(document.activeElement)) {
+                                // 创建并触发一个合成的点击事件，保持控制条可见但不影响焦点
+                                try {
+                                    const syntheticEvent = new MouseEvent('click', {
+                                        bubbles: false,
+                                        cancelable: true,
+                                        view: window
+                                    });
+                                    media.dispatchEvent(syntheticEvent);
+                                } catch (err) {
+                                    console.error('创建合成事件失败:', err);
+                                }
+                            }
+                        }, 100);
+                    } else {
+                        // 点击视频本身而非控制条，设置为500毫秒后自动失去焦点
+                        // 这允许用户使用空格暂停等原生控制，同时保证我们的快捷键可用
+                        media.dataset.controlsActive = 'false';
+                        setTimeout(() => {
+                            if (document.activeElement === media) {
+                                media.blur();
+                            }
+                        }, 500);
+                    }
                 };
 
                 media.classList.add('vsc-lightbox-video');
@@ -497,8 +525,25 @@
                 return;
             }
 
+            // 特殊处理：检查焦点是否在视频控制条上
+            // 如果在网页全屏模式下，即使焦点在控制条上也允许快捷键生效
+            let shouldAllowShortcut = false;
+            if (lightboxActive) {
+                const lightbox = document.getElementById('vsc-lightbox-overlay');
+                if (lightbox) {
+                    const video = lightbox.querySelector('video');
+                    // 如果焦点在视频或其子元素上(控制条)，允许快捷键生效
+                    if (video && (video === e.target || video.contains(e.target))) {
+                        shouldAllowShortcut = true;
+                    }
+                }
+            }
+
             // 先检查是否有可用的媒体元素
-            const media = getTargetMedia();
+            const media = shouldAllowShortcut ? 
+                document.querySelector('#vsc-lightbox-overlay video') : 
+                getTargetMedia();
+            
             if (!media) return; // 如果没有媒体元素，直接返回，不阻止默认行为
 
             // 只有找到媒体元素时才阻止默认行为
@@ -682,8 +727,18 @@
         // 设置事件委托
         setupMediaEventDelegation();
         
-        // 全局键盘事件监听
+        // 全局键盘事件监听（捕获阶段）
         window.addEventListener('keydown', handleKeyDown, true);
+        
+        // 备用键盘事件监听（在document级别，同样是捕获阶段）
+        // 这可以帮助捕获在网页全屏模式下可能被控制条拦截的事件
+        document.addEventListener('keydown', (e) => {
+            // 只有当lightbox活跃时才使用这个备用处理器
+            if (!lightboxActive) return;
+            
+            // 调用主键盘事件处理函数
+            handleKeyDown(e);
+        }, true);
     }
     
     // 初始化插件
