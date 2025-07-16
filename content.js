@@ -328,6 +328,21 @@
 
     function handleKeyDown(e) {
         try {
+            // 特殊处理ESC键退出网页全屏
+            if (e.key === 'Escape' && lightboxActive) {
+                const lightbox = document.getElementById('vsc-lightbox-overlay');
+                if (lightbox) {
+                    const video = lightbox.querySelector('video');
+                    if (video) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleLightboxFullscreen(video);
+                        return;
+                    }
+                }
+            }
+
+            // 原有的快捷键处理逻辑保持不变
             // When lightbox is active, some keys (like arrows) might be meant for video seeking.
             // We only intercept the shortcuts defined in our extension.
             const shortcutPressed = (
