@@ -151,4 +151,4 @@ chrome-plugin-video-manager/
 ---
 
 **开发者:** [Your Name](https://github.com/yourusername)  
-**版本:** 1.1.0 
+**版本:** 1.2.0 
