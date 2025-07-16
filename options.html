@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>视频速度控制器选项</title>
+    <title>Video Speed Controller - 视频速度控制器</title>
     <meta charset="UTF-8">
     <link rel="stylesheet" href="style.css">
     <style>
@@ -47,38 +47,245 @@
             color: green;
             font-weight: bold;
         }
+        .help-text {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #007bff;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .shortcut-description {
+            color: #666;
+            font-size: 12px;
+            font-style: italic;
+            margin-top: 3px;
+        }
+        .tab-container {
+            margin-top: 20px;
+        }
+        .tab-buttons {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 15px;
+        }
+        .tab-button {
+            padding: 8px 16px;
+            cursor: pointer;
+            background: #f0f0f0;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            margin-right: 5px;
+            border-radius: 4px 4px 0 0;
+        }
+        .tab-button.active {
+            background: #fff;
+            border-bottom: 1px solid #fff;
+            margin-bottom: -1px;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+            padding: 15px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        code {
+            background-color: #f1f1f1;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        .bilingual {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .bilingual .en {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .description-bilingual {
+            display: flex;
+            justify-content: space-between;
+        }
+        .description-bilingual .en {
+            color: #888;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
-    <h1>快捷键设置</h1>
+    <h1 class="bilingual">
+        <span class="zh">视频速度控制器设置</span>
+        <span class="en">Video Speed Controller Settings</span>
+    </h1>
+    
+    <div class="tab-container">
+        <div class="tab-buttons">
+            <div class="tab-button active" data-tab="shortcuts">
+                <span class="bilingual">
+                    <span class="zh">快捷键</span>
+                    <span class="en">Shortcuts</span>
+                </span>
+            </div>
+            <div class="tab-button" data-tab="help">
+                <span class="bilingual">
+                    <span class="zh">使用帮助</span>
+                    <span class="en">Help</span>
+                </span>
+            </div>
+        </div>
+        
+        <div id="shortcuts" class="tab-content active">
+            <div class="form-group">
+                <label for="increase" class="bilingual">
+                    <span class="zh">加速:</span>
+                    <span class="en">Speed Up:</span>
+                </label>
+                <input type="text" id="increase" class="shortcut-input">
+                <div class="description-bilingual">
+                    <span class="zh shortcut-description">增加视频播放速度 (+0.1)</span>
+                    <span class="en shortcut-description">Increase playback speed (+0.1)</span>
+                </div>
+            </div>
 
-    <div class="form-group">
-        <label for="increase">加速:</label>
-        <input type="text" id="increase" class="shortcut-input">
+            <div class="form-group">
+                <label for="decrease" class="bilingual">
+                    <span class="zh">减速:</span>
+                    <span class="en">Slow Down:</span>
+                </label>
+                <input type="text" id="decrease" class="shortcut-input">
+                <div class="description-bilingual">
+                    <span class="zh shortcut-description">降低视频播放速度 (-0.1)</span>
+                    <span class="en shortcut-description">Decrease playback speed (-0.1)</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="reset" class="bilingual">
+                    <span class="zh">重置速度:</span>
+                    <span class="en">Reset Speed:</span>
+                </label>
+                <input type="text" id="reset" class="shortcut-input">
+                <div class="description-bilingual">
+                    <span class="zh shortcut-description">将播放速度重置为 1.0x (正常速度)</span>
+                    <span class="en shortcut-description">Reset playback speed to 1.0x (normal)</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="toggle-play" class="bilingual">
+                    <span class="zh">播放/暂停:</span>
+                    <span class="en">Play/Pause:</span>
+                </label>
+                <input type="text" id="toggle-play" class="shortcut-input">
+                <div class="description-bilingual">
+                    <span class="zh shortcut-description">切换视频的播放/暂停状态</span>
+                    <span class="en shortcut-description">Toggle play/pause state</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="toggle-fullscreen" class="bilingual">
+                    <span class="zh">切换网页全屏:</span>
+                    <span class="en">Toggle Fullscreen:</span>
+                </label>
+                <input type="text" id="toggle-fullscreen" class="shortcut-input">
+                <div class="description-bilingual">
+                    <span class="zh shortcut-description">进入/退出网页全屏模式（非浏览器全屏）</span>
+                    <span class="en shortcut-description">Enter/exit page fullscreen mode</span>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button id="save" class="bilingual">
+                    <span class="zh">保存</span>
+                    <span class="en">Save</span>
+                </button>
+                <button id="reset-shortcuts" style="background-color: #6c757d;" class="bilingual">
+                    <span class="zh">恢复默认设置</span>
+                    <span class="en">Reset to Default</span>
+                </button>
+            </div>
+            <div id="status"></div>
+        </div>
+        
+        <div id="help" class="tab-content">
+            <h3 class="bilingual">
+                <span class="zh">使用说明</span>
+                <span class="en">Instructions</span>
+            </h3>
+            <p class="bilingual">
+                <span class="zh">本插件允许您使用自定义快捷键控制网页上视频和音频的播放速度。</span>
+                <span class="en">This extension allows you to control video and audio playback speed using custom shortcuts.</span>
+            </p>
+            
+            <h4 class="bilingual">
+                <span class="zh">基本使用方法</span>
+                <span class="en">Basic Usage</span>
+            </h4>
+            <ul>
+                <li class="bilingual">
+                    <span class="zh">插件会自动检测当前页面上的视频或音频元素</span>
+                    <span class="en">Extension automatically detects video or audio elements on the page</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">使用设置的快捷键直接控制媒体播放</span>
+                    <span class="en">Use configured shortcuts to control media playback</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">更改播放速度时，会显示速度指示器</span>
+                    <span class="en">Speed indicator will appear when changing playback speed</span>
+                </li>
+            </ul>
+            
+            <h4 class="bilingual">
+                <span class="zh">视频选择逻辑</span>
+                <span class="en">Video Selection Logic</span>
+            </h4>
+            <p class="bilingual">
+                <span class="zh">插件使用以下顺序选择要控制的媒体：</span>
+                <span class="en">The extension selects media to control in this order:</span>
+            </p>
+            <ol>
+                <li class="bilingual">
+                    <span class="zh">当前处于全屏模式的视频</span>
+                    <span class="en">Video in fullscreen mode</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">鼠标悬停的视频或音频</span>
+                    <span class="en">Video or audio being hovered</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">最后交互过的正在播放的媒体</span>
+                    <span class="en">Last interacted media that is playing</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">当前视口中正在播放的媒体</span>
+                    <span class="en">Media playing in the current viewport</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">视口中尺寸最大的媒体</span>
+                    <span class="en">Largest media in the viewport</span>
+                </li>
+            </ol>
+            
+            <h4 class="bilingual">
+                <span class="zh">注意事项</span>
+                <span class="en">Important Note</span>
+            </h4>
+            <p class="bilingual">
+                <span class="zh">插件的快捷键只在有视频或音频元素可用时才会拦截。如果页面上没有媒体元素，快捷键会正常传递给页面。</span>
+                <span class="en">Shortcuts are only intercepted when video or audio elements are available. If no media elements are on the page, shortcuts will pass through normally.</span>
+            </p>
+        </div>
     </div>
-
-    <div class="form-group">
-        <label for="decrease">减速:</label>
-        <input type="text" id="decrease" class="shortcut-input">
-    </div>
-
-    <div class="form-group">
-        <label for="reset">重置速度:</label>
-        <input type="text" id="reset" class="shortcut-input">
-    </div>
-
-    <div class="form-group">
-        <label for="toggle-play">播放/暂停:</label>
-        <input type="text" id="toggle-play" class="shortcut-input">
-    </div>
-
-    <div class="form-group">
-        <label for="toggle-fullscreen">切换网页全屏:</label>
-        <input type="text" id="toggle-fullscreen" class="shortcut-input">
-    </div>
-
-    <button id="save">保存</button>
-    <div id="status"></div>
 
     <script src="options.js"></script>
 </body>

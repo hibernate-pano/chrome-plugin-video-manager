@@ -25,6 +25,17 @@
     width: 120px;
 }
 
+/* 快捷键警告样式 */
+.shortcut-input.warning {
+    border: 2px solid #ff5252;
+    background-color: #ffecec;
+}
+
+/* 重置按钮样式 */
+#reset-shortcuts:hover {
+    background-color: #5a6268 !important;
+}
+
 /* --- Lightbox Fullscreen --- */
 #vsc-lightbox-overlay {
     position: fixed !important;

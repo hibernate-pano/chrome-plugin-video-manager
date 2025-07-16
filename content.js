@@ -2,6 +2,16 @@
     let indicatorTimeout;
     let lastActiveMedia = null;
     let shortcuts = {};
+    
+    // 防抖函数
+    function debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(context, args), wait);
+        };
+    }
 
     // --- Lightbox State ---
     let lightboxActive = false;
@@ -19,177 +29,425 @@
 
     // Load shortcuts from storage
     chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
-        shortcuts = data.shortcuts;
+        try {
+            shortcuts = data.shortcuts;
+        } catch (e) {
+            console.error('加载快捷键失败:', e);
+            shortcuts = defaultShortcuts; // 使用默认值作为后备
+        }
     });
 
     // Listen for changes in shortcuts
     chrome.storage.onChanged.addListener((changes, namespace) => {
-        if (namespace === 'sync' && changes.shortcuts) {
-            shortcuts = changes.shortcuts.newValue;
+        try {
+            if (namespace === 'sync' && changes.shortcuts) {
+                shortcuts = changes.shortcuts.newValue;
+            }
+        } catch (e) {
+            console.error('处理快捷键变更失败:', e);
         }
     });
 
+    // 创建指示器元素
     const indicator = document.createElement('div');
     indicator.id = 'video-speed-indicator';
     document.body.appendChild(indicator);
 
     function showIndicator(speed, mediaElement) {
-        const rect = mediaElement.getBoundingClientRect();
-        // FIX: Indicator is position:fixed, so its position should always be relative to the viewport.
-        // Do not add scrollX/scrollY offsets.
-        indicator.style.top = `${rect.top + 10}px`;
-        indicator.style.left = `${rect.left + 10}px`;
-        indicator.textContent = typeof speed === 'string' ? speed : `${speed.toFixed(2)}x`;
-        indicator.classList.add('visible');
+        try {
+            const rect = mediaElement.getBoundingClientRect();
+            // FIX: Indicator is position:fixed, so its position should always be relative to the viewport.
+            // Do not add scrollX/scrollY offsets.
+            indicator.style.top = `${rect.top + 10}px`;
+            indicator.style.left = `${rect.left + 10}px`;
+            indicator.textContent = typeof speed === 'string' ? speed : `${speed.toFixed(2)}x`;
+            indicator.classList.add('visible');
 
-        clearTimeout(indicatorTimeout);
-        indicatorTimeout = setTimeout(() => {
-            indicator.classList.remove('visible');
-        }, 1500);
+            clearTimeout(indicatorTimeout);
+            indicatorTimeout = setTimeout(() => {
+                indicator.classList.remove('visible');
+            }, 1500);
+        } catch (e) {
+            console.error('显示指示器失败:', e);
+        }
     }
 
     function handlePlayback(media, action) {
-        if (action === 'toggle-fullscreen') {
-            toggleLightboxFullscreen(media);
-            return;
-        }
-
-        let newSpeed;
-        switch (action) {
-            case 'increase':
-                newSpeed = Math.min(media.playbackRate + 0.1, 16);
-                break;
-            case 'decrease':
-                newSpeed = Math.max(media.playbackRate - 0.1, 0.1);
-                break;
-            case 'reset':
-                newSpeed = 1.0;
-                break;
-            case 'toggle-play':
-                if (media.paused) {
-                    media.play();
-                    showIndicator(`${media.playbackRate.toFixed(2)}x`, media);
-                } else {
-                    media.pause();
-                    showIndicator('Paused', media);
-                }
+        try {
+            if (action === 'toggle-fullscreen') {
+                toggleLightboxFullscreen(media);
                 return;
+            }
+
+            let newSpeed;
+            switch (action) {
+                case 'increase':
+                    newSpeed = Math.min(media.playbackRate + 0.1, 16);
+                    break;
+                case 'decrease':
+                    newSpeed = Math.max(media.playbackRate - 0.1, 0.1);
+                    break;
+                case 'reset':
+                    newSpeed = 1.0;
+                    break;
+                case 'toggle-play':
+                    if (media.paused) {
+                        const playPromise = media.play();
+                        if (playPromise !== undefined) {
+                            playPromise
+                                .then(() => {
+                                    showIndicator(`${media.playbackRate.toFixed(2)}x`, media);
+                                })
+                                .catch(error => {
+                                    console.error('播放媒体失败:', error);
+                                    showIndicator('播放失败', media);
+                                });
+                        } else {
+                            showIndicator(`${media.playbackRate.toFixed(2)}x`, media);
+                        }
+                    } else {
+                        media.pause();
+                        showIndicator('已暂停', media);
+                    }
+                    return;
+            }
+            media.playbackRate = newSpeed;
+            showIndicator(newSpeed, media);
+        } catch (e) {
+            console.error('处理媒体播放操作失败:', e);
         }
-        media.playbackRate = newSpeed;
-        showIndicator(newSpeed, media);
     }
 
     function getTargetMedia() {
-        const lightboxVideo = document.querySelector('#vsc-lightbox-overlay video');
-        if (lightboxVideo) return lightboxVideo;
+        try {
+            // 1. 首先检查是否有处于lightbox模式的视频
+            const lightboxVideo = document.querySelector('#vsc-lightbox-overlay video');
+            if (lightboxVideo) return lightboxVideo;
 
-        const allMedia = Array.from(document.querySelectorAll('video, audio'));
-        const hoveredMedia = allMedia.find(m => m.matches(':hover'));
-        if (hoveredMedia) return hoveredMedia;
-        if (lastActiveMedia && !lastActiveMedia.paused) return lastActiveMedia;
-        return allMedia.find(m => {
-            const rect = m.getBoundingClientRect();
-            return rect.top >= 0 && rect.left >= 0 && rect.bottom <= window.innerHeight && rect.right <= window.innerWidth;
-        });
+            // 获取所有媒体元素（包括iframe中的）
+            const allMedia = getAllMediaElements();
+            
+            // 2. 检查是否有鼠标悬停的媒体
+            const hoveredMedia = allMedia.find(m => m.matches(':hover'));
+            if (hoveredMedia) return hoveredMedia;
+            
+            // 3. 检查最后一个交互的媒体元素是否仍在播放
+            if (lastActiveMedia && !lastActiveMedia.paused && !lastActiveMedia.ended && lastActiveMedia.readyState > 2) {
+                // 确保媒体元素仍然存在于DOM中
+                if (document.body.contains(lastActiveMedia) || isInIframe(lastActiveMedia)) {
+                    return lastActiveMedia;
+                }
+            }
+            
+            // 4. 尝试找到正在播放的媒体
+            const playingMedia = allMedia.filter(m => !m.paused && !m.ended && m.readyState > 2);
+            
+            if (playingMedia.length === 1) {
+                // 只有一个正在播放的媒体，直接返回
+                return playingMedia[0];
+            } else if (playingMedia.length > 1) {
+                // 多个正在播放的媒体，按以下优先级选择:
+                // a) 视口内可见的
+                // b) 尺寸最大的
+                // c) 音量最大的
+                
+                // 首先检查哪些在视口内
+                const visiblePlayingMedia = playingMedia.filter(m => isElementInViewport(m));
+                
+                if (visiblePlayingMedia.length >= 1) {
+                    // 在可见的正在播放的媒体中，选择尺寸最大的
+                    return getBiggestMedia(visiblePlayingMedia);
+                } else {
+                    // 如果没有可见的，选择所有播放媒体中尺寸最大的
+                    return getBiggestMedia(playingMedia);
+                }
+            }
+            
+            // 5. 没有播放中的媒体，找一个在视口中最大的媒体元素
+            const visibleMedia = allMedia.filter(m => isElementInViewport(m));
+            if (visibleMedia.length > 0) {
+                return getBiggestMedia(visibleMedia);
+            }
+            
+            // 6. 如果还是没找到，返回第一个媒体元素（如果有的话）
+            return allMedia.length > 0 ? allMedia[0] : null;
+        } catch (e) {
+            console.error('查找目标媒体失败:', e);
+            return null;
+        }
+    }
+    
+    // 辅助函数：获取所有媒体元素，包括iframe中的
+    function getAllMediaElements() {
+        // 获取主文档中的媒体元素
+        const mainDocMedia = Array.from(document.querySelectorAll('video, audio'));
+        
+        // 尝试获取所有iframe中的媒体元素
+        const iframeMedia = [];
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            for (const iframe of iframes) {
+                try {
+                    // 只访问同源iframe
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    if (iframeDoc) {
+                        const mediaInIframe = Array.from(iframeDoc.querySelectorAll('video, audio'));
+                        iframeMedia.push(...mediaInIframe);
+                    }
+                } catch (e) {
+                    // 跨域iframe会抛出错误，忽略它
+                    // console.warn('无法访问iframe内容：', e);
+                }
+            }
+        } catch (e) {
+            // 出现异常，忽略iframe内容
+            // console.warn('获取iframe内容时出错：', e);
+        }
+        
+        return [...mainDocMedia, ...iframeMedia];
+    }
+    
+    // 辅助函数：检查元素是否在视口内
+    function isElementInViewport(el) {
+        try {
+            const rect = el.getBoundingClientRect();
+            return (
+                rect.top >= 0 &&
+                rect.left >= 0 &&
+                rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // 辅助函数：检查元素是否在iframe中
+    function isInIframe(el) {
+        try {
+            // 遍历所有iframe
+            const iframes = document.querySelectorAll('iframe');
+            for (const iframe of iframes) {
+                try {
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    if (iframeDoc && iframeDoc.contains(el)) {
+                        return true;
+                    }
+                } catch (e) {
+                    // 跨域iframe会抛出错误，忽略
+                }
+            }
+            return false;
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // 辅助函数：从媒体数组中获取尺寸最大的
+    function getBiggestMedia(mediaArray) {
+        if (!mediaArray || mediaArray.length === 0) return null;
+        if (mediaArray.length === 1) return mediaArray[0];
+        
+        return mediaArray.reduce((biggest, current) => {
+            try {
+                const biggestRect = biggest.getBoundingClientRect();
+                const currentRect = current.getBoundingClientRect();
+                
+                const biggestArea = biggestRect.width * biggestRect.height;
+                const currentArea = currentRect.width * currentRect.height;
+                
+                return currentArea > biggestArea ? current : biggest;
+            } catch (e) {
+                return biggest;
+            }
+        }, mediaArray[0]);
     }
 
     function toggleLightboxFullscreen(media) {
-        if (!media || media.tagName !== 'VIDEO') return;
+        try {
+            if (!media || media.tagName !== 'VIDEO') return;
 
-        const lightbox = document.getElementById('vsc-lightbox-overlay');
+            const lightbox = document.getElementById('vsc-lightbox-overlay');
 
-        if (lightboxActive && lightbox) {
-            // --- Exit Lightbox ---
-            const video = lightbox.querySelector('video');
-            if (video) {
-                // Clean up the click listener we added
-                if (lightbox.videoClickHandler) {
-                    video.removeEventListener('click', lightbox.videoClickHandler);
-                }
-
-                if (originalParent) {
-                    originalParent.insertBefore(video, originalNextSibling);
-                } else {
-                    document.body.appendChild(video);
-                }
-                video.style.cssText = originalVideoStyles.cssText;
-                video.controls = originalVideoStyles.controls;
-                video.classList.remove('vsc-lightbox-video');
-            }
-
-            lightbox.remove();
-            document.body.classList.remove('vsc-body-lock');
-            lightboxActive = false;
-        } else {
-            // --- Enter Lightbox ---
-            originalParent = media.parentElement;
-            originalNextSibling = media.nextSibling;
-            originalVideoStyles = { cssText: media.style.cssText, controls: media.controls };
-
-            const newLightbox = document.createElement('div');
-            newLightbox.id = 'vsc-lightbox-overlay';
-
-            const handleLightboxVideoClick = () => {
-                // After a click, blur the video after a delay to allow controls to auto-hide.
-                setTimeout(() => {
-                    if (document.activeElement === media) {
-                        media.blur();
+            if (lightboxActive && lightbox) {
+                // --- Exit Lightbox ---
+                const video = lightbox.querySelector('video');
+                if (video) {
+                    // Clean up the click listener we added
+                    if (lightbox.videoClickHandler) {
+                        video.removeEventListener('click', lightbox.videoClickHandler);
                     }
-                }, 2000);
-            };
 
-            media.classList.add('vsc-lightbox-video');
-            media.controls = true;
-            media.addEventListener('click', handleLightboxVideoClick);
+                    if (originalParent) {
+                        originalParent.insertBefore(video, originalNextSibling);
+                    } else {
+                        document.body.appendChild(video);
+                    }
+                    video.style.cssText = originalVideoStyles.cssText;
+                    video.controls = originalVideoStyles.controls;
+                    video.classList.remove('vsc-lightbox-video');
+                }
 
-            // Store the handler on the lightbox element so we can remove it when exiting.
-            newLightbox.videoClickHandler = handleLightboxVideoClick;
+                lightbox.remove();
+                document.body.classList.remove('vsc-body-lock');
+                lightboxActive = false;
+            } else {
+                // --- Enter Lightbox ---
+                originalParent = media.parentElement;
+                originalNextSibling = media.nextSibling;
+                originalVideoStyles = { cssText: media.style.cssText, controls: media.controls };
 
-            newLightbox.appendChild(media);
-            document.body.appendChild(newLightbox);
-            document.body.classList.add('vsc-body-lock');
-            lightboxActive = true;
+                const newLightbox = document.createElement('div');
+                newLightbox.id = 'vsc-lightbox-overlay';
+
+                const handleLightboxVideoClick = () => {
+                    // After a click, blur the video after a delay to allow controls to auto-hide.
+                    setTimeout(() => {
+                        if (document.activeElement === media) {
+                            media.blur();
+                        }
+                    }, 2000);
+                };
+
+                media.classList.add('vsc-lightbox-video');
+                media.controls = true;
+                media.addEventListener('click', handleLightboxVideoClick);
+
+                // Store the handler on the lightbox element so we can remove it when exiting.
+                newLightbox.videoClickHandler = handleLightboxVideoClick;
+
+                newLightbox.appendChild(media);
+                document.body.appendChild(newLightbox);
+                document.body.classList.add('vsc-body-lock');
+                lightboxActive = true;
+            }
+        } catch (e) {
+            console.error('切换全屏模式失败:', e);
         }
     }
 
     function handleKeyDown(e) {
-        // When lightbox is active, some keys (like arrows) might be meant for video seeking.
-        // We only intercept the shortcuts defined in our extension.
-        const shortcutPressed = (
-            (e.ctrlKey ? 'ctrl+' : '') +
-            (e.altKey ? 'alt+' : '') +
-            (e.shiftKey ? 'shift+' : '') +
-            (e.metaKey ? 'meta+' : '') +
-            e.key.toLowerCase()
-        );
-        const action = Object.keys(shortcuts).find(key => shortcuts[key] === shortcutPressed);
+        try {
+            // When lightbox is active, some keys (like arrows) might be meant for video seeking.
+            // We only intercept the shortcuts defined in our extension.
+            const shortcutPressed = (
+                (e.ctrlKey ? 'ctrl+' : '') +
+                (e.altKey ? 'alt+' : '') +
+                (e.shiftKey ? 'shift+' : '') +
+                (e.metaKey ? 'meta+' : '') +
+                e.key.toLowerCase()
+            );
+            const action = Object.keys(shortcuts).find(key => shortcuts[key] === shortcutPressed);
 
-        if (!action) {
-            return;
+            if (!action) {
+                return;
+            }
+            
+            // 检查是否在可编辑区域
+            if (e.target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+                // 在输入框中不拦截快捷键
+                return;
+            }
+
+            // 先检查是否有可用的媒体元素
+            const media = getTargetMedia();
+            if (!media) return; // 如果没有媒体元素，直接返回，不阻止默认行为
+
+            // 只有找到媒体元素时才阻止默认行为
+            e.preventDefault();
+            e.stopPropagation();
+
+            handlePlayback(media, action);
+        } catch (e) {
+            console.error('处理键盘事件失败:', e);
         }
-        
-        // Prevent default action if the key is one of our shortcuts
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (e.target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
-            // But allow it if the user is typing in an input field (except for our shortcuts)
-            return;
-        }
-
-        const media = getTargetMedia();
-        if (!media) return;
-
-        handlePlayback(media, action);
     }
 
-    document.addEventListener('mouseover', event => {
-        if (event.target.tagName === 'VIDEO' || event.target.tagName === 'AUDIO') {
-            lastActiveMedia = event.target;
+    // 使用防抖处理鼠标事件，避免频繁触发
+    const debouncedMouseHandler = debounce((event) => {
+        try {
+            if (event.target.tagName === 'VIDEO' || event.target.tagName === 'AUDIO') {
+                lastActiveMedia = event.target;
+            }
+        } catch (e) {
+            console.error('处理鼠标事件失败:', e);
         }
-    });
+    }, 100);
+
+    document.addEventListener('mouseover', debouncedMouseHandler);
+
+    // 兼容性处理：不是所有浏览器都支持matches方法
+    if (!Element.prototype.matches) {
+        Element.prototype.matches = 
+            Element.prototype.matchesSelector || 
+            Element.prototype.mozMatchesSelector || 
+            Element.prototype.msMatchesSelector || 
+            Element.prototype.oMatchesSelector || 
+            Element.prototype.webkitMatchesSelector || 
+            function(s) {
+                var matches = (this.document || this.ownerDocument).querySelectorAll(s),
+                    i = matches.length;
+                while (--i >= 0 && matches.item(i) !== this) {}
+                return i > -1;            
+            };
+    }
+
+    // 检查Shadow DOM支持
+    function querySelectorAllIncludingShadowDOM(selector) {
+        const elements = Array.from(document.querySelectorAll(selector));
+        
+        // 查找所有shadow roots并在其中搜索
+        const allElements = document.querySelectorAll('*');
+        for (const element of allElements) {
+            if (element.shadowRoot) {
+                elements.push(...element.shadowRoot.querySelectorAll(selector));
+            }
+        }
+        
+        return elements;
+    }
 
     // Listen on the whole window, using capture to catch events early.
     window.addEventListener('keydown', handleKeyDown, true);
+
+    // 初始化：检查页面是否包含媒体元素，如果没有，使用MutationObserver监视DOM变化
+    let mediaCheckInterval;
+    
+    function checkForMediaElements() {
+        try {
+            const hasMedia = document.querySelector('video, audio') !== null;
+            if (hasMedia) {
+                // 找到媒体元素，停止检查
+                clearInterval(mediaCheckInterval);
+                
+                // 在所有页面上添加Shadow DOM监听（如果有媒体元素）
+                const mediaInShadow = querySelectorAllIncludingShadowDOM('video, audio');
+                if (mediaInShadow.length > 0) {
+                    // 有Shadow DOM中的媒体元素，特别处理
+                    for (const media of mediaInShadow) {
+                        media.addEventListener('mouseover', () => {
+                            lastActiveMedia = media;
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('检查媒体元素失败:', e);
+        }
+    }
+
+    // 初始检查
+    checkForMediaElements();
+    
+    // 定期检查
+    mediaCheckInterval = setInterval(checkForMediaElements, 2000);
+    
+    // 使用MutationObserver观察DOM变化
+    try {
+        const observer = new MutationObserver(checkForMediaElements);
+        observer.observe(document.body, { childList: true, subtree: true });
+    } catch (e) {
+        console.error('设置MutationObserver失败:', e);
+    }
 
 })();
