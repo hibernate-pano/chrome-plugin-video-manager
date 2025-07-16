@@ -503,6 +503,46 @@
                 }
             }
 
+            // 在网页全屏模式下特殊处理方向键快进快退
+            if (lightboxActive && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                const lightbox = document.getElementById('vsc-lightbox-overlay');
+                if (lightbox) {
+                    const video = lightbox.querySelector('video');
+                    if (video) {
+                        // 默认快进/快退步长（秒）
+                        const seekStep = 5;
+                        // 默认音量调整步长（0-1之间的值）
+                        const volumeStep = 0.1;
+                        
+                        // 阻止默认行为，防止原生控制器捕获事件
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        // 执行快进/快退操作
+                        if (e.key === 'ArrowLeft') {
+                            // 快退
+                            video.currentTime = Math.max(0, video.currentTime - seekStep);
+                            showIndicator(`⏪ ${seekStep}秒`, video);
+                        } else if (e.key === 'ArrowRight') {
+                            // 快进
+                            video.currentTime = Math.min(video.duration, video.currentTime + seekStep);
+                            showIndicator(`⏩ ${seekStep}秒`, video);
+                        } else if (e.key === 'ArrowUp') {
+                            // 增加音量
+                            video.volume = Math.min(1, video.volume + volumeStep);
+                            const volumePercent = Math.round(video.volume * 100);
+                            showIndicator(`🔊 ${volumePercent}%`, video);
+                        } else if (e.key === 'ArrowDown') {
+                            // 减小音量
+                            video.volume = Math.max(0, video.volume - volumeStep);
+                            const volumePercent = Math.round(video.volume * 100);
+                            showIndicator(`🔉 ${volumePercent}%`, video);
+                        }
+                        return;
+                    }
+                }
+            }
+
             // 原有的快捷键处理逻辑保持不变
             // When lightbox is active, some keys (like arrows) might be meant for video seeking.
             // We only intercept the shortcuts defined in our extension.

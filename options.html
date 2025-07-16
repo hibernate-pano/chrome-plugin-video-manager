@@ -249,36 +249,55 @@
                 <span class="zh">视频选择逻辑</span>
                 <span class="en">Video Selection Logic</span>
             </h4>
-            <p class="bilingual">
-                <span class="zh">插件使用以下顺序选择要控制的媒体：</span>
-                <span class="en">The extension selects media to control in this order:</span>
-            </p>
-            <ol>
+            <ul>
                 <li class="bilingual">
-                    <span class="zh">当前处于全屏模式的视频</span>
-                    <span class="en">Video in fullscreen mode</span>
+                    <span class="zh">插件优先控制您鼠标悬停的视频/音频</span>
+                    <span class="en">Extension prioritizes video/audio under your mouse cursor</span>
                 </li>
                 <li class="bilingual">
-                    <span class="zh">鼠标悬停的视频或音频</span>
-                    <span class="en">Video or audio being hovered</span>
+                    <span class="zh">如果没有悬停，则选择最近交互过的媒体</span>
+                    <span class="en">If no hover, selects most recently interacted media</span>
                 </li>
                 <li class="bilingual">
-                    <span class="zh">最后交互过的正在播放的媒体</span>
-                    <span class="en">Last interacted media that is playing</span>
+                    <span class="zh">如果有多个播放中的媒体，优先选择视口内最大的</span>
+                    <span class="en">If multiple playing media, prioritizes largest in viewport</span>
+                </li>
+            </ul>
+            
+            <h4 class="bilingual">
+                <span class="zh">网页全屏模式特殊功能</span>
+                <span class="en">Fullscreen Mode Special Features</span>
+            </h4>
+            <ul>
+                <li class="bilingual">
+                    <span class="zh">在网页全屏模式下，可使用方向键控制视频：</span>
+                    <span class="en">In fullscreen mode, you can use arrow keys to control video:</span>
                 </li>
                 <li class="bilingual">
-                    <span class="zh">当前视口中正在播放的媒体</span>
-                    <span class="en">Media playing in the current viewport</span>
+                    <span class="zh">← 左方向键：快退5秒</span>
+                    <span class="en">← Left Arrow: Rewind 5 seconds</span>
                 </li>
                 <li class="bilingual">
-                    <span class="zh">视口中尺寸最大的媒体</span>
-                    <span class="en">Largest media in the viewport</span>
+                    <span class="zh">→ 右方向键：快进5秒</span>
+                    <span class="en">→ Right Arrow: Forward 5 seconds</span>
                 </li>
-            </ol>
+                <li class="bilingual">
+                    <span class="zh">↑ 上方向键：增加音量</span>
+                    <span class="en">↑ Up Arrow: Increase volume</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">↓ 下方向键：减小音量</span>
+                    <span class="en">↓ Down Arrow: Decrease volume</span>
+                </li>
+                <li class="bilingual">
+                    <span class="zh">ESC键：退出网页全屏模式</span>
+                    <span class="en">ESC key: Exit fullscreen mode</span>
+                </li>
+            </ul>
             
             <h4 class="bilingual">
                 <span class="zh">注意事项</span>
-                <span class="en">Important Note</span>
+                <span class="en">Notes</span>
             </h4>
             <p class="bilingual">
                 <span class="zh">插件的快捷键只在有视频或音频元素可用时才会拦截。如果页面上没有媒体元素，快捷键会正常传递给页面。</span>
