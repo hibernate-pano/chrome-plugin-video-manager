@@ -3,7 +3,42 @@
     let lastActiveMedia = null;
     let shortcuts = {};
     
-    // 防抖函数
+    // 媒体元素缓存系统
+    let mediaElementsCache = {
+        timestamp: 0,
+        elements: [],
+        shadowElements: [],
+        isStale: true,
+        timeoutId: null
+    };
+    
+    // 存储元素可见性状态
+    const elementVisibilityMap = new WeakMap();
+    
+    // 缓存媒体元素尺寸
+    const mediaSizeCache = new WeakMap();
+    
+    // 标记插件功能初始化状态
+    let isFullFunctionalityInitialized = false;
+    let intersectionObserver;
+    
+    // 增强的防抖函数，支持立即执行选项
+    function enhancedDebounce(func, wait, immediate = false) {
+        let timeout;
+        return function(...args) {
+            const context = this;
+            const later = function() {
+                timeout = null;
+                if (!immediate) func.apply(context, args);
+            };
+            const callNow = immediate && !timeout;
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+            if (callNow) func.apply(context, args);
+        };
+    }
+    
+    // 原始防抖函数保持不变，以便与现有代码兼容
     function debounce(func, wait) {
         let timeout;
         return function(...args) {
@@ -27,17 +62,19 @@
         'toggle-fullscreen': 'f',
     };
 
-    // Load shortcuts from storage
-    chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
-        try {
-            shortcuts = data.shortcuts;
-        } catch (e) {
-            console.error('加载快捷键失败:', e);
-            shortcuts = defaultShortcuts; // 使用默认值作为后备
-        }
-    });
-
-    // Listen for changes in shortcuts
+    // 加载快捷键设置
+    function loadShortcutSettings() {
+        chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
+            try {
+                shortcuts = data.shortcuts;
+            } catch (e) {
+                console.error('加载快捷键失败:', e);
+                shortcuts = defaultShortcuts; // 使用默认值作为后备
+            }
+        });
+    }
+    
+    // 监听快捷键变更
     chrome.storage.onChanged.addListener((changes, namespace) => {
         try {
             if (namespace === 'sync' && changes.shortcuts) {
@@ -48,13 +85,21 @@
         }
     });
 
-    // 创建指示器元素
-    const indicator = document.createElement('div');
-    indicator.id = 'video-speed-indicator';
-    document.body.appendChild(indicator);
+    // 预先创建指示器元素
+    let indicator;
+    function createIndicator() {
+        indicator = document.createElement('div');
+        indicator.id = 'video-speed-indicator';
+        document.body.appendChild(indicator);
+    }
 
     function showIndicator(speed, mediaElement) {
         try {
+            // 确保指示器已创建
+            if (!indicator) {
+                createIndicator();
+            }
+            
             const rect = mediaElement.getBoundingClientRect();
             // FIX: Indicator is position:fixed, so its position should always be relative to the viewport.
             // Do not add scrollX/scrollY offsets.
@@ -118,22 +163,53 @@
         }
     }
 
+    // 使用事件委托处理媒体元素hover事件
+    function setupMediaEventDelegation() {
+        // 优化后的鼠标事件处理函数
+        function handleMouseEvent(event) {
+            try {
+                const target = event.target;
+                if (target.tagName === 'VIDEO' || target.tagName === 'AUDIO') {
+                    lastActiveMedia = target;
+                    // 标记缓存元素中的此媒体为最近交互
+                    const cachedIndex = mediaElementsCache.elements.indexOf(target);
+                    if (cachedIndex >= 0) {
+                        // 如果在缓存中找到了，可以记录其他信息
+                        mediaSizeCache.delete(target); // 清除尺寸缓存，因为用户可能调整了大小
+                    }
+                }
+            } catch (e) {
+                console.error('处理鼠标事件失败:', e);
+            }
+        }
+        
+        // 使用增强版防抖函数
+        const debouncedMouseHandler = enhancedDebounce(handleMouseEvent, 100);
+        document.addEventListener('mouseover', debouncedMouseHandler, true);
+    }
+
     function getTargetMedia() {
         try {
+            // 确保完整功能已初始化
+            ensureFullFunctionalityInitialized();
+            
             // 1. 首先检查是否有处于lightbox模式的视频
-            const lightboxVideo = document.querySelector('#vsc-lightbox-overlay video');
-            if (lightboxVideo) return lightboxVideo;
+            if (lightboxActive) {
+                const lightboxVideo = document.querySelector('#vsc-lightbox-overlay video');
+                if (lightboxVideo) return lightboxVideo;
+            }
 
-            // 获取所有媒体元素（包括iframe中的）
+            // 获取所有媒体元素（使用缓存）
             const allMedia = getAllMediaElements();
+            if (allMedia.length === 0) return null;
             
             // 2. 检查是否有鼠标悬停的媒体
-            const hoveredMedia = allMedia.find(m => m.matches(':hover'));
+            const hoveredMedia = allMedia.find(m => m.matches && m.matches(':hover'));
             if (hoveredMedia) return hoveredMedia;
             
             // 3. 检查最后一个交互的媒体元素是否仍在播放
             if (lastActiveMedia && !lastActiveMedia.paused && !lastActiveMedia.ended && lastActiveMedia.readyState > 2) {
-                // 确保媒体元素仍然存在于DOM中
+                // 确保媒体元素仍然存在于DOM中或iframe中
                 if (document.body.contains(lastActiveMedia) || isInIframe(lastActiveMedia)) {
                     return lastActiveMedia;
                 }
@@ -146,11 +222,7 @@
                 // 只有一个正在播放的媒体，直接返回
                 return playingMedia[0];
             } else if (playingMedia.length > 1) {
-                // 多个正在播放的媒体，按以下优先级选择:
-                // a) 视口内可见的
-                // b) 尺寸最大的
-                // c) 音量最大的
-                
+                // 多个正在播放的媒体，按优先级选择
                 // 首先检查哪些在视口内
                 const visiblePlayingMedia = playingMedia.filter(m => isElementInViewport(m));
                 
@@ -169,8 +241,8 @@
                 return getBiggestMedia(visibleMedia);
             }
             
-            // 6. 如果还是没找到，返回第一个媒体元素（如果有的话）
-            return allMedia.length > 0 ? allMedia[0] : null;
+            // 6. 如果还是没找到，返回第一个媒体元素
+            return allMedia[0];
         } catch (e) {
             console.error('查找目标媒体失败:', e);
             return null;
@@ -179,14 +251,39 @@
     
     // 辅助函数：获取所有媒体元素，包括iframe中的
     function getAllMediaElements() {
-        // 获取主文档中的媒体元素
-        const mainDocMedia = Array.from(document.querySelectorAll('video, audio'));
+        // 如果缓存未过期且有元素，直接返回缓存
+        if (!mediaElementsCache.isStale && mediaElementsCache.elements.length > 0) {
+            return mediaElementsCache.elements;
+        }
         
-        // 尝试获取所有iframe中的媒体元素
+        // 否则，重新获取媒体元素
+        const mainDocMedia = Array.from(document.querySelectorAll('video, audio'));
+        const iframeMedia = getMediaFromIframes();
+        
+        // 更新缓存
+        mediaElementsCache.elements = [...mainDocMedia, ...iframeMedia];
+        mediaElementsCache.timestamp = Date.now();
+        mediaElementsCache.isStale = false;
+        
+        // 设置缓存过期
+        clearTimeout(mediaElementsCache.timeoutId);
+        mediaElementsCache.timeoutId = setTimeout(() => {
+            mediaElementsCache.isStale = true;
+        }, 2000); // 2秒后缓存过期
+        
+        return mediaElementsCache.elements;
+    }
+    
+    // 辅助函数：从iframe中获取媒体元素
+    function getMediaFromIframes() {
         const iframeMedia = [];
         try {
-            const iframes = document.querySelectorAll('iframe');
-            for (const iframe of iframes) {
+            // 获取所有iframe，优先处理视口内的
+            const iframes = Array.from(document.querySelectorAll('iframe'));
+            const visibleIframes = iframes.filter(iframe => isElementInViewport(iframe));
+            const framesToProcess = [...visibleIframes, ...iframes.filter(iframe => !visibleIframes.includes(iframe))];
+            
+            for (const iframe of framesToProcess) {
                 try {
                     // 只访问同源iframe
                     const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
@@ -196,27 +293,53 @@
                     }
                 } catch (e) {
                     // 跨域iframe会抛出错误，忽略它
-                    // console.warn('无法访问iframe内容：', e);
                 }
             }
         } catch (e) {
             // 出现异常，忽略iframe内容
-            // console.warn('获取iframe内容时出错：', e);
         }
         
-        return [...mainDocMedia, ...iframeMedia];
+        return iframeMedia;
+    }
+    
+    // 设置IntersectionObserver
+    function setupIntersectionObserver() {
+        // 如果浏览器支持IntersectionObserver
+        if ('IntersectionObserver' in window) {
+            intersectionObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    elementVisibilityMap.set(entry.target, entry.isIntersecting);
+                });
+            });
+        }
     }
     
     // 辅助函数：检查元素是否在视口内
     function isElementInViewport(el) {
         try {
+            // 如果有缓存的可见性信息，优先使用
+            if (elementVisibilityMap.has(el)) {
+                return elementVisibilityMap.get(el);
+            }
+            
+            // 如果支持IntersectionObserver，添加到观察列表
+            if (intersectionObserver) {
+                intersectionObserver.observe(el);
+                // 首次调用仍使用getBoundingClientRect计算，后续会由观察器更新
+            }
+            
+            // 手动计算可见性
             const rect = el.getBoundingClientRect();
-            return (
+            const isVisible = (
                 rect.top >= 0 &&
                 rect.left >= 0 &&
                 rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
                 rect.right <= (window.innerWidth || document.documentElement.clientWidth)
             );
+            
+            // 缓存结果
+            elementVisibilityMap.set(el, isVisible);
+            return isVisible;
         } catch (e) {
             return false;
         }
@@ -250,11 +373,21 @@
         
         return mediaArray.reduce((biggest, current) => {
             try {
-                const biggestRect = biggest.getBoundingClientRect();
-                const currentRect = current.getBoundingClientRect();
+                // 获取或计算最大元素的面积
+                let biggestArea = mediaSizeCache.get(biggest);
+                if (biggestArea === undefined) {
+                    const biggestRect = biggest.getBoundingClientRect();
+                    biggestArea = biggestRect.width * biggestRect.height;
+                    mediaSizeCache.set(biggest, biggestArea);
+                }
                 
-                const biggestArea = biggestRect.width * biggestRect.height;
-                const currentArea = currentRect.width * currentRect.height;
+                // 获取或计算当前元素的面积
+                let currentArea = mediaSizeCache.get(current);
+                if (currentArea === undefined) {
+                    const currentRect = current.getBoundingClientRect();
+                    currentArea = currentRect.width * currentRect.height;
+                    mediaSizeCache.set(current, currentArea);
+                }
                 
                 return currentArea > biggestArea ? current : biggest;
             } catch (e) {
@@ -378,19 +511,6 @@
         }
     }
 
-    // 使用防抖处理鼠标事件，避免频繁触发
-    const debouncedMouseHandler = debounce((event) => {
-        try {
-            if (event.target.tagName === 'VIDEO' || event.target.tagName === 'AUDIO') {
-                lastActiveMedia = event.target;
-            }
-        } catch (e) {
-            console.error('处理鼠标事件失败:', e);
-        }
-    }, 100);
-
-    document.addEventListener('mouseover', debouncedMouseHandler);
-
     // 兼容性处理：不是所有浏览器都支持matches方法
     if (!Element.prototype.matches) {
         Element.prototype.matches = 
@@ -407,62 +527,166 @@
             };
     }
 
-    // 检查Shadow DOM支持
-    function querySelectorAllIncludingShadowDOM(selector) {
-        const elements = Array.from(document.querySelectorAll(selector));
-        
-        // 查找所有shadow roots并在其中搜索
-        const allElements = document.querySelectorAll('*');
-        for (const element of allElements) {
-            if (element.shadowRoot) {
-                elements.push(...element.shadowRoot.querySelectorAll(selector));
+    // 处理Shadow DOM中的媒体元素
+    function handleShadowDOMMedia() {
+        try {
+            const mediaInShadow = querySelectorAllIncludingShadowDOM('video, audio');
+            if (mediaInShadow.length > 0) {
+                // 标记这些元素在缓存中
+                for (const media of mediaInShadow) {
+                    if (!mediaElementsCache.elements.includes(media)) {
+                        mediaElementsCache.elements.push(media);
+                    }
+                }
             }
+        } catch (e) {
+            console.error('处理Shadow DOM媒体失败:', e);
         }
-        
-        return elements;
     }
 
-    // Listen on the whole window, using capture to catch events early.
-    window.addEventListener('keydown', handleKeyDown, true);
+    // 检查Shadow DOM支持
+    function querySelectorAllIncludingShadowDOM(selector) {
+        try {
+            // 检查是否已有缓存结果
+            if (!mediaElementsCache.isStale && mediaElementsCache.shadowElements.length > 0) {
+                return mediaElementsCache.shadowElements;
+            }
+            
+            const elements = Array.from(document.querySelectorAll(selector));
+            
+            // 优先检查视口内的元素
+            const allElements = document.querySelectorAll('*');
+            const visibleElements = Array.from(allElements)
+                .filter(el => isElementInViewport(el))
+                .slice(0, 100); // 限制数量，避免过度处理
+                
+            for (const element of visibleElements) {
+                if (element.shadowRoot) {
+                    elements.push(...element.shadowRoot.querySelectorAll(selector));
+                }
+            }
+            
+            // 缓存结果
+            mediaElementsCache.shadowElements = elements;
+            return elements;
+        } catch (e) {
+            console.error('Shadow DOM查询失败:', e);
+            return [];
+        }
+    }
 
-    // 初始化：检查页面是否包含媒体元素，如果没有，使用MutationObserver监视DOM变化
-    let mediaCheckInterval;
-    
+    // 检查页面媒体元素
     function checkForMediaElements() {
         try {
             const hasMedia = document.querySelector('video, audio') !== null;
             if (hasMedia) {
-                // 找到媒体元素，停止检查
-                clearInterval(mediaCheckInterval);
-                
-                // 在所有页面上添加Shadow DOM监听（如果有媒体元素）
-                const mediaInShadow = querySelectorAllIncludingShadowDOM('video, audio');
-                if (mediaInShadow.length > 0) {
-                    // 有Shadow DOM中的媒体元素，特别处理
-                    for (const media of mediaInShadow) {
-                        media.addEventListener('mouseover', () => {
-                            lastActiveMedia = media;
-                        });
-                    }
+                // 找到媒体元素，停止定时检查
+                if (mediaCheckInterval) {
+                    clearInterval(mediaCheckInterval);
+                    mediaCheckInterval = null;
                 }
+                
+                // 标记缓存为过期，下次会重新获取媒体元素
+                mediaElementsCache.isStale = true;
+                
+                // 获取并处理Shadow DOM中的媒体
+                handleShadowDOMMedia();
             }
         } catch (e) {
             console.error('检查媒体元素失败:', e);
         }
     }
-
-    // 初始检查
-    checkForMediaElements();
     
-    // 定期检查
-    mediaCheckInterval = setInterval(checkForMediaElements, 2000);
-    
-    // 使用MutationObserver观察DOM变化
-    try {
-        const observer = new MutationObserver(checkForMediaElements);
-        observer.observe(document.body, { childList: true, subtree: true });
-    } catch (e) {
-        console.error('设置MutationObserver失败:', e);
+    // 使用递减间隔的检查策略
+    let mediaCheckInterval;
+    function setupMediaElementDetection() {
+        // 初始检查
+        checkForMediaElements();
+        
+        // 使用递减的间隔时间：先频繁检查，然后逐渐减少
+        const intervals = [500, 1000, 2000, 5000]; // 毫秒
+        let intervalIndex = 0;
+        
+        function scheduleNextCheck() {
+            if (mediaCheckInterval) {
+                clearInterval(mediaCheckInterval);
+            }
+            
+            if (intervalIndex < intervals.length) {
+                const currentInterval = intervals[intervalIndex++];
+                mediaCheckInterval = setInterval(() => {
+                    checkForMediaElements();
+                    if (intervalIndex >= intervals.length) {
+                        // 达到最长间隔，不再增加
+                        return;
+                    }
+                    // 调度下一个更长的间隔
+                    scheduleNextCheck();
+                }, currentInterval);
+            }
+        }
+        
+        scheduleNextCheck();
+        
+        // 使用MutationObserver观察DOM变化
+        try {
+            const observer = new MutationObserver(() => {
+                // 将缓存标记为过期，下次获取会重新查询
+                mediaElementsCache.isStale = true;
+                checkForMediaElements();
+            });
+            observer.observe(document.body, { 
+                childList: true, 
+                subtree: true,
+                attributes: false, 
+                characterData: false 
+            });
+        } catch (e) {
+            console.error('设置MutationObserver失败:', e);
+        }
+        
+        // 当页面可见性改变时重新检查
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                mediaElementsCache.isStale = true;
+                checkForMediaElements();
+            }
+        });
     }
+
+    // 确保完整功能已初始化
+    function ensureFullFunctionalityInitialized() {
+        if (isFullFunctionalityInitialized) return;
+        
+        // 执行更全面的初始化
+        handleShadowDOMMedia();
+        
+        // 标记为已初始化
+        isFullFunctionalityInitialized = true;
+    }
+    
+    // 初始化插件
+    function initializePlugin() {
+        // 创建指示器元素
+        createIndicator();
+        
+        // 设置IntersectionObserver
+        setupIntersectionObserver();
+        
+        // 加载快捷键设置
+        loadShortcutSettings();
+        
+        // 设置媒体检测
+        setupMediaElementDetection();
+        
+        // 设置事件委托
+        setupMediaEventDelegation();
+        
+        // 全局键盘事件监听
+        window.addEventListener('keydown', handleKeyDown, true);
+    }
+    
+    // 初始化插件
+    initializePlugin();
 
 })();
