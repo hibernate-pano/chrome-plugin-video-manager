@@ -61,6 +61,12 @@
         'toggle-fullscreen': 'f',
     };
 
+    // 检测当前网站类型
+    function isYouTubeSite() {
+        return window.location.hostname.includes('youtube.com') || 
+               window.location.hostname.includes('youtu.be');
+    }
+
     // 加载快捷键设置
     function loadShortcutSettings() {
         chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
@@ -540,9 +546,14 @@
                 e.key.toLowerCase()
             );
             
-            // 特殊处理：在网页全屏模式下主动处理空格键
+            // 特殊处理：空格键的网站特定逻辑
             if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-                // 在网页全屏模式下，由于焦点管理问题，需要插件主动处理空格键
+                // YouTube网站：无论任何模式都使用原生处理
+                if (isYouTubeSite()) {
+                    return; // 完全不干预，让YouTube原生处理
+                }
+                
+                // 其他网站：只在网页全屏模式下主动处理空格键
                 if (lightboxActive) {
                     const lightbox = document.getElementById('vsc-lightbox-overlay');
                     if (lightbox) {
@@ -565,7 +576,7 @@
                         }
                     }
                 }
-                // 非网页全屏模式下，空格键由浏览器和视频播放器原生处理
+                // 非网页全屏模式下，不处理空格键，让其完全由原生处理
                 return;
             }
             
@@ -581,28 +592,39 @@
                 return;
             }
 
-            // 在网页全屏模式下，所有快捷键都应该生效，不依赖焦点状态
+            // 获取目标媒体元素
+            const media = lightboxActive ? 
+                document.querySelector('#vsc-lightbox-overlay video') : 
+                getTargetMedia();
+            
+            // 检查是否应该允许快捷键生效
             let shouldAllowShortcut = false;
             if (lightboxActive) {
                 // 网页全屏模式下，允许所有快捷键生效
                 shouldAllowShortcut = true;
-            } else {
-                // 普通模式下，检查焦点是否在视频元素上
-                const media = getTargetMedia();
-                if (media && (media === e.target || media.contains(e.target) || 
-                    document.activeElement === media || media.contains(document.activeElement))) {
+            } else if (media) {
+                // 普通模式下，检查是否应该允许快捷键
+                // 检查是否点击了媒体元素或其内部（如控制条）
+                const isDirectlyTargetingMedia = media === e.target || media.contains(e.target);
+                // 检查媒体元素是否有焦点
+                const mediaHasFocus = document.activeElement === media;
+                // 检查是否鼠标悬停在媒体元素上
+                const isHovering = media.matches && media.matches(':hover');
+                // 检查是否最近与媒体交互过
+                const isRecentlyActive = lastActiveMedia === media;
+                
+                // 在这些情况下允许快捷键
+                if (isDirectlyTargetingMedia || mediaHasFocus || isHovering || isRecentlyActive) {
                     shouldAllowShortcut = true;
                 }
             }
-
-            // 先检查是否有可用的媒体元素
-            const media = shouldAllowShortcut ? 
-                document.querySelector('#vsc-lightbox-overlay video') : 
-                getTargetMedia();
             
             if (!media) return; // 如果没有媒体元素，直接返回，不阻止默认行为
 
-            // 只有找到媒体元素时才阻止默认行为
+            // 检查是否应该允许快捷键
+            if (!shouldAllowShortcut) return; // 如果不应该允许快捷键，直接返回
+
+            // 只有在允许快捷键且找到媒体元素时才阻止默认行为
             e.preventDefault();
             e.stopPropagation();
 
@@ -784,15 +806,16 @@
         setupMediaEventDelegation();
         
         // 全局键盘事件监听（捕获阶段）
+        // 需要在捕获阶段处理，确保插件快捷键能正常拦截
         window.addEventListener('keydown', handleKeyDown, true);
         
-        // 备用键盘事件监听（在document级别，同样是捕获阶段）
-        // 这可以帮助捕获在网页全屏模式下可能被控制条拦截的事件
+        // 备用键盘事件监听（在document级别，捕获阶段）
+        // 只用于网页全屏模式下的特殊快捷键（ESC和方向键）
         document.addEventListener('keydown', (e) => {
             // 只有当lightbox活跃时才使用这个备用处理器
             if (!lightboxActive) return;
             
-            // 避免重复处理，只处理特定的网页全屏相关快捷键
+            // 只处理网页全屏模式特有的快捷键，避免干扰其他按键
             if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || 
                 e.key === 'ArrowUp' || e.key === 'ArrowDown') {
                 handleKeyDown(e);
