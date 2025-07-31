@@ -58,7 +58,6 @@
         increase: '=',
         decrease: '-',
         reset: '0',
-        'toggle-play': ' ',
         'toggle-fullscreen': 'f',
     };
 
@@ -67,6 +66,26 @@
         chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
             try {
                 shortcuts = data.shortcuts;
+                
+                // 清理已删除的快捷键（如 toggle-play）
+                const validShortcuts = {};
+                for (const action in defaultShortcuts) {
+                    if (shortcuts[action] !== undefined) {
+                        validShortcuts[action] = shortcuts[action];
+                    } else {
+                        validShortcuts[action] = defaultShortcuts[action];
+                    }
+                }
+                
+                // 如果存储中有已删除的快捷键，清理它们
+                if (shortcuts['toggle-play'] !== undefined) {
+                    console.log('检测到已删除的 toggle-play 快捷键，正在清理...');
+                    delete shortcuts['toggle-play'];
+                    // 更新存储
+                    chrome.storage.sync.set({ shortcuts: validShortcuts });
+                }
+                
+                shortcuts = validShortcuts;
             } catch (e) {
                 console.error('加载快捷键失败:', e);
                 shortcuts = defaultShortcuts; // 使用默认值作为后备
@@ -125,39 +144,34 @@
             }
 
             let newSpeed;
+            // 获取当前播放速度，如果不是有限数字则使用默认值1.0
+            const currentRate = (typeof media.playbackRate === 'number' && isFinite(media.playbackRate)) 
+                ? media.playbackRate 
+                : 1.0;
+                
             switch (action) {
                 case 'increase':
-                    newSpeed = Math.min(media.playbackRate + 0.1, 16);
+                    newSpeed = Math.min(currentRate + 0.1, 16);
                     break;
                 case 'decrease':
-                    newSpeed = Math.max(media.playbackRate - 0.1, 0.1);
+                    newSpeed = Math.max(currentRate - 0.1, 0.1);
                     break;
                 case 'reset':
                     newSpeed = 1.0;
                     break;
-                case 'toggle-play':
-                    if (media.paused) {
-                        const playPromise = media.play();
-                        if (playPromise !== undefined) {
-                            playPromise
-                                .then(() => {
-                                    showIndicator(`${media.playbackRate.toFixed(2)}x`, media);
-                                })
-                                .catch(error => {
-                                    console.error('播放媒体失败:', error);
-                                    showIndicator('播放失败', media);
-                                });
-                        } else {
-                            showIndicator(`${media.playbackRate.toFixed(2)}x`, media);
-                        }
-                    } else {
-                        media.pause();
-                        showIndicator('已暂停', media);
-                    }
-                    return;
+                default:
+                    return; // 未知操作，直接返回
             }
-            media.playbackRate = newSpeed;
-            showIndicator(newSpeed, media);
+            
+            // 验证新速度是否为有限数字
+            if (typeof newSpeed === 'number' && isFinite(newSpeed) && newSpeed > 0) {
+                media.playbackRate = newSpeed;
+                showIndicator(newSpeed, media);
+            } else {
+                console.warn('计算出的播放速度无效:', newSpeed, '使用默认速度1.0');
+                media.playbackRate = 1.0;
+                showIndicator(1.0, media);
+            }
         } catch (e) {
             console.error('处理媒体播放操作失败:', e);
         }
@@ -434,40 +448,12 @@
                 newLightbox.id = 'vsc-lightbox-overlay';
 
                 const handleLightboxVideoClick = (e) => {
-                    // 立即检查是否点击了控制条元素
+                    // 简化的点击处理逻辑，移除复杂的焦点管理
+                    // 记录点击状态，但不主动操作焦点
                     const isControlsClick = e.target !== media;
+                    media.dataset.controlsActive = isControlsClick ? 'true' : 'false';
                     
-                    if (isControlsClick) {
-                        // 如果点击的是控制条，记录这个状态供键盘事件使用
-                        media.dataset.controlsActive = 'true';
-                        
-                        // 防止控制条抢走焦点导致快捷键失效
-                        setTimeout(() => {
-                            // 仍然允许控制条显示，但确保键盘事件能被正确处理
-                            if (document.activeElement === media || media.contains(document.activeElement)) {
-                                // 创建并触发一个合成的点击事件，保持控制条可见但不影响焦点
-                                try {
-                                    const syntheticEvent = new MouseEvent('click', {
-                                        bubbles: false,
-                                        cancelable: true,
-                                        view: window
-                                    });
-                                    media.dispatchEvent(syntheticEvent);
-                                } catch (err) {
-                                    console.error('创建合成事件失败:', err);
-                                }
-                            }
-                        }, 100);
-                    } else {
-                        // 点击视频本身而非控制条，设置为500毫秒后自动失去焦点
-                        // 这允许用户使用空格暂停等原生控制，同时保证我们的快捷键可用
-                        media.dataset.controlsActive = 'false';
-                        setTimeout(() => {
-                            if (document.activeElement === media) {
-                                media.blur();
-                            }
-                        }, 500);
-                    }
+                    // 让用户和浏览器自然地管理焦点，插件通过键盘事件处理确保功能正常
                 };
 
                 media.classList.add('vsc-lightbox-video');
@@ -553,6 +539,36 @@
                 (e.metaKey ? 'meta+' : '') +
                 e.key.toLowerCase()
             );
+            
+            // 特殊处理：在网页全屏模式下主动处理空格键
+            if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+                // 在网页全屏模式下，由于焦点管理问题，需要插件主动处理空格键
+                if (lightboxActive) {
+                    const lightbox = document.getElementById('vsc-lightbox-overlay');
+                    if (lightbox) {
+                        const video = lightbox.querySelector('video');
+                        if (video) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            // 主动处理播放/暂停
+                            if (video.paused) {
+                                const playPromise = video.play();
+                                if (playPromise !== undefined) {
+                                    playPromise.catch(error => {
+                                        console.error('播放失败:', error);
+                                    });
+                                }
+                            } else {
+                                video.pause();
+                            }
+                            return;
+                        }
+                    }
+                }
+                // 非网页全屏模式下，空格键由浏览器和视频播放器原生处理
+                return;
+            }
+            
             const action = Object.keys(shortcuts).find(key => shortcuts[key] === shortcutPressed);
 
             if (!action) {
@@ -565,17 +581,17 @@
                 return;
             }
 
-            // 特殊处理：检查焦点是否在视频控制条上
-            // 如果在网页全屏模式下，即使焦点在控制条上也允许快捷键生效
+            // 在网页全屏模式下，所有快捷键都应该生效，不依赖焦点状态
             let shouldAllowShortcut = false;
             if (lightboxActive) {
-                const lightbox = document.getElementById('vsc-lightbox-overlay');
-                if (lightbox) {
-                    const video = lightbox.querySelector('video');
-                    // 如果焦点在视频或其子元素上(控制条)，允许快捷键生效
-                    if (video && (video === e.target || video.contains(e.target))) {
-                        shouldAllowShortcut = true;
-                    }
+                // 网页全屏模式下，允许所有快捷键生效
+                shouldAllowShortcut = true;
+            } else {
+                // 普通模式下，检查焦点是否在视频元素上
+                const media = getTargetMedia();
+                if (media && (media === e.target || media.contains(e.target) || 
+                    document.activeElement === media || media.contains(document.activeElement))) {
+                    shouldAllowShortcut = true;
                 }
             }
 
@@ -776,8 +792,11 @@
             // 只有当lightbox活跃时才使用这个备用处理器
             if (!lightboxActive) return;
             
-            // 调用主键盘事件处理函数
-            handleKeyDown(e);
+            // 避免重复处理，只处理特定的网页全屏相关快捷键
+            if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || 
+                e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                handleKeyDown(e);
+            }
         }, true);
     }
     

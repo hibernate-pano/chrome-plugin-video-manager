@@ -3,7 +3,6 @@ document.addEventListener('DOMContentLoaded', () => {
         increase: document.getElementById('increase'),
         decrease: document.getElementById('decrease'),
         reset: document.getElementById('reset'),
-        'toggle-play': document.getElementById('toggle-play'),
         'toggle-fullscreen': document.getElementById('toggle-fullscreen'),
     };
     const saveButton = document.getElementById('save');
@@ -32,7 +31,6 @@ document.addEventListener('DOMContentLoaded', () => {
         increase: '=',
         decrease: '-',
         reset: '0',
-        'toggle-play': ' ',
         'toggle-fullscreen': 'f',
     };
 
@@ -87,7 +85,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load saved shortcuts and display them
     chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
-        const shortcuts = data.shortcuts;
+        let shortcuts = data.shortcuts;
+        
+        // 清理已删除的快捷键（如 toggle-play）
+        const validShortcuts = {};
+        let needsUpdate = false;
+        
+        for (const action in defaultShortcuts) {
+            if (shortcuts[action] !== undefined) {
+                validShortcuts[action] = shortcuts[action];
+            } else {
+                validShortcuts[action] = defaultShortcuts[action];
+            }
+        }
+        
+        // 检查是否有已删除的快捷键
+        for (const action in shortcuts) {
+            if (!(action in defaultShortcuts)) {
+                console.log(`检测到已删除的快捷键: ${action}，正在清理...`);
+                needsUpdate = true;
+            }
+        }
+        
+        if (needsUpdate) {
+            // 更新存储，移除已删除的快捷键
+            chrome.storage.sync.set({ shortcuts: validShortcuts });
+            shortcuts = validShortcuts;
+        }
+        
         for (const action in inputs) {
             if (inputs[action]) {
                 inputs[action].value = formatShortcut(shortcuts[action] || '');
