@@ -1,6 +1,7 @@
 /* --- Speed Indicator --- */
 #video-speed-indicator {
-    position: fixed; /* Use fixed positioning to stay in viewport */
+    position: fixed;
+    /* Use fixed positioning to stay in viewport */
     top: 20px;
     left: 20px;
     background-color: rgba(0, 0, 0, 0.7);
@@ -10,10 +11,12 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     font-size: 16px;
     font-weight: bold;
-    z-index: 2147483647; /* Max z-index */
+    z-index: 2147483647;
+    /* Max z-index */
     opacity: 0;
     transition: opacity 0.3s ease-in-out;
-    pointer-events: none; /* Ignore mouse events */
+    pointer-events: none;
+    /* Ignore mouse events */
 }
 
 #video-speed-indicator.visible {
@@ -44,7 +47,8 @@
     width: 100vw !important;
     height: 100vh !important;
     background-color: #000 !important;
-    z-index: 2147483646 !important; /* Just below the speed indicator */
+    z-index: 2147483646 !important;
+    /* Just below the speed indicator */
     display: flex !important;
     justify-content: center !important;
     align-items: center !important;
@@ -59,6 +63,73 @@
     /* Remove any borders or shadows the original video might have had */
     border: none !important;
     box-shadow: none !important;
+}
+
+/* Force video controls to be visible when paused in lightbox mode */
+.vsc-lightbox-video:paused::-webkit-media-controls-panel {
+    display: flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.vsc-lightbox-video:paused::-webkit-media-controls {
+    display: flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* For Firefox */
+.vsc-lightbox-video:paused {
+    /* Ensure controls are always visible when paused */
+    --controls-opacity: 1 !important;
+}
+
+/* Additional fallback for persistent controls visibility */
+#vsc-lightbox-overlay video[controls]:paused {
+    /* Force controls to stay visible */
+    pointer-events: auto !important;
+}
+
+#vsc-lightbox-overlay video[controls]:paused::before {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    background: transparent;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Additional styles for enhanced controls visibility */
+.vsc-lightbox-video[data-vsc-paused-controls="true"] {
+    /* Ensure the video element itself doesn't interfere with controls */
+    cursor: default !important;
+}
+
+/* Force controls to be always visible for paused videos in lightbox */
+#vsc-lightbox-overlay .vsc-lightbox-video[data-vsc-paused-controls="true"]::-webkit-media-controls-panel {
+    display: flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    transform: translateY(0) !important;
+    transition: none !important;
+}
+
+#vsc-lightbox-overlay .vsc-lightbox-video[data-vsc-paused-controls="true"]::-webkit-media-controls {
+    display: flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    transform: translateY(0) !important;
+    transition: none !important;
+}
+
+/* Ensure controls area is always interactive when paused */
+#vsc-lightbox-overlay .vsc-lightbox-video[data-vsc-paused-controls="true"]::-webkit-media-controls-enclosure {
+    display: flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
 }
 
 .vsc-body-lock {

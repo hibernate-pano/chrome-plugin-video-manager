@@ -2,7 +2,7 @@
     let indicatorTimeout;
     let lastActiveMedia = null;
     let shortcuts = {};
-    
+
     // 媒体元素缓存系统
     let mediaElementsCache = {
         timestamp: 0,
@@ -11,23 +11,23 @@
         isStale: true,
         timeoutId: null
     };
-    
+
     // 存储元素可见性状态
     const elementVisibilityMap = new WeakMap();
-    
+
     // 缓存媒体元素尺寸
     const mediaSizeCache = new WeakMap();
-    
+
     // 标记插件功能初始化状态
     let isFullFunctionalityInitialized = false;
     let intersectionObserver;
-    
+
     // 增强的防抖函数，支持立即执行选项
     function enhancedDebounce(func, wait, immediate = false) {
         let timeout;
-        return function(...args) {
+        return function (...args) {
             const context = this;
-            const later = function() {
+            const later = function () {
                 timeout = null;
                 if (!immediate) func.apply(context, args);
             };
@@ -37,11 +37,11 @@
             if (callNow) func.apply(context, args);
         };
     }
-    
+
     // 原始防抖函数保持不变，以便与现有代码兼容
     function debounce(func, wait) {
         let timeout;
-        return function(...args) {
+        return function (...args) {
             const context = this;
             clearTimeout(timeout);
             timeout = setTimeout(() => func.apply(context, args), wait);
@@ -53,6 +53,8 @@
     let originalParent = null;
     let originalNextSibling = null;
     let originalVideoStyles = {};
+    let lightboxControlsInterval = null;
+    let lightboxEventListeners = new Map();
 
     const defaultShortcuts = {
         increase: '=',
@@ -63,8 +65,8 @@
 
     // 检测当前网站类型
     function isYouTubeSite() {
-        return window.location.hostname.includes('youtube.com') || 
-               window.location.hostname.includes('youtu.be');
+        return window.location.hostname.includes('youtube.com') ||
+            window.location.hostname.includes('youtu.be');
     }
 
     // 加载快捷键设置
@@ -72,7 +74,7 @@
         chrome.storage.sync.get({ shortcuts: defaultShortcuts }, (data) => {
             try {
                 shortcuts = data.shortcuts;
-                
+
                 // 清理已删除的快捷键（如 toggle-play）
                 const validShortcuts = {};
                 for (const action in defaultShortcuts) {
@@ -82,7 +84,7 @@
                         validShortcuts[action] = defaultShortcuts[action];
                     }
                 }
-                
+
                 // 如果存储中有已删除的快捷键，清理它们
                 if (shortcuts['toggle-play'] !== undefined) {
                     console.log('检测到已删除的 toggle-play 快捷键，正在清理...');
@@ -90,7 +92,7 @@
                     // 更新存储
                     chrome.storage.sync.set({ shortcuts: validShortcuts });
                 }
-                
+
                 shortcuts = validShortcuts;
             } catch (e) {
                 console.error('加载快捷键失败:', e);
@@ -98,7 +100,7 @@
             }
         });
     }
-    
+
     // 监听快捷键变更
     chrome.storage.onChanged.addListener((changes, namespace) => {
         try {
@@ -124,7 +126,7 @@
             if (!indicator) {
                 createIndicator();
             }
-            
+
             const rect = mediaElement.getBoundingClientRect();
             // FIX: Indicator is position:fixed, so its position should always be relative to the viewport.
             // Do not add scrollX/scrollY offsets.
@@ -151,10 +153,10 @@
 
             let newSpeed;
             // 获取当前播放速度，如果不是有限数字则使用默认值1.0
-            const currentRate = (typeof media.playbackRate === 'number' && isFinite(media.playbackRate)) 
-                ? media.playbackRate 
+            const currentRate = (typeof media.playbackRate === 'number' && isFinite(media.playbackRate))
+                ? media.playbackRate
                 : 1.0;
-                
+
             switch (action) {
                 case 'increase':
                     newSpeed = Math.min(currentRate + 0.1, 16);
@@ -168,7 +170,7 @@
                 default:
                     return; // 未知操作，直接返回
             }
-            
+
             // 验证新速度是否为有限数字
             if (typeof newSpeed === 'number' && isFinite(newSpeed) && newSpeed > 0) {
                 media.playbackRate = newSpeed;
@@ -202,7 +204,7 @@
                 console.error('处理鼠标事件失败:', e);
             }
         }
-        
+
         // 使用增强版防抖函数
         const debouncedMouseHandler = enhancedDebounce(handleMouseEvent, 100);
         document.addEventListener('mouseover', debouncedMouseHandler, true);
@@ -212,7 +214,7 @@
         try {
             // 确保完整功能已初始化
             ensureFullFunctionalityInitialized();
-            
+
             // 1. 首先检查是否有处于lightbox模式的视频
             if (lightboxActive) {
                 const lightboxVideo = document.querySelector('#vsc-lightbox-overlay video');
@@ -222,11 +224,11 @@
             // 获取所有媒体元素（使用缓存）
             const allMedia = getAllMediaElements();
             if (allMedia.length === 0) return null;
-            
+
             // 2. 检查是否有鼠标悬停的媒体
             const hoveredMedia = allMedia.find(m => m.matches && m.matches(':hover'));
             if (hoveredMedia) return hoveredMedia;
-            
+
             // 3. 检查最后一个交互的媒体元素是否仍在播放
             if (lastActiveMedia && !lastActiveMedia.paused && !lastActiveMedia.ended && lastActiveMedia.readyState > 2) {
                 // 确保媒体元素仍然存在于DOM中或iframe中
@@ -234,10 +236,10 @@
                     return lastActiveMedia;
                 }
             }
-            
+
             // 4. 尝试找到正在播放的媒体
             const playingMedia = allMedia.filter(m => !m.paused && !m.ended && m.readyState > 2);
-            
+
             if (playingMedia.length === 1) {
                 // 只有一个正在播放的媒体，直接返回
                 return playingMedia[0];
@@ -245,7 +247,7 @@
                 // 多个正在播放的媒体，按优先级选择
                 // 首先检查哪些在视口内
                 const visiblePlayingMedia = playingMedia.filter(m => isElementInViewport(m));
-                
+
                 if (visiblePlayingMedia.length >= 1) {
                     // 在可见的正在播放的媒体中，选择尺寸最大的
                     return getBiggestMedia(visiblePlayingMedia);
@@ -254,13 +256,13 @@
                     return getBiggestMedia(playingMedia);
                 }
             }
-            
+
             // 5. 没有播放中的媒体，找一个在视口中最大的媒体元素
             const visibleMedia = allMedia.filter(m => isElementInViewport(m));
             if (visibleMedia.length > 0) {
                 return getBiggestMedia(visibleMedia);
             }
-            
+
             // 6. 如果还是没找到，返回第一个媒体元素
             return allMedia[0];
         } catch (e) {
@@ -268,32 +270,32 @@
             return null;
         }
     }
-    
+
     // 辅助函数：获取所有媒体元素，包括iframe中的
     function getAllMediaElements() {
         // 如果缓存未过期且有元素，直接返回缓存
         if (!mediaElementsCache.isStale && mediaElementsCache.elements.length > 0) {
             return mediaElementsCache.elements;
         }
-        
+
         // 否则，重新获取媒体元素
         const mainDocMedia = Array.from(document.querySelectorAll('video, audio'));
         const iframeMedia = getMediaFromIframes();
-        
+
         // 更新缓存
         mediaElementsCache.elements = [...mainDocMedia, ...iframeMedia];
         mediaElementsCache.timestamp = Date.now();
         mediaElementsCache.isStale = false;
-        
+
         // 设置缓存过期
         clearTimeout(mediaElementsCache.timeoutId);
         mediaElementsCache.timeoutId = setTimeout(() => {
             mediaElementsCache.isStale = true;
         }, 2000); // 2秒后缓存过期
-        
+
         return mediaElementsCache.elements;
     }
-    
+
     // 辅助函数：从iframe中获取媒体元素
     function getMediaFromIframes() {
         const iframeMedia = [];
@@ -302,7 +304,7 @@
             const iframes = Array.from(document.querySelectorAll('iframe'));
             const visibleIframes = iframes.filter(iframe => isElementInViewport(iframe));
             const framesToProcess = [...visibleIframes, ...iframes.filter(iframe => !visibleIframes.includes(iframe))];
-            
+
             for (const iframe of framesToProcess) {
                 try {
                     // 只访问同源iframe
@@ -318,10 +320,10 @@
         } catch (e) {
             // 出现异常，忽略iframe内容
         }
-        
+
         return iframeMedia;
     }
-    
+
     // 设置IntersectionObserver
     function setupIntersectionObserver() {
         // 如果浏览器支持IntersectionObserver
@@ -333,7 +335,7 @@
             });
         }
     }
-    
+
     // 辅助函数：检查元素是否在视口内
     function isElementInViewport(el) {
         try {
@@ -341,13 +343,13 @@
             if (elementVisibilityMap.has(el)) {
                 return elementVisibilityMap.get(el);
             }
-            
+
             // 如果支持IntersectionObserver，添加到观察列表
             if (intersectionObserver) {
                 intersectionObserver.observe(el);
                 // 首次调用仍使用getBoundingClientRect计算，后续会由观察器更新
             }
-            
+
             // 手动计算可见性
             const rect = el.getBoundingClientRect();
             const isVisible = (
@@ -356,7 +358,7 @@
                 rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
                 rect.right <= (window.innerWidth || document.documentElement.clientWidth)
             );
-            
+
             // 缓存结果
             elementVisibilityMap.set(el, isVisible);
             return isVisible;
@@ -364,7 +366,7 @@
             return false;
         }
     }
-    
+
     // 辅助函数：检查元素是否在iframe中
     function isInIframe(el) {
         try {
@@ -385,12 +387,12 @@
             return false;
         }
     }
-    
+
     // 辅助函数：从媒体数组中获取尺寸最大的
     function getBiggestMedia(mediaArray) {
         if (!mediaArray || mediaArray.length === 0) return null;
         if (mediaArray.length === 1) return mediaArray[0];
-        
+
         return mediaArray.reduce((biggest, current) => {
             try {
                 // 获取或计算最大元素的面积
@@ -400,7 +402,7 @@
                     biggestArea = biggestRect.width * biggestRect.height;
                     mediaSizeCache.set(biggest, biggestArea);
                 }
-                
+
                 // 获取或计算当前元素的面积
                 let currentArea = mediaSizeCache.get(current);
                 if (currentArea === undefined) {
@@ -408,12 +410,88 @@
                     currentArea = currentRect.width * currentRect.height;
                     mediaSizeCache.set(current, currentArea);
                 }
-                
+
                 return currentArea > biggestArea ? current : biggest;
             } catch (e) {
                 return biggest;
             }
         }, mediaArray[0]);
+    }
+
+    // 确保全屏模式下暂停时控制栏保持可见
+    function ensureControlsVisibleWhenPaused(video) {
+        if (!video || !lightboxActive) return;
+
+        try {
+            // 如果视频暂停，确保控制栏可见
+            if (video.paused) {
+                // 强制显示控制栏
+                video.controls = true;
+
+                // 触发一个轻微的鼠标移动事件来激活控制栏
+                const rect = video.getBoundingClientRect();
+                const mouseEvent = new MouseEvent('mousemove', {
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.bottom - 30, // 控制栏区域
+                    bubbles: true,
+                    cancelable: true
+                });
+                video.dispatchEvent(mouseEvent);
+
+                // 设置一个属性来标记控制栏应该保持可见
+                video.setAttribute('data-vsc-paused-controls', 'true');
+            } else {
+                video.removeAttribute('data-vsc-paused-controls');
+            }
+        } catch (e) {
+            console.error('确保控制栏可见失败:', e);
+        }
+    }
+
+    // 设置全屏模式下的事件监听器
+    function setupLightboxEventListeners(video) {
+        if (!video || lightboxEventListeners.has(video)) return;
+
+        const pauseHandler = () => {
+            ensureControlsVisibleWhenPaused(video);
+        };
+
+        const playHandler = () => {
+            video.removeAttribute('data-vsc-paused-controls');
+        };
+
+        const seekingHandler = () => {
+            // 在拖拽进度条时也确保控制栏可见
+            ensureControlsVisibleWhenPaused(video);
+        };
+
+        // 添加事件监听器
+        video.addEventListener('pause', pauseHandler);
+        video.addEventListener('play', playHandler);
+        video.addEventListener('seeking', seekingHandler);
+
+        // 存储监听器引用以便后续清理
+        lightboxEventListeners.set(video, {
+            pause: pauseHandler,
+            play: playHandler,
+            seeking: seekingHandler
+        });
+
+        // 立即检查当前状态
+        ensureControlsVisibleWhenPaused(video);
+    }
+
+    // 清理全屏模式下的事件监听器
+    function cleanupLightboxEventListeners(video) {
+        if (!video || !lightboxEventListeners.has(video)) return;
+
+        const listeners = lightboxEventListeners.get(video);
+        video.removeEventListener('pause', listeners.pause);
+        video.removeEventListener('play', listeners.play);
+        video.removeEventListener('seeking', listeners.seeking);
+
+        lightboxEventListeners.delete(video);
+        video.removeAttribute('data-vsc-paused-controls');
     }
 
     function toggleLightboxFullscreen(media) {
@@ -429,6 +507,13 @@
                     // Clean up the click listener we added
                     if (lightbox.videoClickHandler) {
                         video.removeEventListener('click', lightbox.videoClickHandler);
+                    }
+
+                    // 清理控制栏相关的事件监听器和定时器
+                    cleanupLightboxEventListeners(video);
+                    if (lightboxControlsInterval) {
+                        clearInterval(lightboxControlsInterval);
+                        lightboxControlsInterval = null;
                     }
 
                     if (originalParent) {
@@ -458,7 +543,7 @@
                     // 记录点击状态，但不主动操作焦点
                     const isControlsClick = e.target !== media;
                     media.dataset.controlsActive = isControlsClick ? 'true' : 'false';
-                    
+
                     // 让用户和浏览器自然地管理焦点，插件通过键盘事件处理确保功能正常
                 };
 
@@ -473,6 +558,14 @@
                 document.body.appendChild(newLightbox);
                 document.body.classList.add('vsc-body-lock');
                 lightboxActive = true;
+
+                // 设置控制栏相关的事件监听器
+                setupLightboxEventListeners(media);
+
+                // 设置定时器定期检查暂停状态并确保控制栏可见
+                lightboxControlsInterval = setInterval(() => {
+                    ensureControlsVisibleWhenPaused(media);
+                }, 1000); // 每秒检查一次
             }
         } catch (e) {
             console.error('切换全屏模式失败:', e);
@@ -505,11 +598,11 @@
                         const seekStep = 5;
                         // 默认音量调整步长（0-1之间的值）
                         const volumeStep = 0.1;
-                        
+
                         // 阻止默认行为，防止原生控制器捕获事件
                         e.preventDefault();
                         e.stopPropagation();
-                        
+
                         // 执行快进/快退操作
                         if (e.key === 'ArrowLeft') {
                             // 快退
@@ -545,14 +638,14 @@
                 (e.metaKey ? 'meta+' : '') +
                 e.key.toLowerCase()
             );
-            
+
             // 特殊处理：空格键的网站特定逻辑
             if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
                 // YouTube网站：无论任何模式都使用原生处理
                 if (isYouTubeSite()) {
                     return; // 完全不干预，让YouTube原生处理
                 }
-                
+
                 // 其他网站：只在网页全屏模式下主动处理空格键
                 if (lightboxActive) {
                     const lightbox = document.getElementById('vsc-lightbox-overlay');
@@ -579,23 +672,23 @@
                 // 非网页全屏模式下，不处理空格键，让其完全由原生处理
                 return;
             }
-            
+
             const action = Object.keys(shortcuts).find(key => shortcuts[key] === shortcutPressed);
 
             if (!action) {
                 return;
             }
-            
+
             // 检查是否在可编辑区域输入（包括富文本编辑器等）
             if (isTypingInEditable(e)) {
                 return;
             }
 
             // 获取目标媒体元素
-            const media = lightboxActive ? 
-                document.querySelector('#vsc-lightbox-overlay video') : 
+            const media = lightboxActive ?
+                document.querySelector('#vsc-lightbox-overlay video') :
                 getTargetMedia();
-            
+
             // 检查是否应该允许快捷键生效
             let shouldAllowShortcut = false;
             if (lightboxActive) {
@@ -609,13 +702,13 @@
                 const mediaHasFocus = document.activeElement === media;
                 // 检查是否鼠标悬停在媒体元素上
                 const isHovering = media.matches && media.matches(':hover');
-                
+
                 // 在这些情况下允许快捷键
                 if (isDirectlyTargetingMedia || mediaHasFocus || isHovering) {
                     shouldAllowShortcut = true;
                 }
             }
-            
+
             if (!media) return; // 如果没有媒体元素，直接返回，不阻止默认行为
 
             // 检查是否应该允许快捷键
@@ -633,17 +726,17 @@
 
     // 兼容性处理：不是所有浏览器都支持matches方法
     if (!Element.prototype.matches) {
-        Element.prototype.matches = 
-            Element.prototype.matchesSelector || 
-            Element.prototype.mozMatchesSelector || 
-            Element.prototype.msMatchesSelector || 
-            Element.prototype.oMatchesSelector || 
-            Element.prototype.webkitMatchesSelector || 
-            function(s) {
+        Element.prototype.matches =
+            Element.prototype.matchesSelector ||
+            Element.prototype.mozMatchesSelector ||
+            Element.prototype.msMatchesSelector ||
+            Element.prototype.oMatchesSelector ||
+            Element.prototype.webkitMatchesSelector ||
+            function (s) {
                 var matches = (this.document || this.ownerDocument).querySelectorAll(s),
                     i = matches.length;
-                while (--i >= 0 && matches.item(i) !== this) {}
-                return i > -1;            
+                while (--i >= 0 && matches.item(i) !== this) { }
+                return i > -1;
             };
     }
 
@@ -732,21 +825,21 @@
             if (!mediaElementsCache.isStale && mediaElementsCache.shadowElements.length > 0) {
                 return mediaElementsCache.shadowElements;
             }
-            
+
             const elements = Array.from(document.querySelectorAll(selector));
-            
+
             // 优先检查视口内的元素
             const allElements = document.querySelectorAll('*');
             const visibleElements = Array.from(allElements)
                 .filter(el => isElementInViewport(el))
                 .slice(0, 100); // 限制数量，避免过度处理
-                
+
             for (const element of visibleElements) {
                 if (element.shadowRoot) {
                     elements.push(...element.shadowRoot.querySelectorAll(selector));
                 }
             }
-            
+
             // 缓存结果
             mediaElementsCache.shadowElements = elements;
             return elements;
@@ -766,10 +859,10 @@
                     clearInterval(mediaCheckInterval);
                     mediaCheckInterval = null;
                 }
-                
+
                 // 标记缓存为过期，下次会重新获取媒体元素
                 mediaElementsCache.isStale = true;
-                
+
                 // 获取并处理Shadow DOM中的媒体
                 handleShadowDOMMedia();
             }
@@ -777,22 +870,22 @@
             console.error('检查媒体元素失败:', e);
         }
     }
-    
+
     // 使用递减间隔的检查策略
     let mediaCheckInterval;
     function setupMediaElementDetection() {
         // 初始检查
         checkForMediaElements();
-        
+
         // 使用递减的间隔时间：先频繁检查，然后逐渐减少
         const intervals = [500, 1000, 2000, 5000]; // 毫秒
         let intervalIndex = 0;
-        
+
         function scheduleNextCheck() {
             if (mediaCheckInterval) {
                 clearInterval(mediaCheckInterval);
             }
-            
+
             if (intervalIndex < intervals.length) {
                 const currentInterval = intervals[intervalIndex++];
                 mediaCheckInterval = setInterval(() => {
@@ -806,9 +899,9 @@
                 }, currentInterval);
             }
         }
-        
+
         scheduleNextCheck();
-        
+
         // 使用MutationObserver观察DOM变化
         try {
             const observer = new MutationObserver(() => {
@@ -816,16 +909,16 @@
                 mediaElementsCache.isStale = true;
                 checkForMediaElements();
             });
-            observer.observe(document.body, { 
-                childList: true, 
+            observer.observe(document.body, {
+                childList: true,
                 subtree: true,
-                attributes: false, 
-                characterData: false 
+                attributes: false,
+                characterData: false
             });
         } catch (e) {
             console.error('设置MutationObserver失败:', e);
         }
-        
+
         // 当页面可见性改变时重新检查
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
@@ -838,49 +931,49 @@
     // 确保完整功能已初始化
     function ensureFullFunctionalityInitialized() {
         if (isFullFunctionalityInitialized) return;
-        
+
         // 执行更全面的初始化
         handleShadowDOMMedia();
-        
+
         // 标记为已初始化
         isFullFunctionalityInitialized = true;
     }
-    
+
     // 初始化插件
     function initializePlugin() {
         // 创建指示器元素
         createIndicator();
-        
+
         // 设置IntersectionObserver
         setupIntersectionObserver();
-        
+
         // 加载快捷键设置
         loadShortcutSettings();
-        
+
         // 设置媒体检测
         setupMediaElementDetection();
-        
+
         // 设置事件委托
         setupMediaEventDelegation();
-        
+
         // 全局键盘事件监听（捕获阶段）
         // 需要在捕获阶段处理，确保插件快捷键能正常拦截
         window.addEventListener('keydown', handleKeyDown, true);
-        
+
         // 备用键盘事件监听（在document级别，捕获阶段）
         // 只用于网页全屏模式下的特殊快捷键（ESC和方向键）
         document.addEventListener('keydown', (e) => {
             // 只有当lightbox活跃时才使用这个备用处理器
             if (!lightboxActive) return;
-            
+
             // 只处理网页全屏模式特有的快捷键，避免干扰其他按键
-            if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' || 
+            if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
                 e.key === 'ArrowUp' || e.key === 'ArrowDown') {
                 handleKeyDown(e);
             }
         }, true);
     }
-    
+
     // 初始化插件
     initializePlugin();
 
