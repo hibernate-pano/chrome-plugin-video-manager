@@ -586,9 +586,8 @@
                 return;
             }
             
-            // 检查是否在可编辑区域
-            if (e.target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
-                // 在输入框中不拦截快捷键
+            // 检查是否在可编辑区域输入（包括富文本编辑器等）
+            if (isTypingInEditable(e)) {
                 return;
             }
 
@@ -610,11 +609,9 @@
                 const mediaHasFocus = document.activeElement === media;
                 // 检查是否鼠标悬停在媒体元素上
                 const isHovering = media.matches && media.matches(':hover');
-                // 检查是否最近与媒体交互过
-                const isRecentlyActive = lastActiveMedia === media;
                 
                 // 在这些情况下允许快捷键
-                if (isDirectlyTargetingMedia || mediaHasFocus || isHovering || isRecentlyActive) {
+                if (isDirectlyTargetingMedia || mediaHasFocus || isHovering) {
                     shouldAllowShortcut = true;
                 }
             }
@@ -648,6 +645,67 @@
                 while (--i >= 0 && matches.item(i) !== this) {}
                 return i > -1;            
             };
+    }
+
+    // 判断是否正在可编辑区域输入（更健壮的检测）
+    function isTypingInEditable(event) {
+        try {
+            if (!event) return false;
+            // 输入法合成期间不处理快捷键
+            if (event.isComposing) return true;
+
+            const editableSelectors = [
+                'input',
+                'textarea',
+                'select',
+                '[contenteditable]',
+                '[role="textbox"]',
+                '.monaco-editor',
+                '.ace_editor',
+                '.cm-editor',
+                '.cm-content',
+                '.CodeMirror',
+                '.ProseMirror',
+                '[data-lexical-editor]'
+            ].join(',');
+
+            function isEditableElement(el) {
+                if (!el || el.nodeType !== 1) return false; // 仅元素节点
+                if (el.isContentEditable) return true;
+                const tag = el.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+                return !!(el.closest && el.closest(editableSelectors));
+            }
+
+            const target = event.target;
+            const activeEl = document.activeElement;
+
+            // 通过 composedPath 捕获 Shadow DOM 内的可编辑元素
+            const path = typeof event.composedPath === 'function' ? event.composedPath() : [target];
+            for (const node of path) {
+                if (node && node.nodeType === 1 && isEditableElement(node)) {
+                    return true;
+                }
+            }
+
+            if (isEditableElement(target)) return true;
+            if (isEditableElement(activeEl)) return true;
+
+            // 如果焦点在同源 iframe 内，检查其内部的 activeElement
+            if (activeEl && activeEl.tagName === 'IFRAME') {
+                try {
+                    const iframeDoc = activeEl.contentDocument || activeEl.contentWindow?.document;
+                    const innerActive = iframeDoc?.activeElement;
+                    if (isEditableElement(innerActive)) return true;
+                } catch (e) {
+                    // 跨域 iframe，忽略
+                }
+            }
+
+            return false;
+        } catch (e) {
+            return false;
+        }
     }
 
     // 处理Shadow DOM中的媒体元素
