@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Video & Audio Speed Controller",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Easily control video and audio playback speed with keyboard shortcuts.",
   "action": {
     "default_popup": "options.html",
