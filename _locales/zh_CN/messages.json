@@ -1,0 +1,166 @@
+{
+  "extName": {
+    "message": "视频 & 音频速度控制器",
+    "description": "扩展名称"
+  },
+  "extDescription": {
+    "message": "使用键盘快捷键轻松控制视频和音频的播放速度。",
+    "description": "扩展描述"
+  },
+  "settingsTitle": {
+    "message": "视频速度控制器设置",
+    "description": "设置页面标题"
+  },
+  "shortcutsTab": {
+    "message": "快捷键",
+    "description": "快捷键标签"
+  },
+  "helpTab": {
+    "message": "使用帮助",
+    "description": "帮助标签"
+  },
+  "speedUp": {
+    "message": "加速",
+    "description": "加速快捷键标签"
+  },
+  "slowDown": {
+    "message": "减速",
+    "description": "减速快捷键标签"
+  },
+  "resetSpeed": {
+    "message": "重置速度",
+    "description": "重置速度快捷键标签"
+  },
+  "toggleFullscreen": {
+    "message": "切换网页全屏",
+    "description": "切换全屏快捷键标签"
+  },
+  "speedUpDesc": {
+    "message": "增加视频播放速度 (+0.1)",
+    "description": "加速描述"
+  },
+  "slowDownDesc": {
+    "message": "降低视频播放速度 (-0.1)",
+    "description": "减速描述"
+  },
+  "resetSpeedDesc": {
+    "message": "将播放速度重置为 1.0x (正常速度)",
+    "description": "重置速度描述"
+  },
+  "toggleFullscreenDesc": {
+    "message": "进入/退出网页全屏模式（非浏览器全屏）",
+    "description": "切换全屏描述"
+  },
+  "save": {
+    "message": "保存",
+    "description": "保存按钮"
+  },
+  "resetToDefault": {
+    "message": "恢复默认设置",
+    "description": "恢复默认按钮"
+  },
+  "saved": {
+    "message": "设置已保存。",
+    "description": "设置已保存消息"
+  },
+  "resetToDefaultDone": {
+    "message": "已恢复默认设置，请点击保存以应用。",
+    "description": "恢复默认完成消息"
+  },
+  "conflictWarning": {
+    "message": "检测到重复的快捷键设置！",
+    "description": "快捷键冲突警告"
+  },
+  "emptyWarning": {
+    "message": "快捷键不能为空！",
+    "description": "空快捷键警告"
+  },
+  "browserConflictWarning": {
+    "message": "部分快捷键与浏览器常用快捷键冲突，可能会被浏览器优先处理。",
+    "description": "浏览器冲突警告"
+  },
+  "fixAndSave": {
+    "message": "请修正问题后再保存。",
+    "description": "修正并保存消息"
+  },
+  "helpTitle": {
+    "message": "使用说明",
+    "description": "帮助章节标题"
+  },
+  "helpIntro": {
+    "message": "本插件允许您使用自定义快捷键控制网页上视频和音频的播放速度。",
+    "description": "帮助介绍"
+  },
+  "basicUsage": {
+    "message": "基本使用方法",
+    "description": "基本使用章节"
+  },
+  "videoSelection": {
+    "message": "视频选择逻辑",
+    "description": "视频选择章节"
+  },
+  "fullscreenFeatures": {
+    "message": "网页全屏模式特殊功能",
+    "description": "全屏功能章节"
+  },
+  "notes": {
+    "message": "注意事项",
+    "description": "注意事项章节"
+  },
+  "autoDetect": {
+    "message": "插件会自动检测当前页面上的视频或音频元素",
+    "description": "自动检测功能"
+  },
+  "useShortcuts": {
+    "message": "使用设置的快捷键直接控制媒体播放",
+    "description": "使用快捷键功能"
+  },
+  "speedIndicator": {
+    "message": "更改播放速度时，会显示速度指示器",
+    "description": "速度指示器功能"
+  },
+  "prioritizeHover": {
+    "message": "插件优先控制您鼠标悬停的视频/音频",
+    "description": "优先悬停功能"
+  },
+  "recentInteraction": {
+    "message": "如果没有悬停，则选择最近交互过的媒体",
+    "description": "最近交互功能"
+  },
+  "largestInViewport": {
+    "message": "如果有多个播放中的媒体，优先选择视口内最大的",
+    "description": "视口内最大功能"
+  },
+  "arrowKeysControl": {
+    "message": "在网页全屏模式下，可使用方向键控制视频：",
+    "description": "方向键控制"
+  },
+  "leftArrow": {
+    "message": "← 左方向键：快退5秒",
+    "description": "左方向键"
+  },
+  "rightArrow": {
+    "message": "→ 右方向键：快进5秒",
+    "description": "右方向键"
+  },
+  "upArrow": {
+    "message": "↑ 上方向键：增加音量",
+    "description": "上方向键"
+  },
+  "downArrow": {
+    "message": "↓ 下方向键：减小音量",
+    "description": "下方向键"
+  },
+  "escKey": {
+    "message": "ESC键：退出网页全屏模式",
+    "description": "ESC键"
+  },
+  "notesContent": {
+    "message": "插件的快捷键只在有视频或音频元素可用时才会拦截。如果页面上没有媒体元素，快捷键会正常传递给页面。",
+    "description": "注意事项内容"
+  },
+  "exitFullscreen": {
+    "message": "在网页全屏模式下，您可以按ESC键退出全屏。",
+    "description": "退出全屏提示"
+  }
+}

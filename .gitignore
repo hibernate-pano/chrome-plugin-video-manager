@@ -1,14 +1,40 @@
-# AI 配置文件
-.gemini/
-.promptx/
-
-# 配置文件
-.DS_Store
-.idea/
-
-# 输出文件
+# Dependencies
 node_modules/
+package-lock.json
+yarn.lock
+
+# Build outputs
+content-bundled.js
+content-bundled.js.map
 dist/
 build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
 coverage/
 .nyc_output/
+
+# Temporary files
+*.tmp
+.cache/
+
+# Environment variables
+.env
+.env.local
+.env.*.local

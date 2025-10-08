@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title data-i18n="settingsTitle"></title>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+        padding: 10px 20px;
+        background-color: #f0f2f5;
+        min-width: 300px;
+      }
+      h1 {
+        font-size: 18px;
+        color: #333;
+      }
+      .form-group {
+        margin-bottom: 15px;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+        color: #555;
+      }
+      input[type="text"] {
+        width: 120px;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      button {
+        padding: 10px 15px;
+        border: none;
+        background-color: #007bff;
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+        margin-right: 10px;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+      button#reset-shortcuts {
+        background-color: #6c757d;
+      }
+      button#reset-shortcuts:hover {
+        background-color: #5a6268;
+      }
+      #status {
+        margin-top: 15px;
+        color: green;
+        font-weight: bold;
+      }
+      .help-text {
+        margin-top: 20px;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-left: 4px solid #007bff;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .shortcut-description {
+        color: #666;
+        font-size: 12px;
+        font-style: italic;
+        margin-top: 3px;
+      }
+      .tab-container {
+        margin-top: 20px;
+      }
+      .tab-buttons {
+        display: flex;
+        border-bottom: 1px solid #ddd;
+        margin-bottom: 15px;
+      }
+      .tab-button {
+        padding: 8px 16px;
+        cursor: pointer;
+        background: #f0f0f0;
+        border: 1px solid #ddd;
+        border-bottom: none;
+        margin-right: 5px;
+        border-radius: 4px 4px 0 0;
+      }
+      .tab-button.active {
+        background: #fff;
+        border-bottom: 1px solid #fff;
+        margin-bottom: -1px;
+        font-weight: bold;
+      }
+      .tab-content {
+        display: none;
+        padding: 15px;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-top: none;
+        border-radius: 0 0 4px 4px;
+      }
+      .tab-content.active {
+        display: block;
+      }
+      .shortcut-input.warning {
+        border: 2px solid #ff5252;
+        background-color: #ffecec;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 data-i18n="settingsTitle"></h1>
+
+    <div class="tab-container">
+      <div class="tab-buttons">
+        <div
+          class="tab-button active"
+          data-tab="shortcuts"
+          data-i18n="shortcutsTab"
+        ></div>
+        <div class="tab-button" data-tab="help" data-i18n="helpTab"></div>
+      </div>
+
+      <div id="shortcuts" class="tab-content active">
+        <div class="form-group">
+          <label for="increase" data-i18n="speedUp"></label>
+          <input type="text" id="increase" class="shortcut-input" />
+          <div class="shortcut-description" data-i18n="speedUpDesc"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="decrease" data-i18n="slowDown"></label>
+          <input type="text" id="decrease" class="shortcut-input" />
+          <div class="shortcut-description" data-i18n="slowDownDesc"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="reset" data-i18n="resetSpeed"></label>
+          <input type="text" id="reset" class="shortcut-input" />
+          <div class="shortcut-description" data-i18n="resetSpeedDesc"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="toggle-fullscreen" data-i18n="toggleFullscreen"></label>
+          <input type="text" id="toggle-fullscreen" class="shortcut-input" />
+          <div
+            class="shortcut-description"
+            data-i18n="toggleFullscreenDesc"
+          ></div>
+        </div>
+
+        <div style="display: flex; gap: 10px">
+          <button id="save" data-i18n="save"></button>
+          <button id="reset-shortcuts" data-i18n="resetToDefault"></button>
+        </div>
+        <div id="status"></div>
+      </div>
+
+      <div id="help" class="tab-content">
+        <h3 data-i18n="helpTitle"></h3>
+        <p data-i18n="helpIntro"></p>
+
+        <h4 data-i18n="basicUsage"></h4>
+        <ul>
+          <li data-i18n="autoDetect"></li>
+          <li data-i18n="useShortcuts"></li>
+          <li data-i18n="speedIndicator"></li>
+        </ul>
+
+        <h4 data-i18n="videoSelection"></h4>
+        <ul>
+          <li data-i18n="prioritizeHover"></li>
+          <li data-i18n="recentInteraction"></li>
+          <li data-i18n="largestInViewport"></li>
+        </ul>
+
+        <h4 data-i18n="fullscreenFeatures"></h4>
+        <ul>
+          <li data-i18n="arrowKeysControl"></li>
+          <li data-i18n="leftArrow"></li>
+          <li data-i18n="rightArrow"></li>
+          <li data-i18n="upArrow"></li>
+          <li data-i18n="downArrow"></li>
+          <li data-i18n="escKey"></li>
+        </ul>
+
+        <h4 data-i18n="notes"></h4>
+        <p data-i18n="notesContent"></p>
+        <p data-i18n="exitFullscreen"></p>
+      </div>
+    </div>
+
+    <script src="options-new.js"></script>
+  </body>
+</html>
