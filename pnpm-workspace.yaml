@@ -1,2 +1,7 @@
+# pnpm workspace 配置
+packages:
+  - '.'
+  - 'src-react'
+
 ignoredBuiltDependencies:
   - esbuild

@@ -9,6 +9,11 @@ content-bundled.js.map
 dist/
 build/
 
+# React build outputs
+src-react/dist/
+src-react/.vite/
+src-react/node_modules/
+
 # IDE
 .vscode/
 .idea/
@@ -38,3 +43,7 @@ coverage/
 .env
 .env.local
 .env.*.local
+
+
+.claude/
+.kiro/
