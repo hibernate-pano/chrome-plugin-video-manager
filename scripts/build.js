@@ -12,7 +12,7 @@ const isWatch = process.argv.includes("--watch");
 const buildOptions = {
   entryPoints: ["src/main.js"],
   bundle: true,
-  outfile: "content-bundled.js",
+  outfile: "dist/content.js",
   format: "iife",
   target: "chrome90",
   platform: "browser",
@@ -41,7 +41,7 @@ async function build() {
       console.log("✅ 构建完成！");
 
       // 输出文件大小
-      const stats = fs.statSync("content-bundled.js");
+      const stats = fs.statSync("dist/content.js");
       const sizeKB = (stats.size / 1024).toFixed(2);
       console.log(`📦 文件大小: ${sizeKB} KB`);
     }

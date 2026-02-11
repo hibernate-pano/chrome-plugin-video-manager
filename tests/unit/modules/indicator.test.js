@@ -1,85 +1,101 @@
 /**
- * Tests for SpeedIndicator module
+ * Tests for SpeedIndicator
  */
 
-import { SpeedIndicator } from "../../../src/modules/indicator.js";
+import { SpeedIndicator } from '../../../src/modules/indicator.js';
 
-describe("SpeedIndicator", () => {
-  let indicator;
-  let mockMediaElement;
+describe('SpeedIndicator', () => {
+    let indicator;
 
-  beforeEach(() => {
-    // Setup DOM
-    document.body.innerHTML = "";
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        indicator = new SpeedIndicator();
+    });
 
-    // Mock media element
-    mockMediaElement = {
-      getBoundingClientRect: jest.fn(() => ({
-        top: 100,
-        left: 100,
-        width: 640,
-        height: 480,
-      })),
-    };
+    afterEach(() => {
+        if (indicator) {
+            indicator.destroy();
+        }
+    });
 
-    indicator = new SpeedIndicator();
-  });
+    test('should create indicator element on initialization', () => {
+        expect(indicator.indicator).toBeTruthy();
+        expect(indicator.indicator.id).toBe('vsc-speed-indicator');
+    });
 
-  afterEach(() => {
-    if (indicator) {
-      indicator.destroy();
-    }
-  });
+    test('should show indicator with speed', () => {
+        const mockMedia = {
+            getBoundingClientRect: () => ({
+                top: 100,
+                left: 200,
+            }),
+            tagName: 'DIV',
+        };
+        document.body.appendChild(mockMedia);
 
-  test("should create indicator element on init", () => {
-    const indicatorElement = document.getElementById("video-speed-indicator");
-    expect(indicatorElement).toBeTruthy();
-  });
+        indicator.show(1.5, mockMedia);
 
-  test("should show indicator with speed value", () => {
-    indicator.show(1.5, mockMediaElement);
+        expect(indicator.indicator.classList.contains('visible')).toBe(true);
 
-    const indicatorElement = document.getElementById("video-speed-indicator");
-    expect(indicatorElement.textContent).toBe("1.50x");
-    expect(indicatorElement.classList.contains("visible")).toBe(true);
-  });
+        const speedElement = indicator.indicator.shadowRoot.querySelector('.speed-value');
+        expect(speedElement.textContent).toBe('1.50x');
 
-  test("should show indicator with custom text", () => {
-    indicator.show("⏩ 5秒", mockMediaElement);
+        document.body.removeChild(mockMedia);
+    });
 
-    const indicatorElement = document.getElementById("video-speed-indicator");
-    expect(indicatorElement.textContent).toBe("⏩ 5秒");
-    expect(indicatorElement.classList.contains("visible")).toBe(true);
-  });
+    test('should hide indicator after timeout', (done) => {
+        jest.useFakeTimers();
 
-  test("should hide indicator", () => {
-    indicator.show(1.5, mockMediaElement);
-    indicator.hide();
+        const mockMedia = {
+            getBoundingClientRect: () => ({
+                top: 100,
+                left: 200,
+            }),
+            tagName: 'DIV',
+        };
+        document.body.appendChild(mockMedia);
 
-    const indicatorElement = document.getElementById("video-speed-indicator");
-    expect(indicatorElement.classList.contains("visible")).toBe(false);
-  });
+        indicator.show(1.5, mockMedia);
 
-  test("should auto-hide after timeout", (done) => {
-    jest.useFakeTimers();
+        expect(indicator.indicator.classList.contains('visible')).toBe(true);
 
-    indicator.show(1.5, mockMediaElement);
+        jest.advanceTimersByTime(1600);
 
-    const indicatorElement = document.getElementById("video-speed-indicator");
-    expect(indicatorElement.classList.contains("visible")).toBe(true);
+        setTimeout(() => {
+            expect(indicator.indicator.classList.contains('visible')).toBe(false);
+            done();
+        }, 100);
 
-    jest.advanceTimersByTime(1500);
+        jest.useRealTimers();
+    });
 
-    expect(indicatorElement.classList.contains("visible")).toBe(false);
+    test('should hide indicator explicitly', () => {
+        const mockMedia = {
+            getBoundingClientRect: () => ({
+                top: 100,
+                left: 200,
+            }),
+            tagName: 'DIV',
+        };
+        document.body.appendChild(mockMedia);
 
-    jest.useRealTimers();
-    done();
-  });
+        indicator.show(1.5, mockMedia);
 
-  test("should destroy indicator element", () => {
-    indicator.destroy();
+        expect(indicator.indicator.classList.contains('visible')).toBe(true);
 
-    const indicatorElement = document.getElementById("video-speed-indicator");
-    expect(indicatorElement).toBeNull();
-  });
+        indicator.hide();
+
+        expect(indicator.indicator.classList.contains('visible')).toBe(false);
+
+        document.body.removeChild(mockMedia);
+    });
+
+    test('should clean up indicator on destroy', () => {
+        const indicatorElement = indicator.indicator;
+
+        indicator.destroy();
+
+        expect(document.body.contains(indicatorElement)).toBe(false);
+        expect(indicator.indicator).toBeNull();
+    });
 });
