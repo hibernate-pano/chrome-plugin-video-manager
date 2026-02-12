@@ -1,96 +1,300 @@
-name: CI/CD Pipeline
+name: CI
 
+# 触发条件
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, feature/**]
   pull_request:
     branches: [main, develop]
 
+# 环境变量
+env:
+  NODE_VERSION: '18'
+  PNPM_VERSION: '8'
+
 jobs:
-  lint-and-test:
-    name: Lint & Test
+  # 代码质量检查
+  lint:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [16.x, 18.x, 20.x]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
         with:
-          node-version: ${{ matrix.node-version }}
-
-      - name: Get npm cache directory
-        id: npm-cache
-        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.npm-cache.outputs.dir }}
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run linter
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: lint-and-test
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+          version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
-
-      - name: Get npm cache directory
-        id: npm-cache
-        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.npm-cache.outputs.dir }}
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
 
       - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Verify build output
         run: |
-          if [ ! -f content-bundled.js ]; then
-            echo "Build failed: content-bundled.js not found"
-            exit 1
-          fi
-          echo "Build size: $(du -h content-bundled.js | cut -f1)"
+          cd src-react
+          pnpm install --frozen-lockfile
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v3
+      - name: Run ESLint
+        run: |
+          cd src-react
+          pnpm lint
+
+      - name: Run TypeScript type check
+        run: |
+          cd src-react
+          pnpm type-check
+
+  # 单元测试 - Vitest (React 组件)
+  test-vitest:
+    name: Unit Tests (Vitest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
         with:
-          name: build-artifact
-          path: |
-            content-bundled.js
-            manifest.json
-            content.js
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd src-react
+          pnpm install --frozen-lockfile
+
+      - name: Run Vitest tests with coverage
+        run: |
+          cd src-react
+          pnpm test:coverage
+
+      - name: Upload Vitest coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./src-react/coverage/lcov.info
+          flags: vitest
+          name: vitest-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Upload Vitest coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-coverage
+          path: src-react/coverage/
           retention-days: 7
+
+  # 单元测试 - Jest (Chrome API)
+  test-jest:
+    name: Unit Tests (Jest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd src-react
+          pnpm install --frozen-lockfile
+
+      - name: Run Jest tests with coverage
+        run: |
+          cd src-react
+          pnpm test:jest:coverage
+
+      - name: Upload Jest coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./src-react/coverage-jest/lcov.info
+          flags: jest
+          name: jest-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Upload Jest coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-coverage
+          path: src-react/coverage-jest/
+          retention-days: 7
+
+  # E2E 测试 - Playwright
+  test-e2e:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd src-react
+          pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: |
+          cd src-react
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Build extension
+        run: |
+          cd src-react
+          pnpm build
+
+      - name: Run Playwright tests
+        run: |
+          cd src-react
+          pnpm test:e2e
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: src-react/playwright-report/
+          retention-days: 7
+
+  # 构建验证
+  build:
+    name: Build Extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd src-react
+          pnpm install --frozen-lockfile
+
+      - name: Build extension
+        run: |
+          cd src-react
+          pnpm build
+
+      - name: Check bundle size
+        run: |
+          cd src-react
+          pnpm build:analyze
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-build
+          path: src-react/dist/
+          retention-days: 7
+
+  # 性能基准测试
+  performance:
+    name: Performance Benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd src-react
+          pnpm install --frozen-lockfile
+
+      - name: Run performance benchmark
+        run: |
+          cd src-react
+          pnpm build:perf
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report
+          path: src-react/PERFORMANCE_REPORT.md
+          retention-days: 7
+
+  # 汇总测试结果
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [lint, test-vitest, test-jest, test-e2e, build]
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "Vitest: ${{ needs.test-vitest.result }}"
+          echo "Jest: ${{ needs.test-jest.result }}"
+          echo "E2E: ${{ needs.test-e2e.result }}"
+          echo "Build: ${{ needs.build.result }}"
+
+          if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.test-vitest.result }}" != "success" ] || \
+             [ "${{ needs.test-jest.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ]; then
+            echo "❌ Some checks failed"
+            exit 1
+          else
+            echo "✅ All checks passed"
+          fi

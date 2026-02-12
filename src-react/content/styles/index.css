@@ -1,0 +1,250 @@
+/* Tailwind CSS 指令 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Content script styles */
+/* 这些样式会被注入到 Shadow DOM 中，不会影响宿主页面 */
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  /* 基础样式重置 */
+  :host {
+    all: initial;
+    display: block;
+  }
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+
+    /* 动画 CSS 变量 */
+    --vsc-animation-duration-fast: 150ms;
+    --vsc-animation-duration-normal: 300ms;
+    --vsc-animation-duration-slow: 500ms;
+    --vsc-animation-duration: 300ms;
+
+    --vsc-animation-easing-in: cubic-bezier(0.4, 0, 1, 1);
+    --vsc-animation-easing-out: cubic-bezier(0, 0, 0.2, 1);
+    --vsc-animation-easing-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --vsc-animation-easing-spring: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+    --vsc-hud-fade-duration: 200ms;
+    --vsc-hud-scale-duration: 200ms;
+    --vsc-lightbox-fade-duration: 300ms;
+    --vsc-lightbox-zoom-duration: 300ms;
+    --vsc-controls-fade-duration: 300ms;
+    --vsc-controls-slide-duration: 300ms;
+  }
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* 自定义动画组件类 */
+@layer components {
+  /* 淡入淡出工具类 */
+  .fade-enter {
+    @apply animate-fade-in;
+  }
+
+  .fade-exit {
+    @apply animate-fade-out;
+  }
+
+  .fade-enter-slow {
+    @apply animate-fade-in-slow;
+  }
+
+  .fade-exit-slow {
+    @apply animate-fade-out-slow;
+  }
+
+  /* 控制条动画类 */
+  .controls-enter {
+    @apply animate-controls-fade-in;
+  }
+
+  .controls-exit {
+    @apply animate-controls-fade-out;
+  }
+
+  /* HUD 动画类 */
+  .hud-enter {
+    @apply animate-hud-appear;
+  }
+
+  .hud-exit {
+    @apply animate-hud-disappear;
+  }
+
+  /* 按钮悬停效果 */
+  .btn-hover-scale {
+    @apply transition-transform duration-200 ease-out hover:scale-110;
+  }
+
+  .btn-hover-glow {
+    @apply transition-shadow duration-300 ease-out hover:shadow-lg hover:shadow-primary-500/50;
+  }
+
+  /* 进度条动画 */
+  .progress-smooth {
+    @apply transition-all duration-150 ease-out;
+  }
+
+  /* 音量条动画 */
+  .volume-smooth {
+    @apply transition-all duration-100 ease-out;
+  }
+
+  /* 控制条渐变背景 */
+  .controls-gradient {
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 50%, transparent 100%);
+  }
+
+  /* 玻璃态效果 */
+  .glass-effect {
+    @apply backdrop-blur-md bg-black/60;
+  }
+
+  /* 平滑过渡 */
+  .smooth-transition {
+    @apply transition-all duration-300 ease-in-out;
+  }
+}
+
+/* 动画工具类 */
+@layer utilities {
+  /* GPU 加速 */
+  .gpu-accelerated {
+    transform: translateZ(0);
+    will-change: transform, opacity;
+  }
+
+  /* 禁用动画（用于 prefers-reduced-motion 或用户设置） */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* 当用户设置禁用动画时 */
+  [data-reduced-motion="true"] *,
+  [data-reduced-motion="true"] *::before,
+  [data-reduced-motion="true"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  /* 动画延迟工具类 */
+  .animation-delay-100 {
+    animation-delay: 100ms;
+  }
+
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+
+  .animation-delay-300 {
+    animation-delay: 300ms;
+  }
+
+  /* 使用 CSS 变量的动画持续时间工具类 */
+  .animation-duration-fast {
+    animation-duration: var(--vsc-animation-duration-fast);
+  }
+
+  .animation-duration-normal {
+    animation-duration: var(--vsc-animation-duration-normal);
+  }
+
+  .animation-duration-slow {
+    animation-duration: var(--vsc-animation-duration-slow);
+  }
+
+  .animation-duration-current {
+    animation-duration: var(--vsc-animation-duration);
+  }
+
+  /* 使用 CSS 变量的过渡持续时间工具类 */
+  .transition-duration-fast {
+    transition-duration: var(--vsc-animation-duration-fast);
+  }
+
+  .transition-duration-normal {
+    transition-duration: var(--vsc-animation-duration-normal);
+  }
+
+  .transition-duration-slow {
+    transition-duration: var(--vsc-animation-duration-slow);
+  }
+
+  .transition-duration-current {
+    transition-duration: var(--vsc-animation-duration);
+  }
+}

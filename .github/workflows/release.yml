@@ -1,0 +1,116 @@
+name: Release
+
+# 触发条件：当推送 tag 时
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# 环境变量
+env:
+  NODE_VERSION: '18'
+  PNPM_VERSION: '8'
+
+jobs:
+  # 创建 Release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'src-react/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd src-react
+          pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: |
+          cd src-react
+          pnpm test:all
+
+      - name: Build extension
+        run: |
+          cd src-react
+          pnpm build
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create zip archive
+        run: |
+          cd src-react/dist
+          zip -r ../../video-speed-controller-v${{ steps.get_version.outputs.VERSION }}.zip .
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # 获取上一个 tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            # 如果没有上一个 tag，获取所有提交
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # 获取两个 tag 之间的提交
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          # 保存到文件
+          echo "$CHANGELOG" > CHANGELOG.txt
+
+          # 输出到 GitHub Actions
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## 🎉 Release v${{ steps.get_version.outputs.VERSION }}
+
+            ### 📦 下载
+            下载 `video-speed-controller-v${{ steps.get_version.outputs.VERSION }}.zip` 并解压，然后在 Chrome 扩展管理页面加载解压后的文件夹。
+
+            ### 📝 更新日志
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### 🔗 相关链接
+            - [完整更新日志](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+            - [文档](https://github.com/${{ github.repository }}/blob/main/README.md)
+          files: |
+            video-speed-controller-v${{ steps.get_version.outputs.VERSION }}.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./src-react/coverage/lcov.info,./src-react/coverage-jest/lcov.info
+          flags: release
+          name: release-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

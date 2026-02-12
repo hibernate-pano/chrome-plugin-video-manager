@@ -1,0 +1,60 @@
+/* Tailwind CSS 指令 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Options page styles */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  :root {
+    /* 动画 CSS 变量 */
+    --vsc-animation-duration-fast: 150ms;
+    --vsc-animation-duration-normal: 300ms;
+    --vsc-animation-duration-slow: 500ms;
+    --vsc-animation-duration: 300ms;
+
+    --vsc-animation-easing-in: cubic-bezier(0.4, 0, 1, 1);
+    --vsc-animation-easing-out: cubic-bezier(0, 0, 0.2, 1);
+    --vsc-animation-easing-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --vsc-animation-easing-spring: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+      'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    width: 100%;
+    min-height: 100vh;
+  }
+}
+
+/* 禁用动画（用于 prefers-reduced-motion 或用户设置） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 当用户设置禁用动画时 */
+[data-reduced-motion="true"] *,
+[data-reduced-motion="true"] *::before,
+[data-reduced-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}

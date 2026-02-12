@@ -169,6 +169,7 @@ export class KeyboardHandler {
 
             // 检查音量控制快捷键
             if (this.shortcuts['volume-up'] === shortcutPressed) {
+                if (isTypingInEditable(e)) return;
                 const media = this.mediaDetector.getTargetMedia();
                 if (!media) return;
 
@@ -179,6 +180,7 @@ export class KeyboardHandler {
             }
 
             if (this.shortcuts['volume-down'] === shortcutPressed) {
+                if (isTypingInEditable(e)) return;
                 const media = this.mediaDetector.getTargetMedia();
                 if (!media) return;
 
@@ -190,6 +192,7 @@ export class KeyboardHandler {
 
             // 检查快进快退快捷键
             if (this.shortcuts['seek-forward'] === shortcutPressed) {
+                if (isTypingInEditable(e)) return;
                 const media = this.mediaDetector.getTargetMedia();
                 if (!media) return;
 
@@ -200,6 +203,7 @@ export class KeyboardHandler {
             }
 
             if (this.shortcuts['seek-backward'] === shortcutPressed) {
+                if (isTypingInEditable(e)) return;
                 const media = this.mediaDetector.getTargetMedia();
                 if (!media) return;
 
@@ -225,6 +229,8 @@ export class KeyboardHandler {
                 (key) => this.shortcuts[key] === shortcutPressed
             );
 
+            console.log('快捷键调试:', { shortcutPressed, action, shortcuts: this.shortcuts });
+
             if (!action) return;
 
             // 检查是否在可编辑区域
@@ -244,16 +250,27 @@ export class KeyboardHandler {
             if (this.lightboxManager.isActive()) {
                 shouldAllowShortcut = true;
             } else {
+                const allMedia = this.mediaDetector.getAllMediaElements();
                 const isDirectlyTargetingMedia = media === e.target || media.contains(e.target);
                 const mediaHasFocus = document.activeElement === media;
                 const isHovering = media.matches && media.matches(':hover');
 
-                if (isDirectlyTargetingMedia || mediaHasFocus || isHovering) {
+                // 页面上只有一个媒体元素时，始终允许快捷键
+                if (allMedia.length === 1) {
+                    shouldAllowShortcut = true;
+                } else if (isDirectlyTargetingMedia || mediaHasFocus || isHovering) {
                     shouldAllowShortcut = true;
                 }
             }
 
-            if (!shouldAllowShortcut) return;
+            if (!shouldAllowShortcut) {
+                console.log('快捷键被阻止:', {
+                    allMediaCount: this.mediaDetector.getAllMediaElements().length,
+                    media: media?.tagName,
+                    lightboxActive: this.lightboxManager.isActive()
+                });
+                return;
+            }
 
             // 阻止默认行为
             e.preventDefault();

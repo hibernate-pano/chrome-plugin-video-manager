@@ -65,7 +65,7 @@
 
 ### 前置要求
 
-- Node.js 16+ 和 npm
+- Node.js 18+ 和 pnpm 8+（推荐）或 npm 9+
 - Git
 - Chrome 浏览器
 - 代码编辑器（推荐 VS Code）
@@ -85,30 +85,42 @@
    git remote add upstream https://github.com/ORIGINAL-OWNER/chrome-plugin-video-manager.git
    ```
 
-3. **安装依赖**
+3. **选择开发版本**
 
+   **原版（v1.x）：**
    ```bash
    npm install
-   ```
-
-4. **构建项目**
-
-   ```bash
    npm run build
    ```
 
-5. **在 Chrome 中加载扩展**
+   **React 版（v2.0 - 推荐）：**
+   ```bash
+   cd src-react
+   pnpm install
+   pnpm build
+   ```
+
+4. **在 Chrome 中加载扩展**
 
    - 访问 `chrome://extensions/`
    - 启用"开发者模式"
    - 点击"加载已解压的扩展程序"
-   - 选择项目目录
+   - **原版**：选择项目根目录
+   - **React 版**：选择 `src-react/dist` 目录
 
-6. **开发模式**
+5. **开发模式**
+
+   **原版：**
    ```bash
    npm run dev
    ```
-   这将启动文件监听，自动重新构建。
+
+   **React 版：**
+   ```bash
+   cd src-react
+   pnpm dev
+   ```
+   这将启动 Vite 开发服务器，支持 HMR 热更新。
 
 ### VS Code 推荐设置
 
@@ -120,7 +132,12 @@
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": true
   },
-  "eslint.validate": ["javascript"]
+  "eslint.validate": ["javascript", "typescript", "typescriptreact"],
+  "typescript.tsdk": "src-react/node_modules/typescript/lib",
+  "tailwindCSS.experimental.classRegex": [
+    ["cva\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
+    ["cn\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"]
+  ]
 }
 ```
 
@@ -128,12 +145,19 @@
 
 - ESLint
 - Prettier
-- GitLens
+- TypeScript and JavaScript Language Features
+- Tailwind CSS IntelliSense
 - Jest Runner
+- GitLens
+- Error Lens
 
 ## 📐 代码规范
 
-### JavaScript 风格
+### 项目版本
+
+本项目包含两个版本，请根据您要贡献的版本遵循相应的规范：
+
+#### v1.x（原版 JavaScript）
 
 我们使用 ESLint 来保持代码一致性：
 
@@ -146,19 +170,53 @@ npm run lint:fix
 ```
 
 **基本规则：**
-
 - 使用 4 空格缩进
 - 使用单引号
 - 语句末尾使用分号
 - 每行最大长度 100 字符
 - 使用驼峰命名法
 
+#### v2.0（React + TypeScript）
+
+```bash
+cd src-react
+
+# 检查代码
+pnpm lint
+
+# 类型检查
+pnpm type-check
+
+# 自动修复
+pnpm lint:fix
+```
+
+**基本规则：**
+- 使用 2 空格缩进（React/TypeScript 标准）
+- 使用单引号（字符串）和双引号（JSX 属性）
+- 语句末尾使用分号
+- 使用 TypeScript 严格模式
+- 遵循 React Hooks 规则
+- 使用 Tailwind CSS 实用类优先
+
 ### 命名约定
 
+#### v1.x（JavaScript）
 - **变量和函数**：驼峰命名 (`myVariable`, `myFunction`)
 - **类和构造函数**：帕斯卡命名 (`MyClass`)
 - **常量**：大写下划线 (`MAX_COUNT`, `DEFAULT_VALUE`)
 - **私有属性**：下划线前缀 (`_privateMethod`)
+
+#### v2.0（TypeScript + React）
+- **变量和函数**：驼峰命名 (`myVariable`, `myFunction`)
+- **React 组件**：帕斯卡命名 (`MyComponent`)
+- **类型和接口**：帕斯卡命名 (`MyInterface`, `MyType`)
+- **常量**：大写下划线 (`MAX_COUNT`) 或驼峰命名 (`defaultConfig`)
+- **文件名**：
+  - 组件：帕斯卡命名 (`MyComponent.tsx`)
+  - 工具函数：驼峰命名 (`myUtil.ts`)
+  - Hooks：驼峰命名，use 前缀 (`useMyHook.ts`)
+  - Store：驼峰命名，Store 后缀 (`myStore.ts`)
 
 ### 文件组织
 
@@ -200,11 +258,50 @@ function myFunction(name, age) {
 - 保持测试覆盖率 >80%
 - 使用描述性的测试名称
 
+#### v1.x（Jest）
 ```javascript
 describe("MyModule", () => {
   test("should do something correctly", () => {
     // 测试代码
   });
+});
+```
+
+#### v2.0（Vitest + Jest + Playwright）
+
+**单元测试（Vitest）：**
+```typescript
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { MyComponent } from './MyComponent';
+
+describe('MyComponent', () => {
+  it('should render correctly', () => {
+    render(<MyComponent />);
+    expect(screen.getByText('Hello')).toBeInTheDocument();
+  });
+});
+```
+
+**扩展 API 测试（Jest）：**
+```typescript
+import { describe, it, expect } from '@jest/globals';
+import { myModule } from '@/modules/myModule';
+
+describe('myModule', () => {
+  it('should work with Chrome API', () => {
+    // 测试代码
+  });
+});
+```
+
+**E2E 测试（Playwright）：**
+```typescript
+import { test, expect } from '@playwright/test';
+
+test('should control video speed', async ({ page }) => {
+  await page.goto('https://example.com');
+  // 测试代码
 });
 ```
 
@@ -268,9 +365,15 @@ git checkout -b feature/my-new-feature
 
 - 编写代码
 - 添加测试
-- 运行测试：`npm test`
-- 运行 lint：`npm run lint`
-- 构建项目：`npm run build`
+- 运行测试：
+  - **v1.x**: `npm test`
+  - **v2.0**: `cd src-react && pnpm test`
+- 运行 lint：
+  - **v1.x**: `npm run lint`
+  - **v2.0**: `cd src-react && pnpm lint`
+- 构建项目：
+  - **v1.x**: `npm run build`
+  - **v2.0**: `cd src-react && pnpm build`
 
 ### 3. 提交更改
 
@@ -356,9 +459,16 @@ git push origin feature/my-new-feature
 ## 📚 其他资源
 
 - [Chrome Extension 文档](https://developer.chrome.com/docs/extensions/)
-- [ES6+ 语法指南](https://es6.io/)
+- [React 文档](https://react.dev/)
+- [TypeScript 文档](https://www.typescriptlang.org/docs/)
+- [Tailwind CSS 文档](https://tailwindcss.com/docs)
+- [Vite 文档](https://vitejs.dev/)
+- [Vitest 文档](https://vitest.dev/)
 - [Jest 测试文档](https://jestjs.io/)
+- [Playwright 文档](https://playwright.dev/)
 - [ESLint 规则](https://eslint.org/docs/rules/)
+- [项目架构文档](docs/ARCHITECTURE.md)
+- [迁移指南](docs/MIGRATION.md)
 
 ## 🎉 成为贡献者
 

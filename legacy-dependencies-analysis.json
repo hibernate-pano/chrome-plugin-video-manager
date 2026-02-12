@@ -1,0 +1,290 @@
+{
+  "manifestReferences": [
+    {
+      "file": "manifest.json",
+      "matches": [
+        {
+          "line": 26,
+          "content": "\"js\": [\"dist/content.js\"],",
+          "pattern": "content.js"
+        },
+        {
+          "line": 27,
+          "content": "\"css\": [\"style.css\"],",
+          "pattern": "style.css"
+        }
+      ]
+    }
+  ],
+  "buildConfigReferences": [
+    {
+      "file": "package.json",
+      "matches": [
+        {
+          "line": 5,
+          "content": "\"main\": \"src/main.js\",",
+          "pattern": "src/main.js"
+        }
+      ]
+    },
+    {
+      "file": "scripts/build.js",
+      "matches": [
+        {
+          "line": 13,
+          "content": "entryPoints: [\"src/main.js\"],",
+          "pattern": "src/main.js"
+        },
+        {
+          "line": 15,
+          "content": "outfile: \"dist/content.js\",",
+          "pattern": "content.js"
+        },
+        {
+          "line": 44,
+          "content": "const stats = fs.statSync(\"dist/content.js\");",
+          "pattern": "content.js"
+        }
+      ]
+    },
+    {
+      "file": "scripts/clean.js",
+      "matches": [
+        {
+          "line": 12,
+          "content": "const filesToClean = [\"content-bundled.js\", \"content-bundled.js.map\"];",
+          "pattern": "content-bundled.js"
+        }
+      ]
+    }
+  ],
+  "srcReactReferences": [],
+  "otherReferences": [
+    {
+      "file": "docs/ARCHITECTURE.md",
+      "matches": [
+        {
+          "line": 1131,
+          "content": "├── content.js",
+          "pattern": "content.js"
+        }
+      ]
+    },
+    {
+      "file": "docs/DEVELOPMENT.md",
+      "matches": [
+        {
+          "line": 197,
+          "content": "entryPoints: ['src/main.js'],",
+          "pattern": "src/main.js"
+        },
+        {
+          "line": 199,
+          "content": "outfile: 'content-bundled.js',",
+          "pattern": "content-bundled.js"
+        },
+        {
+          "line": 210,
+          "content": "1. **入口**：`src/main.js`",
+          "pattern": "src/main.js"
+        },
+        {
+          "line": 213,
+          "content": "4. **输出**：`content-bundled.js`",
+          "pattern": "content-bundled.js"
+        },
+        {
+          "line": 323,
+          "content": "// src/utils/logger.js",
+          "pattern": "src/utils/"
+        }
+      ]
+    },
+    {
+      "file": "docs/MIGRATION.md",
+      "matches": [
+        {
+          "line": 85,
+          "content": "// src/modules/mediaDetector.js",
+          "pattern": "src/modules/"
+        },
+        {
+          "line": 112,
+          "content": "// src/modules/keyboardHandler.js",
+          "pattern": "src/modules/"
+        },
+        {
+          "line": 147,
+          "content": "// src/modules/indicator.js",
+          "pattern": "src/modules/"
+        },
+        {
+          "line": 215,
+          "content": "/* style.css */",
+          "pattern": "style.css"
+        },
+        {
+          "line": 328,
+          "content": "// src/modules/myFeature.js",
+          "pattern": "src/modules/"
+        }
+      ]
+    },
+    {
+      "file": "docs/UPGRADE.md",
+      "matches": [
+        {
+          "line": 11,
+          "content": "**之前：**单文件架构（content.js）",
+          "pattern": "content.js"
+        },
+        {
+          "line": 16,
+          "content": "v1.x: content.js (980 lines)",
+          "pattern": "content.js"
+        },
+        {
+          "line": 143,
+          "content": "**场景 1：修改了 content.js**",
+          "pattern": "content.js"
+        },
+        {
+          "line": 148,
+          "content": "// 之前在 content.js 中",
+          "pattern": "content.js"
+        },
+        {
+          "line": 151,
+          "content": "// 现在在 src/modules/mediaDetector.js 中",
+          "pattern": "src/modules/"
+        },
+        {
+          "line": 162,
+          "content": "// src/modules/myNewFeature.js",
+          "pattern": "src/modules/"
+        },
+        {
+          "line": 167,
+          "content": "// 在 src/main.js 中引入",
+          "pattern": "src/main.js"
+        },
+        {
+          "line": 176,
+          "content": "// src/utils/myUtils.js",
+          "pattern": "src/utils/"
+        },
+        {
+          "line": 241,
+          "content": "# 检查是否生成了 content-bundled.js",
+          "pattern": "content-bundled.js"
+        },
+        {
+          "line": 242,
+          "content": "ls content-bundled.js",
+          "pattern": "content-bundled.js"
+        }
+      ]
+    },
+    {
+      "file": "scripts/analyze-legacy-files.mjs",
+      "matches": [
+        {
+          "line": 130,
+          "content": "'options-new.html',",
+          "pattern": "options-new.html"
+        },
+        {
+          "line": 131,
+          "content": "'options-new.js',",
+          "pattern": "options-new.js"
+        },
+        {
+          "line": 133,
+          "content": "'style.css'",
+          "pattern": "style.css"
+        }
+      ]
+    },
+    {
+      "file": "scripts/build.js",
+      "matches": [
+        {
+          "line": 13,
+          "content": "entryPoints: [\"src/main.js\"],",
+          "pattern": "src/main.js"
+        },
+        {
+          "line": 15,
+          "content": "outfile: \"dist/content.js\",",
+          "pattern": "content.js"
+        },
+        {
+          "line": 44,
+          "content": "const stats = fs.statSync(\"dist/content.js\");",
+          "pattern": "content.js"
+        }
+      ]
+    },
+    {
+      "file": "scripts/check-dependencies.mjs",
+      "matches": [
+        {
+          "line": 103,
+          "content": "'src/main.js',",
+          "pattern": "src/main.js"
+        },
+        {
+          "line": 104,
+          "content": "'src/modules/',",
+          "pattern": "src/modules/"
+        },
+        {
+          "line": 105,
+          "content": "'src/utils/',",
+          "pattern": "src/utils/"
+        },
+        {
+          "line": 106,
+          "content": "'src/styles/',",
+          "pattern": "src/styles/"
+        },
+        {
+          "line": 108,
+          "content": "'options-new.html',",
+          "pattern": "options-new.html"
+        },
+        {
+          "line": 109,
+          "content": "'options-new.js',",
+          "pattern": "options-new.js"
+        },
+        {
+          "line": 110,
+          "content": "'style.css',",
+          "pattern": "style.css"
+        },
+        {
+          "line": 112,
+          "content": "'content-bundled.js',",
+          "pattern": "content-bundled.js"
+        },
+        {
+          "line": 113,
+          "content": "'content.js'",
+          "pattern": "content.js"
+        }
+      ]
+    },
+    {
+      "file": "scripts/clean.js",
+      "matches": [
+        {
+          "line": 12,
+          "content": "const filesToClean = [\"content-bundled.js\", \"content-bundled.js.map\"];",
+          "pattern": "content-bundled.js"
+        }
+      ]
+    }
+  ],
+  "totalReferences": 44
+}

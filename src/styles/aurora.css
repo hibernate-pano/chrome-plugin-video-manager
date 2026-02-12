@@ -1,0 +1,133 @@
+/**
+ * Pano Video - Aurora Design System
+ * Glassmorphism / 极光毛玻璃风格设计系统
+ */
+
+/* ==================== CSS变量定义 ==================== */
+:root {
+    /* 主题色 - 霓虹紫/蓝渐变 */
+    --pano-primary: #7F5AF0;
+    --pano-primary-rgb: 127, 90, 240;
+    --pano-secondary: #2CB67D;
+    --pano-accent: #FF6B9D;
+
+    /* 中性色 */
+    --pano-text-primary: #FFFFFE;
+    --pano-text-secondary: rgba(255, 255, 255, 0.7);
+    --pano-bg-dark: rgba(20, 20, 30, 0.85);
+    --pano-bg-glass: rgba(20, 20, 30, 0.65);
+
+    /* 玻璃态效果参数 */
+    --pano-blur: 12px;
+    --pano-blur-heavy: 20px;
+    --pano-border: rgba(255, 255, 255, 0.1);
+    --pano-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    --pano-shadow-heavy: 0 16px 48px 0 rgba(0, 0, 0, 0.5);
+
+    /* 动画曲线 */
+    --pano-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --pano-ease-out: cubic-bezier(0.0, 0, 0.2, 1);
+    --pano-ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+    /* 间距 */
+    --pano-space-xs: 4px;
+    --pano-space-sm: 8px;
+    --pano-space-md: 16px;
+    --pano-space-lg: 24px;
+    --pano-space-xl: 32px;
+
+    /* 圆角 */
+    --pano-radius-sm: 8px;
+    --pano-radius-md: 12px;
+    --pano-radius-lg: 16px;
+    --pano-radius-full: 9999px;
+}
+
+/* ==================== 通用玻璃态类 ==================== */
+.pano-glass {
+    background: var(--pano-bg-glass);
+    backdrop-filter: blur(var(--pano-blur)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--pano-blur)) saturate(180%);
+    border: 1px solid var(--pano-border);
+    box-shadow: var(--pano-shadow);
+}
+
+.pano-glass-heavy {
+    background: var(--pano-bg-dark);
+    backdrop-filter: blur(var(--pano-blur-heavy)) saturate(200%);
+    -webkit-backdrop-filter: blur(var(--pano-blur-heavy)) saturate(200%);
+    border: 1px solid var(--pano-border);
+    box-shadow: var(--pano-shadow-heavy);
+}
+
+/* ==================== 动画关键帧 ==================== */
+@keyframes pano-fade-in {
+    from {
+        opacity: 0;
+        transform: scale(0.85) translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@keyframes pano-fade-out {
+    from {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: scale(0.85) translateY(10px);
+    }
+}
+
+@keyframes pano-bounce-in {
+    0% {
+        opacity: 0;
+        transform: scale(0.3);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1.05);
+    }
+    70% {
+        transform: scale(0.9);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+@keyframes pano-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+@keyframes pano-shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+/* ==================== 实用工具类 ==================== */
+.pano-no-select {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.pano-no-pointer {
+    pointer-events: none;
+}
+
+.pano-pointer {
+    pointer-events: auto;
+}

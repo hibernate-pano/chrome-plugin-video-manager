@@ -1,0 +1,196 @@
+{
+  "sourceFiles": [
+    {
+      "path": "src/main.js",
+      "size": 3337,
+      "lines": 110,
+      "lastModified": "2026-02-11T06:47:42.522Z",
+      "formattedSize": "3.26 KB"
+    },
+    {
+      "path": "src/modules/hud.js",
+      "size": 11933,
+      "lines": 405,
+      "lastModified": "2026-02-11T08:03:34.564Z",
+      "formattedSize": "11.65 KB"
+    },
+    {
+      "path": "src/modules/indicator.js",
+      "size": 3688,
+      "lines": 138,
+      "lastModified": "2026-02-11T08:04:00.650Z",
+      "formattedSize": "3.60 KB"
+    },
+    {
+      "path": "src/modules/keyboardHandler.js",
+      "size": 10386,
+      "lines": 319,
+      "lastModified": "2026-02-11T08:34:18.509Z",
+      "formattedSize": "10.14 KB"
+    },
+    {
+      "path": "src/modules/keyboardHelp.js",
+      "size": 8208,
+      "lines": 306,
+      "lastModified": "2026-01-13T00:09:25.013Z",
+      "formattedSize": "8.02 KB"
+    },
+    {
+      "path": "src/modules/lightbox.js",
+      "size": 6242,
+      "lines": 208,
+      "lastModified": "2026-01-12T23:31:58.916Z",
+      "formattedSize": "6.10 KB"
+    },
+    {
+      "path": "src/modules/mediaDetector.js",
+      "size": 12709,
+      "lines": 391,
+      "lastModified": "2026-01-13T00:03:39.103Z",
+      "formattedSize": "12.41 KB"
+    },
+    {
+      "path": "src/modules/playbackController.js",
+      "size": 3726,
+      "lines": 121,
+      "lastModified": "2026-02-11T06:47:19.090Z",
+      "formattedSize": "3.64 KB"
+    },
+    {
+      "path": "src/utils/debounce.js",
+      "size": 1165,
+      "lines": 42,
+      "lastModified": "2026-01-12T23:26:27.732Z",
+      "formattedSize": "1.14 KB"
+    },
+    {
+      "path": "src/utils/dom.js",
+      "size": 6486,
+      "lines": 209,
+      "lastModified": "2026-01-12T23:31:58.948Z",
+      "formattedSize": "6.33 KB"
+    },
+    {
+      "path": "src/utils/performance.js",
+      "size": 4444,
+      "lines": 166,
+      "lastModified": "2026-02-11T06:19:14.345Z",
+      "formattedSize": "4.34 KB"
+    },
+    {
+      "path": "src/utils/presets.js",
+      "size": 1209,
+      "lines": 49,
+      "lastModified": "2026-02-11T06:29:12.597Z",
+      "formattedSize": "1.18 KB"
+    },
+    {
+      "path": "src/utils/storage.js",
+      "size": 3437,
+      "lines": 116,
+      "lastModified": "2026-02-11T06:21:47.518Z",
+      "formattedSize": "3.36 KB"
+    }
+  ],
+  "configFiles": [
+    {
+      "path": "options-new.html",
+      "size": 5421,
+      "lines": 197,
+      "lastModified": "2025-10-08T15:03:53.173Z",
+      "formattedSize": "5.29 KB"
+    },
+    {
+      "path": "options-new.js",
+      "size": 7448,
+      "lines": 273,
+      "lastModified": "2025-10-08T15:03:54.034Z",
+      "formattedSize": "7.27 KB"
+    },
+    {
+      "path": "background.js",
+      "size": 96,
+      "lines": 2,
+      "lastModified": "2025-07-31T06:38:51.063Z",
+      "formattedSize": "96 B"
+    },
+    {
+      "path": "style.css",
+      "size": 3265,
+      "lines": 116,
+      "lastModified": "2026-01-12T23:38:28.954Z",
+      "formattedSize": "3.19 KB"
+    }
+  ],
+  "testFiles": [
+    {
+      "path": "tests/.DS_Store",
+      "size": 6148,
+      "lines": 2,
+      "lastModified": "2026-02-11T08:27:56.874Z",
+      "formattedSize": "6.00 KB"
+    },
+    {
+      "path": "tests/integration/detection-flow.test.js",
+      "size": 2683,
+      "lines": 81,
+      "lastModified": "2026-01-12T23:48:13.644Z",
+      "formattedSize": "2.62 KB"
+    },
+    {
+      "path": "tests/unit/.DS_Store",
+      "size": 6148,
+      "lines": 1,
+      "lastModified": "2026-01-13T00:32:39.897Z",
+      "formattedSize": "6.00 KB"
+    },
+    {
+      "path": "tests/unit/modules/indicator.test.js",
+      "size": 2672,
+      "lines": 102,
+      "lastModified": "2026-01-12T23:39:44.506Z",
+      "formattedSize": "2.61 KB"
+    },
+    {
+      "path": "tests/unit/modules/mediaDetector.test.js",
+      "size": 1815,
+      "lines": 60,
+      "lastModified": "2026-01-12T23:43:52.417Z",
+      "formattedSize": "1.77 KB"
+    },
+    {
+      "path": "tests/unit/utils/debounce.test.js",
+      "size": 1500,
+      "lines": 63,
+      "lastModified": "2025-10-08T15:03:54.052Z",
+      "formattedSize": "1.46 KB"
+    },
+    {
+      "path": "tests/unit/utils/storage.test.js",
+      "size": 2015,
+      "lines": 81,
+      "lastModified": "2025-10-08T15:03:54.112Z",
+      "formattedSize": "1.97 KB"
+    }
+  ],
+  "styleFiles": [
+    {
+      "path": "src/styles/aurora.css",
+      "size": 3052,
+      "lines": 134,
+      "lastModified": "2026-02-11T06:46:03.477Z",
+      "formattedSize": "2.98 KB"
+    }
+  ],
+  "otherFiles": [
+    {
+      "path": "src/.DS_Store",
+      "size": 6148,
+      "lines": 1,
+      "lastModified": "2026-02-12T03:56:41.360Z",
+      "formattedSize": "6.00 KB"
+    }
+  ],
+  "totalSize": 125381,
+  "totalLines": 3693
+}
