@@ -197,11 +197,11 @@ export function ShortcutForm(): React.ReactElement {
       {SHORTCUT_GROUPS.map((group) => (
         <div key={group.title} className="space-y-4">
           {/* 分组标题 */}
-          <div className="border-b border-gray-200 pb-2">
-            <h3 className="text-lg font-semibold text-gray-900">
+          <div className="border-b border-slate-700 pb-2">
+            <h3 className="text-lg font-semibold text-slate-100">
               {group.title}
             </h3>
-            <p className="text-sm text-gray-600 mt-1">
+            <p className="text-sm text-slate-400 mt-1">
               {group.description}
             </p>
           </div>
@@ -225,13 +225,13 @@ export function ShortcutForm(): React.ReactElement {
       ))}
 
       {/* 操作按钮 */}
-      <div className="flex items-center justify-between pt-6 border-t border-gray-200">
+      <div className="flex items-center justify-between pt-6 border-t border-slate-700">
         <div className="flex items-center gap-3">
           {/* 保存按钮 */}
           <Button
             type="submit"
             disabled={!isDirty || hasAnyConflict || saveStatus === 'saving'}
-            className="min-w-[120px]"
+            className="min-w-[120px] cursor-pointer"
           >
             {saveStatus === 'saving' ? (
               <>
@@ -267,6 +267,7 @@ export function ShortcutForm(): React.ReactElement {
             variant="outline"
             onClick={handleReset}
             disabled={saveStatus === 'saving'}
+            className="cursor-pointer"
           >
             {t('resetToDefault')}
           </Button>
@@ -305,7 +306,7 @@ export function ShortcutForm(): React.ReactElement {
           )}
 
           {isDirty && saveStatus === 'idle' && (
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-slate-500">
               有未保存的更改
             </span>
           )}

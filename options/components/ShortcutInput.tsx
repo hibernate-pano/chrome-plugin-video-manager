@@ -170,11 +170,11 @@ function ShortcutInput({
       {/* 标签 */}
       <Label
         htmlFor={`shortcut-${action}`}
-        className="text-sm font-medium text-gray-700"
+        className="text-sm font-medium text-slate-300"
       >
         {label}
         {description && (
-          <span className="ml-2 text-xs text-gray-500 font-normal">
+          <span className="ml-2 text-xs text-slate-500 font-normal">
             {description}
           </span>
         )}
@@ -194,13 +194,13 @@ function ShortcutInput({
           readOnly
           disabled={disabled}
           className={cn(
-            'cursor-pointer font-mono text-center transition-all',
+            'cursor-pointer font-mono text-center transition-all bg-slate-800 border-slate-600 text-slate-200',
             // 冲突状态样式
-            hasConflict && 'border-red-500 bg-red-50 focus:ring-red-500',
+            hasConflict && 'border-red-500 bg-red-500/10 focus:ring-red-500',
             // 录制状态样式
-            isRecording && 'ring-2 ring-blue-500 border-blue-500',
+            isRecording && 'ring-2 ring-indigo-500 border-indigo-500',
             // 焦点状态样式
-            isFocused && !hasConflict && 'border-blue-500',
+            isFocused && !hasConflict && 'border-indigo-500',
             // 禁用状态样式
             disabled && 'cursor-not-allowed opacity-50'
           )}
@@ -214,8 +214,8 @@ function ShortcutInput({
         {isRecording && (
           <div className="absolute right-3 top-1/2 -translate-y-1/2">
             <div className="flex items-center gap-1">
-              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-              <span className="text-xs text-blue-600">录制中</span>
+              <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" />
+              <span className="text-xs text-indigo-400">录制中</span>
             </div>
           </div>
         )}
@@ -244,7 +244,7 @@ function ShortcutInput({
       {hasConflict && conflictActions.length > 0 && (
         <div
           id={`shortcut-${action}-error`}
-          className="flex items-start gap-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-800"
+          className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400"
           role="alert"
         >
           <svg
@@ -274,7 +274,7 @@ function ShortcutInput({
 
       {/* 帮助文本 */}
       {!hasConflict && !isRecording && (
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-slate-500">
           点击输入框后按下任意键设置快捷键，按 Backspace 清空
         </p>
       )}

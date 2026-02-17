@@ -36,7 +36,9 @@ export default defineConfig({
   base: './',
   plugins: [
     react(),
-    crx({ manifest: crxManifest }),
+    crx({
+      manifest: crxManifest,
+    }),
     copyContentStyles(),
   ],
   resolve: {

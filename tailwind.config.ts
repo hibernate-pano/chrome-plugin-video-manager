@@ -27,6 +27,46 @@ const config: Config = {
   theme: {
   	extend: {
   		colors: {
+  			// Design System Colors
+  			indigo: {
+  				'50': '#eef2ff',
+  				'100': '#e0e7ff',
+  				'200': '#c7d2fe',
+  				'300': '#a5b4fc',
+  				'400': '#818cf8',
+  				'500': '#6366f1',
+  				'600': '#4f46e5',
+  				'700': '#4338ca',
+  				'800': '#3730a3',
+  				'900': '#312e81',
+  				'950': '#1e1b4b',
+  			},
+  			teal: {
+  				'50': '#f0fdfa',
+  				'100': '#ccfbf1',
+  				'200': '#99f6e4',
+  				'300': '#5eead4',
+  				'400': '#2dd4bf',
+  				'500': '#14b8a6',
+  				'600': '#0d9488',
+  				'700': '#0f766e',
+  				'800': '#115e59',
+  				'900': '#134e4a',
+  				'950': '#042f2e',
+  			},
+  			slate: {
+  				'50': '#f8fafc',
+  				'100': '#f1f5f9',
+  				'200': '#e2e8f0',
+  				'300': '#cbd5e1',
+  				'400': '#94a3b8',
+  				'500': '#64748b',
+  				'600': '#475569',
+  				'700': '#334155',
+  				'800': '#1e293b',
+  				'900': '#0f172a',
+  				'950': '#020617',
+  			},
   			primary: {
   				'50': '#f0f9ff',
   				'100': '#e0f2fe',
@@ -411,13 +451,21 @@ const config: Config = {
   			hud: '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)',
   			modal: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)'
   		},
-  		borderRadius: {
-  			hud: '12px',
-  			modal: '16px',
-  			lg: 'var(--radius)',
-  			md: 'calc(var(--radius) - 2px)',
-  			sm: 'calc(var(--radius) - 4px)'
-  		},
+   		borderRadius: {
+   			hud: '12px',
+   			modal: '16px',
+   			lg: 'var(--radius)',
+   			md: 'calc(var(--radius) - 2px)',
+   			sm: 'calc(var(--radius) - 4px)'
+   		},
+   		backdropBlur: {
+   			xs: '2px',
+   		},
+   		backgroundImage: {
+   			'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
+   			'gradient-primary': 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+   			'gradient-accent': 'linear-gradient(135deg, #2dd4bf 0%, #14b8a6 100%)',
+   		},
   		zIndex: {
   			hud: '999999',
   			lightbox: '999998',

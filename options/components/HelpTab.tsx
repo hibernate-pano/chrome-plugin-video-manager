@@ -78,14 +78,14 @@ function FAQItemComponent({ item }: { item: FAQItem }): React.ReactElement {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
+    <div className="border border-slate-700 rounded-lg overflow-hidden bg-slate-800/50">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-4 py-3 text-left bg-white hover:bg-gray-50 transition-colors flex items-center justify-between gap-3"
+        className="w-full px-4 py-3 text-left bg-slate-800 hover:bg-slate-700 transition-colors flex items-center justify-between gap-3 cursor-pointer"
       >
-        <span className="font-medium text-gray-900">{item.question}</span>
+        <span className="font-medium text-slate-200">{item.question}</span>
         <svg
-          className={`w-5 h-5 text-gray-500 flex-shrink-0 transition-transform ${
+          className={`w-5 h-5 text-slate-500 flex-shrink-0 transition-transform ${
             isOpen ? 'rotate-180' : ''
           }`}
           fill="none"
@@ -101,8 +101,8 @@ function FAQItemComponent({ item }: { item: FAQItem }): React.ReactElement {
         </svg>
       </button>
       {isOpen && (
-        <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 animate-in fade-in-50 slide-in-from-top-2 duration-200">
-          <p className="text-sm text-gray-700 leading-relaxed">{item.answer}</p>
+        <div className="px-4 py-3 bg-slate-900 border-t border-slate-700 animate-in fade-in-50 slide-in-from-top-2 duration-200">
+          <p className="text-sm text-slate-300 leading-relaxed">{item.answer}</p>
         </div>
       )}
     </div>
@@ -118,10 +118,10 @@ export function HelpTab(): React.ReactElement {
     <div className="space-y-8 animate-in fade-in-50 duration-300">
       {/* 标签页标题和描述 */}
       <div>
-        <h2 className="text-2xl font-semibold text-gray-900">
+        <h2 className="text-2xl font-semibold text-slate-100">
           帮助中心
         </h2>
-        <p className="mt-2 text-sm text-gray-600">
+        <p className="mt-2 text-sm text-slate-400">
           了解如何使用视频音频速度控制器，解决常见问题。
         </p>
       </div>
@@ -130,7 +130,7 @@ export function HelpTab(): React.ReactElement {
       <section className="space-y-4">
         <div className="flex items-center gap-2">
           <svg
-            className="w-6 h-6 text-blue-600"
+            className="w-6 h-6 text-indigo-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -142,23 +142,23 @@ export function HelpTab(): React.ReactElement {
               d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
             />
           </svg>
-          <h3 className="text-xl font-semibold text-gray-900">
+          <h3 className="text-xl font-semibold text-slate-100">
             使用指南
           </h3>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           {/* 快速开始 */}
-          <div className="p-5 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+          <div className="p-5 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-lg">
             <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+              <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
                 1
               </div>
               <div className="flex-1">
-                <h4 className="font-semibold text-gray-900 mb-2">
+                <h4 className="font-semibold text-slate-100 mb-2">
                   快速开始
                 </h4>
-                <ul className="text-sm text-gray-700 space-y-1.5">
+                <ul className="text-sm text-slate-400 space-y-1.5">
                   <li>• 打开任意视频网站</li>
                   <li>• 使用快捷键控制播放</li>
                   <li>• 查看屏幕上的 HUD 提示</li>
@@ -169,16 +169,16 @@ export function HelpTab(): React.ReactElement {
           </div>
 
           {/* 自定义设置 */}
-          <div className="p-5 bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-200 rounded-lg">
+          <div className="p-5 bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-lg">
             <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-purple-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+              <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
                 2
               </div>
               <div className="flex-1">
-                <h4 className="font-semibold text-gray-900 mb-2">
+                <h4 className="font-semibold text-slate-100 mb-2">
                   自定义设置
                 </h4>
-                <ul className="text-sm text-gray-700 space-y-1.5">
+                <ul className="text-sm text-slate-400 space-y-1.5">
                   <li>• 在"快捷键设置"中修改按键</li>
                   <li>• 在"速度预设"中添加常用速度</li>
                   <li>• 在"动画设置"中调整动画效果</li>
@@ -189,37 +189,37 @@ export function HelpTab(): React.ReactElement {
           </div>
 
           {/* 默认快捷键 */}
-          <div className="p-5 bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-lg">
+          <div className="p-5 bg-gradient-to-br from-teal-500/10 to-green-500/10 border border-teal-500/20 rounded-lg">
             <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-green-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+              <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-teal-500 to-green-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
                 3
               </div>
               <div className="flex-1">
-                <h4 className="font-semibold text-gray-900 mb-2">
+                <h4 className="font-semibold text-slate-100 mb-2">
                   默认快捷键
                 </h4>
-                <ul className="text-sm text-gray-700 space-y-1.5">
-                  <li>• <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded text-xs font-mono">=</kbd> 加速播放</li>
-                  <li>• <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded text-xs font-mono">-</kbd> 减速播放</li>
-                  <li>• <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded text-xs font-mono">0</kbd> 重置速度</li>
-                  <li>• <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded text-xs font-mono">f</kbd> 网页全屏</li>
-                  <li>• <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded text-xs font-mono">Space</kbd> 播放/暂停</li>
+                <ul className="text-sm text-slate-400 space-y-1.5">
+                  <li>• <kbd className="px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs font-mono text-slate-300">=</kbd> 加速播放</li>
+                  <li>• <kbd className="px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs font-mono text-slate-300">-</kbd> 减速播放</li>
+                  <li>• <kbd className="px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs font-mono text-slate-300">0</kbd> 重置速度</li>
+                  <li>• <kbd className="px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs font-mono text-slate-300">f</kbd> 网页全屏</li>
+                  <li>• <kbd className="px-1.5 py-0.5 bg-slate-700 border border-slate-600 rounded text-xs font-mono text-slate-300">Space</kbd> 播放/暂停</li>
                 </ul>
               </div>
             </div>
           </div>
 
           {/* 高级功能 */}
-          <div className="p-5 bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-lg">
+          <div className="p-5 bg-gradient-to-br from-orange-500/10 to-amber-500/10 border border-orange-500/20 rounded-lg">
             <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-orange-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+              <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-orange-500 to-amber-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
                 4
               </div>
               <div className="flex-1">
-                <h4 className="font-semibold text-gray-900 mb-2">
+                <h4 className="font-semibold text-slate-100 mb-2">
                   高级功能
                 </h4>
-                <ul className="text-sm text-gray-700 space-y-1.5">
+                <ul className="text-sm text-slate-400 space-y-1.5">
                   <li>• 支持 Shadow DOM 和 iframe</li>
                   <li>• 自动检测页面中的媒体元素</li>
                   <li>• 智能缓存提升性能</li>
@@ -235,7 +235,7 @@ export function HelpTab(): React.ReactElement {
       <section className="space-y-4">
         <div className="flex items-center gap-2">
           <svg
-            className="w-6 h-6 text-purple-600"
+            className="w-6 h-6 text-purple-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -247,7 +247,7 @@ export function HelpTab(): React.ReactElement {
               d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
             />
           </svg>
-          <h3 className="text-xl font-semibold text-gray-900">
+          <h3 className="text-xl font-semibold text-slate-100">
             常见问题
           </h3>
         </div>
@@ -260,11 +260,11 @@ export function HelpTab(): React.ReactElement {
       </section>
 
       {/* 联系支持 */}
-      <section className="p-6 bg-gradient-to-br from-gray-50 to-gray-100 border border-gray-200 rounded-lg">
+      <section className="p-6 bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 rounded-lg">
         <div className="flex items-start gap-4">
           <div className="flex-shrink-0">
             <svg
-              className="w-8 h-8 text-gray-600"
+              className="w-8 h-8 text-slate-400"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -278,10 +278,10 @@ export function HelpTab(): React.ReactElement {
             </svg>
           </div>
           <div className="flex-1">
-            <h4 className="text-lg font-semibold text-gray-900 mb-2">
+            <h4 className="text-lg font-semibold text-slate-100 mb-2">
               需要更多帮助？
             </h4>
-            <p className="text-sm text-gray-700 mb-4">
+            <p className="text-sm text-slate-400 mb-4">
               如果您遇到了问题或有功能建议，欢迎通过以下方式联系我们：
             </p>
             <div className="flex flex-wrap gap-3">
@@ -289,7 +289,7 @@ export function HelpTab(): React.ReactElement {
                 href="https://github.com/your-repo/issues"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium text-slate-200 cursor-pointer"
               >
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
@@ -298,7 +298,7 @@ export function HelpTab(): React.ReactElement {
               </a>
               <a
                 href="mailto:support@example.com"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium text-slate-200 cursor-pointer"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -316,7 +316,7 @@ export function HelpTab(): React.ReactElement {
       </section>
 
       {/* 版本信息 */}
-      <div className="pt-6 border-t border-gray-200 text-center text-sm text-gray-500">
+      <div className="pt-6 border-t border-slate-700 text-center text-sm text-slate-500">
         <p>视频音频速度控制器 v2.0.0</p>
         <p className="mt-1">使用 React + TypeScript + Tailwind CSS 构建</p>
       </div>

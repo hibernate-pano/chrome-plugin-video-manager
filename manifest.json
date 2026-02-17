@@ -6,11 +6,15 @@
   "description": "__MSG_extDescription__",
   "default_locale": "en",
   "action": {
-    "default_popup": "options.html",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png"
     }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "background": {
     "service_worker": "background/index.ts",
