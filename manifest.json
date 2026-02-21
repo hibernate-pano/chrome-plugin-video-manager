@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "description": "__MSG_extDescription__ - Pro: Speed Profiles & Watch History",
   "default_locale": "en",
   "action": {
-    "default_popup": "options.html",
+    "default_popup": "onboarding.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png"
