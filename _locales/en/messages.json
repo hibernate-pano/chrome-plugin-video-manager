@@ -162,5 +162,21 @@
   "exitFullscreen": {
     "message": "In page fullscreen mode, you can press the ESC key to exit fullscreen.",
     "description": "Exit fullscreen note"
+  },
+  "profilesTab": {
+    "message": "Speed Profiles",
+    "description": "Speed profiles tab"
+  },
+  "historyTab": {
+    "message": "Watch History",
+    "description": "Watch history tab"
+  },
+  "themeTab": {
+    "message": "Theme",
+    "description": "Theme tab"
+  },
+  "bookmarksTab": {
+    "message": "Bookmarks",
+    "description": "Bookmarks tab"
   }
 }

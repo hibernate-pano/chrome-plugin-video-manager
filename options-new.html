@@ -10,187 +10,263 @@
           Helvetica, Arial, sans-serif;
         padding: 10px 20px;
         background-color: #f0f2f5;
-        min-width: 300px;
+        min-width: 320px;
       }
-      h1 {
-        font-size: 18px;
-        color: #333;
-      }
-      .form-group {
-        margin-bottom: 15px;
-      }
-      label {
-        display: block;
-        margin-bottom: 5px;
-        font-weight: bold;
-        color: #555;
-      }
-      input[type="text"] {
-        width: 120px;
+      h1 { font-size: 18px; color: #333; }
+      h2 { font-size: 15px; color: #333; margin: 15px 0 10px; }
+      h3 { font-size: 14px; color: #555; margin: 10px 0 8px; }
+      .form-group { margin-bottom: 12px; }
+      label { display: block; margin-bottom: 4px; font-weight: 600; color: #555; font-size: 13px; }
+      input[type="text"], input[type="number"], select, textarea {
+        width: 100%;
         padding: 8px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 13px;
+        box-sizing: border-box;
       }
-      button {
-        padding: 10px 15px;
-        border: none;
-        background-color: #007bff;
-        color: white;
+      input[type="color"] {
+        width: 40px;
+        height: 30px;
+        border: 1px solid #ddd;
         border-radius: 4px;
         cursor: pointer;
-        font-size: 16px;
-        margin-right: 10px;
       }
-      button:hover {
-        background-color: #0056b3;
+      button {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        margin-right: 8px;
       }
-      button#reset-shortcuts {
-        background-color: #6c757d;
-      }
-      button#reset-shortcuts:hover {
-        background-color: #5a6268;
-      }
-      #status {
-        margin-top: 15px;
-        color: green;
-        font-weight: bold;
-      }
-      .help-text {
-        margin-top: 20px;
-        padding: 15px;
-        background-color: #f8f9fa;
-        border-left: 4px solid #007bff;
-        font-size: 14px;
-        line-height: 1.5;
-      }
-      .shortcut-description {
-        color: #666;
-        font-size: 12px;
-        font-style: italic;
-        margin-top: 3px;
-      }
-      .tab-container {
-        margin-top: 20px;
-      }
-      .tab-buttons {
-        display: flex;
-        border-bottom: 1px solid #ddd;
-        margin-bottom: 15px;
-      }
+      button.primary { background: #4a90d9; color: white; }
+      button.primary:hover { background: #357abd; }
+      button.secondary { background: #6c757d; color: white; }
+      button.danger { background: #dc3545; color: white; }
+      button.pro { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+      button.success { background: #28a745; color: white; }
+      
+      .tab-container { margin-top: 15px; }
+      .tab-buttons { display: flex; flex-wrap: wrap; border-bottom: 1px solid #ddd; margin-bottom: 12px; }
       .tab-button {
-        padding: 8px 16px;
+        padding: 8px 14px;
         cursor: pointer;
         background: #f0f0f0;
         border: 1px solid #ddd;
         border-bottom: none;
-        margin-right: 5px;
-        border-radius: 4px 4px 0 0;
+        margin-right: 4px;
+        border-radius: 6px 6px 0 0;
+        font-size: 12px;
       }
-      .tab-button.active {
-        background: #fff;
-        border-bottom: 1px solid #fff;
-        margin-bottom: -1px;
+      .tab-button.active { background: #fff; border-bottom: 1px solid #fff; margin-bottom: -1px; font-weight: 600; }
+      .tab-content { display: none; padding: 12px; background: #fff; border: 1px solid #ddd; border-top: none; border-radius: 0 0 6px 6px; }
+      .tab-content.active { display: block; }
+      
+      .pro-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 1px 6px;
+        border-radius: 8px;
+        font-size: 9px;
         font-weight: bold;
+        margin-left: 4px;
       }
-      .tab-content {
+      
+      .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+      
+      .card {
+        padding: 10px;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+      }
+      .card:hover { border-color: #667eea; background: #f8f9ff; }
+      .card.active { border-color: #667eea; background: #f0f2ff; }
+      .card-icon { font-size: 22px; }
+      .card-title { font-weight: 600; margin: 4px 0; font-size: 13px; }
+      .card-desc { font-size: 11px; color: #666; }
+      
+      .list-item {
+        padding: 10px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .list-item:hover { background: #f8f9fa; }
+      
+      .stat-card {
+        padding: 12px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        text-align: center;
+      }
+      .stat-value { font-size: 22px; font-weight: bold; color: #667eea; }
+      .stat-label { font-size: 11px; color: #666; margin-top: 2px; }
+      
+      .empty-state { text-align: center; padding: 25px; color: #999; }
+      
+      .color-picker-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .color-picker-row label { flex: 0 0 80px; margin: 0; }
+      
+      .bookmark-item {
+        padding: 8px;
+        background: #f8f9fa;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        cursor: pointer;
+      }
+      .bookmark-item:hover { background: #f0f2ff; }
+      .bookmark-time {
+        color: #667eea;
+        font-weight: bold;
+        font-size: 14px;
+      }
+      .bookmark-note { font-size: 12px; color: #666; margin-top: 2px; }
+      .bookmark-delete { color: #dc3545; cursor: pointer; font-size: 12px; }
+      
+      #status {
+        margin-top: 10px;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 12px;
         display: none;
-        padding: 15px;
-        background: #fff;
-        border: 1px solid #ddd;
-        border-top: none;
-        border-radius: 0 0 4px 4px;
       }
-      .tab-content.active {
-        display: block;
-      }
-      .shortcut-input.warning {
-        border: 2px solid #ff5252;
-        background-color: #ffecec;
-      }
+      #status.success { display: block; background: #d4edda; color: #155724; }
+      #status.error { display: block; background: #f8d7da; color: #721c24; }
     </style>
   </head>
   <body>
-    <h1 data-i18n="settingsTitle"></h1>
+    <h1>⚡ VideoSpeed Pro <span class="pro-badge">PRO</span></h1>
 
     <div class="tab-container">
       <div class="tab-buttons">
-        <div
-          class="tab-button active"
-          data-tab="shortcuts"
-          data-i18n="shortcutsTab"
-        ></div>
+        <div class="tab-button active" data-tab="shortcuts" data-i18n="shortcutsTab"></div>
+        <div class="tab-button" data-tab="profiles"><span data-i18n="profilesTab"></span><span class="pro-badge">PRO</span></div>
+        <div class="tab-button" data-tab="history"><span data-i18n="historyTab"></span><span class="pro-badge">PRO</span></div>
+        <div class="tab-button" data-tab="theme"><span data-i18n="themeTab"></span><span class="pro-badge">PRO</span></div>
+        <div class="tab-button" data-tab="bookmarks"><span data-i18n="bookmarksTab"></span><span class="pro-badge">PRO</span></div>
         <div class="tab-button" data-tab="help" data-i18n="helpTab"></div>
       </div>
 
+      <!-- 快捷键 -->
       <div id="shortcuts" class="tab-content active">
         <div class="form-group">
-          <label for="increase" data-i18n="speedUp"></label>
+          <label data-i18n="speedUp"></label>
           <input type="text" id="increase" class="shortcut-input" />
-          <div class="shortcut-description" data-i18n="speedUpDesc"></div>
         </div>
-
         <div class="form-group">
-          <label for="decrease" data-i18n="slowDown"></label>
+          <label data-i18n="slowDown"></label>
           <input type="text" id="decrease" class="shortcut-input" />
-          <div class="shortcut-description" data-i18n="slowDownDesc"></div>
         </div>
-
         <div class="form-group">
-          <label for="reset" data-i18n="resetSpeed"></label>
+          <label data-i18n="resetSpeed"></label>
           <input type="text" id="reset" class="shortcut-input" />
-          <div class="shortcut-description" data-i18n="resetSpeedDesc"></div>
         </div>
-
         <div class="form-group">
-          <label for="toggle-fullscreen" data-i18n="toggleFullscreen"></label>
+          <label data-i18n="toggleFullscreen"></label>
           <input type="text" id="toggle-fullscreen" class="shortcut-input" />
-          <div
-            class="shortcut-description"
-            data-i18n="toggleFullscreenDesc"
-          ></div>
         </div>
-
-        <div style="display: flex; gap: 10px">
-          <button id="save" data-i18n="save"></button>
-          <button id="reset-shortcuts" data-i18n="resetToDefault"></button>
+        <div style="display: flex; gap: 8px">
+          <button id="save" class="primary" data-i18n="save"></button>
+          <button id="reset-shortcuts" class="secondary" data-i18n="resetToDefault"></button>
         </div>
         <div id="status"></div>
       </div>
 
+      <!-- 速度配置 -->
+      <div id="profiles" class="tab-content">
+        <p style="font-size: 12px; color: #666;">创建不同场景的速度配置，一键切换</p>
+        <div class="grid-2" id="profileGrid"></div>
+        
+        <h3>添加自定义配置</h3>
+        <div class="grid-3">
+          <input type="text" id="newProfileName" placeholder="名称如: 快速浏览" />
+          <input type="number" id="newProfileSpeed" placeholder="速度如: 2.5" step="0.1" />
+          <input type="text" id="newProfileIcon" placeholder="图标如: ⚡" />
+        </div>
+        <button id="addProfileBtn" class="pro" style="margin-top: 8px;">+ 添加配置</button>
+      </div>
+
+      <!-- 观看历史 -->
+      <div id="history" class="tab-content">
+        <div class="grid-2">
+          <div class="stat-card">
+            <div class="stat-value" id="totalVideos">0</div>
+            <div class="stat-label">观看视频数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="totalTime">0</div>
+            <div class="stat-label">总观看时长</div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 12px 0;">
+          <h3 style="margin: 0;">最近观看</h3>
+          <button id="clearHistoryBtn" class="danger">清空</button>
+        </div>
+        <div id="historyList" style="max-height: 250px; overflow-y: auto;"></div>
+      </div>
+
+      <!-- 主题 -->
+      <div id="theme" class="tab-content">
+        <p style="font-size: 12px; color: #666;">选择速度指示器的主题样式</p>
+        <div class="grid-3" id="themeGrid"></div>
+        
+        <h3>自定义颜色</h3>
+        <div class="color-picker-row">
+          <label>背景色</label>
+          <input type="color" id="themeBgColor" value="#000000">
+          <input type="text" id="themeBgColorText" value="rgba(0,0,0,0.75)" style="flex:1">
+        </div>
+        <div class="color-picker-row">
+          <label>文字色</label>
+          <input type="color" id="themeTextColor" value="#ffffff">
+          <input type="text" id="themeTextColorText" value="#ffffff" style="flex:1">
+        </div>
+        <div class="color-picker-row">
+          <label>边框色</label>
+          <input type="color" id="themeBorderColor" value="#4a90d9">
+          <input type="text" id="themeBorderColorText" value="#4a90d9" style="flex:1">
+        </div>
+        <button id="saveThemeBtn" class="primary" style="margin-top: 8px;">保存主题</button>
+      </div>
+
+      <!-- 书签 -->
+      <div id="bookmarks" class="tab-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <h3 style="margin: 0;">当前视频书签</h3>
+          <button id="addBookmarkBtn" class="success">+ 添加当前时间书签</button>
+        </div>
+        <div id="bookmarkList"></div>
+        
+        <h3>所有书签</h3>
+        <div id="allBookmarksList" style="max-height: 200px; overflow-y: auto;"></div>
+      </div>
+
+      <!-- 帮助 -->
       <div id="help" class="tab-content">
         <h3 data-i18n="helpTitle"></h3>
-        <p data-i18n="helpIntro"></p>
-
+        <p data-i18n="helpIntro" style="font-size: 12px;"></p>
         <h4 data-i18n="basicUsage"></h4>
-        <ul>
+        <ul style="font-size: 12px;">
           <li data-i18n="autoDetect"></li>
           <li data-i18n="useShortcuts"></li>
-          <li data-i18n="speedIndicator"></li>
         </ul>
-
-        <h4 data-i18n="videoSelection"></h4>
-        <ul>
-          <li data-i18n="prioritizeHover"></li>
-          <li data-i18n="recentInteraction"></li>
-          <li data-i18n="largestInViewport"></li>
-        </ul>
-
-        <h4 data-i18n="fullscreenFeatures"></h4>
-        <ul>
-          <li data-i18n="arrowKeysControl"></li>
-          <li data-i18n="leftArrow"></li>
-          <li data-i18n="rightArrow"></li>
-          <li data-i18n="upArrow"></li>
-          <li data-i18n="downArrow"></li>
-          <li data-i18n="escKey"></li>
-        </ul>
-
-        <h4 data-i18n="notes"></h4>
-        <p data-i18n="notesContent"></p>
-        <p data-i18n="exitFullscreen"></p>
       </div>
     </div>
 
     <script src="options-new.js"></script>
+    <script src="options-pro.js"></script>
   </body>
 </html>

@@ -162,5 +162,21 @@
   "exitFullscreen": {
     "message": "在网页全屏模式下，您可以按ESC键退出全屏。",
     "description": "退出全屏提示"
+  },
+  "profilesTab": {
+    "message": "速度配置",
+    "description": "速度配置标签"
+  },
+  "historyTab": {
+    "message": "观看历史",
+    "description": "观看历史标签"
+  },
+  "themeTab": {
+    "message": "主题",
+    "description": "主题标签"
+  },
+  "bookmarksTab": {
+    "message": "书签",
+    "description": "书签标签"
   }
 }
