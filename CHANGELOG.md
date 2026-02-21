@@ -5,6 +5,50 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.2.0] - 2026-02-21
+
+### 新增 (Added)
+
+- 🔧 **TypeScript支持**：添加完整的TypeScript类型定义
+  - `src/types/` 目录包含所有类型定义
+  - 支持JSDoc类型注释
+  - 严格的类型检查
+- 🧪 **测试增强**：
+  - Playwright E2E测试支持
+  - 更完善的单元测试覆盖
+  - 测试配置文件优化
+- ⚙️ **CI/CD工作流**：
+  - GitHub Actions自动化
+  - 自动化构建和发布
+  - 代码质量检查
+- 🌍 **多语言支持**：
+  - 添加日语(ja)翻译
+  - 添加韩语(ko)翻译
+- 🎨 **代码质量工具**：
+  - Prettier代码格式化
+  - Husky Git hooks
+  - lint-staged自动修复
+
+### 改进 (Changed)
+
+- 📦 **构建系统**：
+  - 更高效的打包配置
+  - 生产/开发环境分离
+  - 更小的bundle体积
+- 🔒 **安全性**：
+  - 改进的快捷键冲突检测
+  - 保留键位警告
+- 💅 **UI/UX**：
+  - 现代化指示器样式
+  - 毛玻璃效果
+  - 流畅动画
+
+### 新增模块
+
+- `src/modules/speedPreset.js` - 预设速度管理
+- `src/utils/logger.js` - 日志工具
+- `src/utils/shortcutValidator.js` - 快捷键验证
+
 ## [2.0.0] - 2024-01-XX
 
 ### 新增 (Added)

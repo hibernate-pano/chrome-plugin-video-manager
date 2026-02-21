@@ -1,26 +1,26 @@
 /* --- Speed Indicator --- */
 #video-speed-indicator {
     position: fixed;
-    /* Use fixed positioning to stay in viewport */
     top: 20px;
     left: 20px;
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: rgba(0, 0, 0, 0.8);
     color: white;
-    padding: 8px 12px;
+    padding: 10px 16px;
     border-radius: 8px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     font-size: 16px;
     font-weight: bold;
     z-index: 2147483647;
-    /* Max z-index */
     opacity: 0;
-    transition: opacity 0.3s ease-in-out;
+    transition: opacity 0.3s ease-in-out, transform 0.2s ease-out;
     pointer-events: none;
-    /* Ignore mouse events */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(8px);
 }
 
 #video-speed-indicator.visible {
     opacity: 1;
+    transform: scale(1.05);
 }
 
 /* --- Options Page --- */
