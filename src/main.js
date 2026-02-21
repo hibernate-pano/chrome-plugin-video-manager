@@ -12,6 +12,7 @@ import { PlaybackController } from "./modules/playbackController.js";
 import { KeyboardHandler } from "./modules/keyboardHandler.js";
 import { speedProfileManager } from "./modules/speedProfile.js";
 import { playbackHistory } from "./modules/playbackHistory.js";
+import { videoPositionMemory } from "./modules/videoPosition.js";
 
 /**
  * 主应用类
@@ -47,6 +48,9 @@ class VideoSpeedController {
       await playbackHistory.init();
       this.history = playbackHistory;
 
+      // 初始化视频位置记忆模块
+      await videoPositionMemory.init();
+
       // 初始化各个模块
       this.indicator = new SpeedIndicator();
       this.lightboxManager = new LightboxManager();
@@ -74,6 +78,9 @@ class VideoSpeedController {
 
       // 设置播放历史记录（当视频播放时）
       this.setupHistoryTracking();
+
+      // 设置视频位置记忆
+      this.setupPositionMemory();
 
       console.log("Video Speed Controller initialized successfully");
     } catch (error) {
@@ -112,6 +119,40 @@ class VideoSpeedController {
 
     // 定期检查当前媒体
     setInterval(observeMedia, 10000);
+  }
+
+  /**
+   * 设置视频位置记忆
+   */
+  setupPositionMemory() {
+    const checkAndRestore = () => {
+      const media = this.mediaDetector?.getCurrentMedia();
+      if (!media) return;
+
+      const videoId = videoPositionMemory.getVideoId();
+      if (videoPositionMemory.hasPosition(videoId)) {
+        const pos = videoPositionMemory.getPosition(videoId);
+        // 如果视频刚开始播放（进度<5%），自动恢复到上次位置
+        if (media.currentTime < 5 && pos && pos.currentTime > 10) {
+          const confirmRestore = confirm(`是否恢复到上次观看位置 (${Math.floor(pos.currentTime / 60)}:${Math.floor(pos.currentTime % 60).toString().padStart(2, '0')})?`);
+          if (confirmRestore) {
+            media.currentTime = pos.currentTime;
+          }
+        }
+      }
+    };
+
+    // 视频加载后检查
+    setTimeout(checkAndRestore, 2000);
+
+    // 定期保存位置
+    setInterval(() => {
+      const media = this.mediaDetector?.getCurrentMedia();
+      if (media && media.currentTime > 10) {
+        const videoId = videoPositionMemory.getVideoId();
+        videoPositionMemory.savePosition(videoId, media.currentTime, media.duration);
+      }
+    }, 10000);
   }
 
   /**
