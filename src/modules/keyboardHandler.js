@@ -94,6 +94,13 @@ export class KeyboardHandler {
    */
   handleKeyDown(e) {
     try {
+      // 数字键 1-4 快速切换速度配置
+      if (['1', '2', '3', '4'].includes(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (this.handleNumberKeys(e)) {
+          return;
+        }
+      }
+
       // 全屏模式下的特殊处理
       if (this.lightboxManager.isActive()) {
         if (this.handleLightboxKeys(e)) {
@@ -175,6 +182,73 @@ export class KeyboardHandler {
     } catch (e) {
       console.error("处理键盘事件失败:", e);
     }
+  }
+
+  /**
+   * 处理数字键快速切换速度配置
+   * 1 = 学习模式 (1.5x), 2 = 复习模式 (2x), 3 = 浏览模式 (1.25x), 4 = 听力模式 (0.75x)
+   */
+  handleNumberKeys(e) {
+    const numberProfiles = {
+      '1': { speed: 1.5, name: '学习模式' },
+      '2': { speed: 2.0, name: '复习模式' },
+      '3': { speed: 1.25, name: '浏览模式' },
+      '4': { speed: 0.75, name: '听力模式' }
+    };
+
+    const profile = numberProfiles[e.key];
+    if (!profile) return false;
+
+    // 检查是否在可编辑区域
+    if (isTypingInEditable(e)) return false;
+
+    // 获取目标媒体元素
+    const media = this.lightboxManager.isActive()
+      ? this.lightboxManager.getVideo()
+      : this.mediaDetector.getTargetMedia();
+
+    if (!media) return false;
+
+    // 设置速度
+    media.playbackRate = profile.speed;
+
+    // 显示提示
+    this._showSpeedIndicator(profile);
+
+    return true;
+  }
+
+  /**
+   * 显示速度提示
+   */
+  _showSpeedIndicator(profile) {
+    const indicator = document.createElement('div');
+    indicator.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 20px 40px;
+      border-radius: 10px;
+      font-size: 24px;
+      font-weight: bold;
+      z-index: 999999;
+      pointer-events: none;
+      animation: fadeOut 1s forwards;
+    `;
+    indicator.textContent = `${profile.name} (${profile.speed}x)`;
+
+    if (!document.getElementById('vs-speed-anim')) {
+      const style = document.createElement('style');
+      style.id = 'vs-speed-anim';
+      style.textContent = `@keyframes fadeOut { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }`;
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(indicator);
+    setTimeout(() => indicator.remove(), 1000);
   }
 
   /**
