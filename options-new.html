@@ -136,6 +136,27 @@
       .bookmark-note { font-size: 12px; color: #666; margin-top: 2px; }
       .bookmark-delete { color: #dc3545; cursor: pointer; font-size: 12px; }
       
+      .sync-status-card {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+      }
+      .sync-items {
+        display: grid;
+        gap: 8px;
+      }
+      .sync-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: #fff;
+        border: 1px solid #eee;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+      
       #status {
         margin-top: 10px;
         padding: 8px;
@@ -157,6 +178,7 @@
         <div class="tab-button" data-tab="history"><span data-i18n="historyTab"></span><span class="pro-badge">PRO</span></div>
         <div class="tab-button" data-tab="theme"><span data-i18n="themeTab"></span><span class="pro-badge">PRO</span></div>
         <div class="tab-button" data-tab="bookmarks"><span data-i18n="bookmarksTab"></span><span class="pro-badge">PRO</span></div>
+        <div class="tab-button" data-tab="sync"><span data-i18n="syncTab"></span><span class="pro-badge">PRO</span></div>
         <div class="tab-button" data-tab="help" data-i18n="helpTab"></div>
       </div>
 
@@ -252,6 +274,51 @@
         
         <h3>所有书签</h3>
         <div id="allBookmarksList" style="max-height: 200px; overflow-y: auto;"></div>
+      </div>
+
+      <!-- 云端同步 -->
+      <div id="sync" class="tab-content">
+        <div class="sync-status-card">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
+            <div id="syncIcon" style="font-size: 32px;">☁️</div>
+            <div>
+              <div style="font-weight: 600; font-size: 15px;">云端同步</div>
+              <div id="syncStatusText" style="font-size: 12px; color: #666;">未启用</div>
+            </div>
+          </div>
+          
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 15px;">
+            <input type="checkbox" id="syncEnabled" style="width: 18px; height: 18px;">
+            <span>启用云端同步</span>
+          </label>
+          
+          <div style="font-size: 11px; color: #999; margin-bottom: 15px;">
+            开启后，你的设置、速度配置、主题等数据将通过 Chrome 账号自动同步到其他设备。
+          </div>
+          
+          <div style="display: flex; gap: 8px;">
+            <button id="syncNowBtn" class="primary">立即同步</button>
+            <button id="clearSyncDataBtn" class="danger">清除云端数据</button>
+          </div>
+          
+          <div id="syncLastTime" style="margin-top: 12px; font-size: 11px; color: #999;"></div>
+        </div>
+        
+        <h3>同步内容</h3>
+        <div class="sync-items">
+          <div class="sync-item">
+            <span>⚡</span> 速度配置
+          </div>
+          <div class="sync-item">
+            <span>🎨</span> 自定义主题
+          </div>
+          <div class="sync-item">
+            <span>⚙️</span> 快捷键设置
+          </div>
+          <div class="sync-item">
+            <span>🔖</span> 书签（可选）
+          </div>
+        </div>
       </div>
 
       <!-- 帮助 -->

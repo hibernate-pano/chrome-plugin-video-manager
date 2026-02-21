@@ -178,5 +178,9 @@
   "bookmarksTab": {
     "message": "Bookmarks",
     "description": "Bookmarks tab"
+  },
+  "syncTab": {
+    "message": "Sync",
+    "description": "Cloud sync tab"
   }
 }

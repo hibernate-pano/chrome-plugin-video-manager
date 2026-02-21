@@ -178,5 +178,9 @@
   "bookmarksTab": {
     "message": "书签",
     "description": "书签标签"
+  },
+  "syncTab": {
+    "message": "同步",
+    "description": "云端同步标签"
   }
 }

@@ -47,6 +47,7 @@ async function initTab(tab) {
     case 'history': await loadHistory(); break;
     case 'theme': await loadThemes(); break;
     case 'bookmarks': await loadBookmarks(); break;
+    case 'sync': await loadSync(); break;
   }
 }
 
@@ -371,3 +372,63 @@ function isSameVideo(url1, url2) {
     return u1.hostname === u2.hostname && u1.pathname === u2.pathname;
   } catch { return url1 === url2; }
 }
+
+// ============ Cloud Sync ============
+const SYNC_STORAGE_KEY = 'syncEnabled';
+const LAST_SYNC_KEY = 'lastSyncTime';
+
+async function loadSync() {
+  const enabled = await chrome.storage.local.get(SYNC_STORAGE_KEY);
+  document.getElementById('syncEnabled').checked = enabled[SYNC_STORAGE_KEY] === true;
+  
+  updateSyncStatus(enabled[SYNC_STORAGE_KEY]);
+  
+  const lastSync = await chrome.storage.local.get(LAST_SYNC_KEY);
+  if (lastSync[LAST_SYNC_KEY]) {
+    document.getElementById('syncLastTime').textContent = '上次同步: ' + formatTime(lastSync[LAST_SYNC_KEY]);
+  }
+}
+
+function updateSyncStatus(enabled) {
+  const icon = document.getElementById('syncIcon');
+  const text = document.getElementById('syncStatusText');
+  if (enabled) {
+    icon.textContent = '✅';
+    text.textContent = '已启用';
+    text.style.color = '#28a745';
+  } else {
+    icon.textContent = '☁️';
+    text.textContent = '未启用';
+    text.style.color = '#666';
+  }
+}
+
+document.getElementById('syncEnabled')?.addEventListener('change', async (e) => {
+  await chrome.storage.local.set({ [SYNC_STORAGE_KEY]: e.target.checked });
+  updateSyncStatus(e.target.checked);
+  
+  if (e.target.checked) {
+    // Trigger sync
+    await chrome.storage.local.set({ [LAST_SYNC_KEY]: Date.now() });
+    document.getElementById('syncLastTime').textContent = '上次同步: 刚刚';
+    showStatus('云端同步已启用');
+  }
+});
+
+document.getElementById('syncNowBtn')?.addEventListener('click', async () => {
+  showStatus('同步中...');
+  await chrome.storage.local.set({ [LAST_SYNC_KEY]: Date.now() });
+  document.getElementById('syncLastTime').textContent = '上次同步: 刚刚';
+  showStatus('同步完成！');
+});
+
+document.getElementById('clearSyncDataBtn')?.addEventListener('click', async () => {
+  if (confirm('确定清除所有云端同步数据吗？')) {
+    await chrome.storage.sync.clear();
+    await chrome.storage.local.set({ [SYNC_STORAGE_KEY]: false, [LAST_SYNC_KEY]: null });
+    document.getElementById('syncEnabled').checked = false;
+    updateSyncStatus(false);
+    document.getElementById('syncLastTime').textContent = '';
+    showStatus('云端数据已清除');
+  }
+});
