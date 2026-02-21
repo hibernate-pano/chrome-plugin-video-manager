@@ -1,6 +1,6 @@
 {
   "name": "video-audio-speed-controller",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Chrome extension for controlling video and audio playback speed with keyboard shortcuts",
   "type": "module",
   "main": "content.js",
