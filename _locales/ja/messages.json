@@ -1,0 +1,166 @@
+{
+  "extName": {
+    "message": "動画・音声速度コントローラー",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "キーボードショートカットで動画と音声の再生速度を簡単に制御できます。",
+    "description": "Extension description"
+  },
+  "settingsTitle": {
+    "message": "動画速度コントローラー設定",
+    "description": "Settings page title"
+  },
+  "shortcutsTab": {
+    "message": "ショートカット",
+    "description": "Shortcuts tab label"
+  },
+  "helpTab": {
+    "message": "ヘルプ",
+    "description": "Help tab label"
+  },
+  "speedUp": {
+    "message": "速度を上げる",
+    "description": "Speed up shortcut label"
+  },
+  "slowDown": {
+    "message": "速度を下げる",
+    "description": "Slow down shortcut label"
+  },
+  "resetSpeed": {
+    "message": "速度をリセット",
+    "description": "Reset speed shortcut label"
+  },
+  "toggleFullscreen": {
+    "message": "フルスクリーン切替",
+    "description": "Toggle fullscreen shortcut label"
+  },
+  "speedUpDesc": {
+    "message": "再生速度を上げる (+0.1)",
+    "description": "Speed up description"
+  },
+  "slowDownDesc": {
+    "message": "再生速度を下げる (-0.1)",
+    "description": "Slow down description"
+  },
+  "resetSpeedDesc": {
+    "message": "再生速度を1.0x（通常）にリセット",
+    "description": "Reset speed description"
+  },
+  "toggleFullscreenDesc": {
+    "message": "ページフルスクリーンモードの開始/終了",
+    "description": "Toggle fullscreen description"
+  },
+  "save": {
+    "message": "保存",
+    "description": "Save button"
+  },
+  "resetToDefault": {
+    "message": "デフォルトに戻す",
+    "description": "Reset to default button"
+  },
+  "saved": {
+    "message": "設定を保存しました。",
+    "description": "Settings saved message"
+  },
+  "resetToDefaultDone": {
+    "message": "デフォルト設定に戻りました。保存をクリックして適用してください。",
+    "description": "Reset to default done message"
+  },
+  "conflictWarning": {
+    "message": "重複するショートカットが検出されました！",
+    "description": "Shortcut conflict warning"
+  },
+  "emptyWarning": {
+    "message": "ショートカットは空にできません！",
+    "description": "Empty shortcut warning"
+  },
+  "browserConflictWarning": {
+    "message": "一部のショートカットは一般的なブラウザのショートカットと競合するため、上書きされる可能性があります。",
+    "description": "Browser conflict warning"
+  },
+  "fixAndSave": {
+    "message": "問題を解決して保存してください。",
+    "description": "Fix and save message"
+  },
+  "helpTitle": {
+    "message": "説明",
+    "description": "Help section title"
+  },
+  "helpIntro": {
+    "message": "この拡張機能では、カスタムショートカットを使用して動画と音声の再生速度を制御できます。",
+    "description": "Help introduction"
+  },
+  "basicUsage": {
+    "message": "基本的な使い方",
+    "description": "Basic usage section"
+  },
+  "videoSelection": {
+    "message": "動画選択ロジック",
+    "description": "Video selection section"
+  },
+  "fullscreenFeatures": {
+    "message": "フルスクリーンモードの特別な機能",
+    "description": "Fullscreen features section"
+  },
+  "notes": {
+    "message": "注意",
+    "description": "Notes section"
+  },
+  "autoDetect": {
+    "message": "拡張機能はページ上の動画または音声要素を自動的に検出します",
+    "description": "Auto detect feature"
+  },
+  "useShortcuts": {
+    "message": "設定したショートカットを使用してメディア再生を制御します",
+    "description": "Use shortcuts feature"
+  },
+  "speedIndicator": {
+    "message": "再生速度を変更すると速度インジケーターが表示されます",
+    "description": "Speed indicator feature"
+  },
+  "prioritizeHover": {
+    "message": "拡張機能はマウスカーソル下の動画/音声を優先します",
+    "description": "Prioritize hover feature"
+  },
+  "recentInteraction": {
+    "message": "ホバーがない場合は、最後に操作したメディアを選択",
+    "description": "Recent interaction feature"
+  },
+  "largestInViewport": {
+    "message": "複数の再生中のメディアがある場合、 viewport内の最も大きいものを優先",
+    "description": "Largest in viewport feature"
+  },
+  "arrowKeysControl": {
+    "message": "フルスクリーンモードでは、矢印キーで動画を制御できます：",
+    "description": "Arrow keys control"
+  },
+  "leftArrow": {
+    "message": "← 左矢印：5秒巻き戻し",
+    "description": "Left arrow key"
+  },
+  "rightArrow": {
+    "message": "→ 右矢印：5秒早送り",
+    "description": "Right arrow key"
+  },
+  "upArrow": {
+    "message": "↑ 上矢印：音量を上げる",
+    "description": "Up arrow key"
+  },
+  "downArrow": {
+    "message": "↓ 下矢印：音量を下げる",
+    "description": "Down arrow key"
+  },
+  "escKey": {
+    "message": "ESCキー：フルスクリーンモードを終了",
+    "description": "ESC key"
+  },
+  "notesContent": {
+    "message": "ショートカットは動画または音声要素が利用可能な場合のみinterceptされます。メディア要素がないページでは、ショートカットは正常にパススルーされます。",
+    "description": "Notes content"
+  },
+  "exitFullscreen": {
+    "message": "ページフルスクリーンモードでは、ESCキーを押してフルスクリーンを終了できます。",
+    "description": "Exit fullscreen note"
+  }
+}

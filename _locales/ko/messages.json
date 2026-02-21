@@ -1,0 +1,166 @@
+{
+  "extName": {
+    "message": "비디오 및 오디오 속도 컨트롤러",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "키보드 단축키로 비디오 및 오디오 재생 속도를 쉽게 제어하세요.",
+    "description": "Extension description"
+  },
+  "settingsTitle": {
+    "message": "비디오 속도 컨트롤러 설정",
+    "description": "Settings page title"
+  },
+  "shortcutsTab": {
+    "message": "단축키",
+    "description": "Shortcuts tab label"
+  },
+  "helpTab": {
+    "message": "도움말",
+    "description": "Help tab label"
+  },
+  "speedUp": {
+    "message": "속도 높이기",
+    "description": "Speed up shortcut label"
+  },
+  "slowDown": {
+    "message": "속도 낮추기",
+    "description": "Slow down shortcut label"
+  },
+  "resetSpeed": {
+    "message": "속도 초기화",
+    "description": "Reset speed shortcut label"
+  },
+  "toggleFullscreen": {
+    "message": "전체 화면 전환",
+    "description": "Toggle fullscreen shortcut label"
+  },
+  "speedUpDesc": {
+    "message": "재생 속도 증가 (+0.1)",
+    "description": "Speed up description"
+  },
+  "slowDownDesc": {
+    "message": "재생 속도 감소 (-0.1)",
+    "description": "Slow down description"
+  },
+  "resetSpeedDesc": {
+    "message": "재생 속도를 1.0x(일반)로 재설정",
+    "description": "Reset speed description"
+  },
+  "toggleFullscreenDesc": {
+    "message": "페이지 전체 화면 모드 시작/종료",
+    "description": "Toggle fullscreen description"
+  },
+  "save": {
+    "message": "저장",
+    "description": "Save button"
+  },
+  "resetToDefault": {
+    "message": "기본값으로 재설정",
+    "description": "Reset to default button"
+  },
+  "saved": {
+    "message": "설정이 저장되었습니다.",
+    "description": "Settings saved message"
+  },
+  "resetToDefaultDone": {
+    "message": "기본 설정으로 복원되었습니다. 저장 버튼을 클릭하여 적용하세요.",
+    "description": "Reset to default done message"
+  },
+  "conflictWarning": {
+    "message": "중복된 단축키가 감지되었습니다!",
+    "description": "Shortcut conflict warning"
+  },
+  "emptyWarning": {
+    "message": "단축키는 비워둘 수 없습니다!",
+    "description": "Empty shortcut warning"
+  },
+  "browserConflictWarning": {
+    "message": "일부 단축키는 일반적인 브라우저 단축키와 충돌하여 재정의될 수 있습니다.",
+    "description": "Browser conflict warning"
+  },
+  "fixAndSave": {
+    "message": "문제를 수정하고 저장하세요.",
+    "description": "Fix and save message"
+  },
+  "helpTitle": {
+    "message": "사용 방법",
+    "description": "Help section title"
+  },
+  "helpIntro": {
+    "message": "이 확장 프로그램은 사용자 정의 단축키를 사용하여 비디오 및 오디오 재생 속도를 제어할 수 있습니다.",
+    "description": "Help introduction"
+  },
+  "basicUsage": {
+    "message": "기본 사용법",
+    "description": "Basic usage section"
+  },
+  "videoSelection": {
+    "message": "비디오 선택 로직",
+    "description": "Video selection section"
+  },
+  "fullscreenFeatures": {
+    "message": "전체 화면 모드의 특별한 기능",
+    "description": "Fullscreen features section"
+  },
+  "notes": {
+    "message": "참고",
+    "description": "Notes section"
+  },
+  "autoDetect": {
+    "message": "확장 프로그램이 페이지의 비디오 또는 오디오 요소를 자동으로 감지합니다",
+    "description": "Auto detect feature"
+  },
+  "useShortcuts": {
+    "message": "구성된 단축키를 사용하여 미디어 재생을 제어합니다",
+    "description": "Use shortcuts feature"
+  },
+  "speedIndicator": {
+    "message": "재생 속도를 변경하면 속도 표시기가 표시됩니다",
+    "description": "Speed indicator feature"
+  },
+  "prioritizeHover": {
+    "message": "확장 프로그램이 마우스 커서 아래의 비디오/오디오를 우선시합니다",
+    "description": "Prioritize hover feature"
+  },
+  "recentInteraction": {
+    "message": "호버가 없으면 가장 최근에 상호작용한 미디어를 선택합니다",
+    "description": "Recent interaction feature"
+  },
+  "largestInViewport": {
+    "message": "여러 재생 중인 미디어가 있는 경우 뷰포트 내에서 가장 큰 것을 우선시합니다",
+    "description": "Largest in viewport feature"
+  },
+  "arrowKeysControl": {
+    "message": "전체 화면 모드에서는 화살표 키를 사용하여 비디오를 제어할 수 있습니다:",
+    "description": "Arrow keys control"
+  },
+  "leftArrow": {
+    "message": "← 왼쪽 화살표: 5초 되감기",
+    "description": "Left arrow key"
+  },
+  "rightArrow": {
+    "message": "→ 오른쪽 화살표: 5초 앞으로 감기",
+    "description": "Right arrow key"
+  },
+  "upArrow": {
+    "message": "↑ 위 화살표: 볼륨 증가",
+    "description": "Up arrow key"
+  },
+  "downArrow": {
+    "message": "↓ 아래 화살표: 볼륨 감소",
+    "description": "Down arrow key"
+  },
+  "escKey": {
+    "message": "ESC 키: 전체 화면 모드 종료",
+    "description": "ESC key"
+  },
+  "notesContent": {
+    "message": "단축키는 비디오 또는 오디오 요소가 사용 가능한 경우에만 가로채집니다. 미디어 요소가 없는 페이지에서는 단축키가 정상적으로 통과됩니다.",
+    "description": "Notes content"
+  },
+  "exitFullscreen": {
+    "message": "페이지 전체 화면 모드에서 ESC 키를 눌러 전체 화면을 종료할 수 있습니다.",
+    "description": "Exit fullscreen note"
+  }
+}
