@@ -182,5 +182,9 @@
   "syncTab": {
     "message": "同步",
     "description": "云端同步标签"
+  },
+  "dashboardTab": {
+    "message": "统计",
+    "description": "数据统计标签"
   }
 }

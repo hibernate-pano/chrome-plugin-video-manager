@@ -157,6 +157,60 @@
         font-size: 13px;
       }
       
+      .stats-overview {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .stat-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px 10px;
+        border-radius: 10px;
+        text-align: center;
+      }
+      .stat-icon { font-size: 20px; margin-bottom: 5px; }
+      .stat-number { font-size: 22px; font-weight: bold; }
+      .stat-label { font-size: 11px; opacity: 0.9; }
+      
+      .week-stats {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .week-stat {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+      }
+      .week-number { font-size: 24px; font-weight: bold; color: #667eea; }
+      .week-label { font-size: 12px; color: #666; }
+      
+      .site-distribution, .speed-distribution {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .site-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        background: #e9ecef;
+        border-radius: 15px;
+        font-size: 12px;
+      }
+      .speed-tag {
+        padding: 4px 12px;
+        background: #667eea;
+        color: white;
+        border-radius: 15px;
+        font-size: 12px;
+      }
+      
       #status {
         margin-top: 10px;
         padding: 8px;
@@ -179,6 +233,7 @@
         <div class="tab-button" data-tab="theme"><span data-i18n="themeTab"></span><span class="pro-badge">PRO</span></div>
         <div class="tab-button" data-tab="bookmarks"><span data-i18n="bookmarksTab"></span><span class="pro-badge">PRO</span></div>
         <div class="tab-button" data-tab="sync"><span data-i18n="syncTab"></span><span class="pro-badge">PRO</span></div>
+        <div class="tab-button" data-tab="dashboard"><span data-i18n="dashboardTab"></span><span class="pro-badge">NEW</span></div>
         <div class="tab-button" data-tab="help" data-i18n="helpTab"></div>
       </div>
 
@@ -319,6 +374,52 @@
             <span>🔖</span> 书签（可选）
           </div>
         </div>
+      </div>
+
+      <!-- 数据统计 -->
+      <div id="dashboard" class="tab-content">
+        <div class="stats-overview">
+          <div class="stat-box">
+            <div class="stat-icon">📺</div>
+            <div class="stat-number" id="dashTotalVideos">0</div>
+            <div class="stat-label">观看视频</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-number" id="dashTotalTime">0</div>
+            <div class="stat-label">总时长</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-icon">⚡</div>
+            <div class="stat-number" id="dashAvgSpeed">1.0x</div>
+            <div class="stat-label">平均速度</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-icon">💪</div>
+            <div class="stat-number" id="dashStreak">0</div>
+            <div class="stat-label">连续天数</div>
+          </div>
+        </div>
+        
+        <h3>📈 最近7天</h3>
+        <div class="week-stats">
+          <div class="week-stat">
+            <div class="week-number" id="dashRecentVideos">0</div>
+            <div class="week-label">视频数</div>
+          </div>
+          <div class="week-stat">
+            <div class="week-number" id="dashRecentTime">0</div>
+            <div class="week-label">时长</div>
+          </div>
+        </div>
+        
+        <h3>🌐 站点分布</h3>
+        <div id="dashSiteStats" class="site-distribution"></div>
+        
+        <h3>🔥 速度分布</h3>
+        <div id="dashSpeedStats" class="speed-distribution"></div>
+        
+        <button id="refreshStatsBtn" class="primary" style="margin-top: 15px;">🔄 刷新统计</button>
       </div>
 
       <!-- 帮助 -->

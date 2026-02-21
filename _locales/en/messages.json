@@ -182,5 +182,9 @@
   "syncTab": {
     "message": "Sync",
     "description": "Cloud sync tab"
+  },
+  "dashboardTab": {
+    "message": "Stats",
+    "description": "Dashboard tab"
   }
 }

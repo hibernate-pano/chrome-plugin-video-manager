@@ -48,6 +48,7 @@ async function initTab(tab) {
     case 'theme': await loadThemes(); break;
     case 'bookmarks': await loadBookmarks(); break;
     case 'sync': await loadSync(); break;
+    case 'dashboard': await loadDashboard(); break;
   }
 }
 
@@ -431,4 +432,87 @@ document.getElementById('clearSyncDataBtn')?.addEventListener('click', async () 
     document.getElementById('syncLastTime').textContent = '';
     showStatus('云端数据已清除');
   }
+});
+
+// ============ Dashboard ============
+const DASH_STORAGE_KEYS = {
+  HISTORY: 'playbackHistory',
+  BOOKMARKS: 'videoBookmarks'
+};
+
+async function loadDashboard() {
+  const historyResult = await chrome.storage.local.get(DASH_STORAGE_KEYS.HISTORY);
+  const history = historyResult[DASH_STORAGE_KEYS.HISTORY] || [];
+  
+  // Calculate stats
+  const totalVideos = history.length;
+  const totalSeconds = history.reduce((sum, h) => sum + (h.watchedDuration || 0), 0);
+  const avgSpeed = totalVideos > 0 
+    ? (history.reduce((sum, h) => sum + (h.playbackSpeed || 1), 0) / totalVideos).toFixed(1)
+    : '1.0';
+  
+  // Recent 7 days
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const recentHistory = history.filter(h => h.lastWatched > sevenDaysAgo);
+  const recentTime = recentHistory.reduce((sum, h) => sum + (h.watchedDuration || 0), 0);
+  
+  // Streak
+  const dates = [...new Set(history.map(h => new Date(h.lastWatched).toDateString()))].sort((a, b) => new Date(b) - new Date(a));
+  let streak = 0;
+  if (dates.length > 0) {
+    const today = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 86400000).toDateString();
+    if (dates[0] === today || dates[0] === yesterday) {
+      streak = 1;
+      for (let i = 1; i < dates.length; i++) {
+        const diff = (new Date(dates[i-1]) - new Date(dates[i])) / 86400000;
+        if (diff <= 1) streak++; else break;
+      }
+    }
+  }
+  
+  // Site stats
+  const siteStats = {};
+  history.forEach(h => {
+    const site = h.site || 'other';
+    siteStats[site] = (siteStats[site] || 0) + 1;
+  });
+  
+  // Speed stats
+  const speedStats = {};
+  history.forEach(h => {
+    const speed = Math.round((h.playbackSpeed || 1) * 2) / 2;
+    speedStats[speed] = (speedStats[speed] || 0) + 1;
+  });
+  
+  // Update UI
+  document.getElementById('dashTotalVideos').textContent = totalVideos;
+  document.getElementById('dashTotalTime').textContent = formatDuration(totalSeconds);
+  document.getElementById('dashAvgSpeed').textContent = avgSpeed + 'x';
+  document.getElementById('dashStreak').textContent = streak;
+  document.getElementById('dashRecentVideos').textContent = recentHistory.length;
+  document.getElementById('dashRecentTime').textContent = formatDuration(recentTime);
+  
+  // Site distribution
+  const siteHtml = Object.entries(siteStats)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([site, count]) => {
+      const icons = { bilibili: '📺', youtube: '▶️', youku: '🎬', iqiyi: '🎥', tencent: '📡', coursera: '🎓', udemy: '💼', other: '🌐' };
+      return `<span class="site-tag">${icons[site] || '🌐'} ${site} (${count})</span>`;
+    }).join('');
+  document.getElementById('dashSiteStats').innerHTML = siteHtml || '<div class="empty-state">暂无数据</div>';
+  
+  // Speed distribution
+  const speedHtml = Object.entries(speedStats)
+    .sort((a, b) => b[1] - a[1])
+    .map(([speed, count]) => `<span class="speed-tag">${speed}x (${count})</span>`)
+    .join('');
+  document.getElementById('dashSpeedStats').innerHTML = speedHtml || '<div class="empty-state">暂无数据</div>';
+}
+
+document.getElementById('refreshStatsBtn')?.addEventListener('click', async () => {
+  await loadDashboard();
+  showStatus('统计已刷新');
 });
