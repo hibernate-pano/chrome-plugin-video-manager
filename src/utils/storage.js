@@ -11,6 +11,9 @@ export const defaultShortcuts = {
   decrease: "-",
   reset: "0",
   "toggle-fullscreen": "f",
+  "volume-up": "]",
+  "volume-down": "[",
+  "mute": "m",
 };
 
 /**

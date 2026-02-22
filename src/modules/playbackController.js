@@ -94,6 +94,20 @@ export class PlaybackController {
   }
 
   /**
+   * 处理静音切换
+   * @param {HTMLMediaElement} media - 媒体元素
+   */
+  handleMute(media) {
+    try {
+      media.muted = !media.muted;
+      const icon = media.muted ? "🔇" : "🔊";
+      this.indicator.show(`${icon}`, media);
+    } catch (e) {
+      console.error("处理静音切换失败:", e);
+    }
+  }
+
+  /**
    * 处理播放/暂停
    * @param {HTMLMediaElement} media - 媒体元素
    */

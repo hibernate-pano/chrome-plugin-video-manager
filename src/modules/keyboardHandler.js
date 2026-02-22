@@ -176,6 +176,12 @@ export class KeyboardHandler {
       // 执行对应的动作
       if (action === "toggle-fullscreen") {
         this.lightboxManager.toggle(media);
+      } else if (action === "volume-up") {
+        this.playbackController.handleVolume(media, "up", 0.1);
+      } else if (action === "volume-down") {
+        this.playbackController.handleVolume(media, "down", 0.1);
+      } else if (action === "mute") {
+        this.playbackController.handleMute(media);
       } else {
         this.playbackController.handleSpeed(media, action);
       }
