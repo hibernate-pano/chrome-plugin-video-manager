@@ -1,32 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "__MSG_extName__",
-  "version": "3.7.0",
-  "description": "__MSG_extDescription__ - Pro: Speed Profiles & Watch History",
-  "default_locale": "en",
+  "name": "Video Speed Controller",
+  "version": "4.0.0",
+  "description": "Control video playback speed with keyboard shortcuts - Cyberpunk Edition",
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
   "action": {
-    "default_popup": "onboarding.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png"
-    }
+    "default_title": "Video Speed Controller"
   },
   "background": {
-    "service_worker": "background.js"
-  },
-  "permissions": ["storage"],
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "service_worker": "src/background.ts"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["style.css"],
-      "all_frames": true,
+      "js": ["src/content.tsx"],
       "run_at": "document_end"
     }
-  ]
+  ],
+  "options_page": "options.html"
 }
