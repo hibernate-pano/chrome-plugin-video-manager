@@ -8,6 +8,7 @@ interface UIState {
   hudVisible: boolean;
   hudType: HUDType;
   hudValue: number;
+  hudTimeoutId: number | null;
 
   setFullscreen: (fullscreen: boolean) => void;
   setShowControls: (show: boolean) => void;
@@ -15,24 +16,43 @@ interface UIState {
   hideHUD: () => void;
 }
 
-export const useUIStore = create<UIState>((set) => ({
+export const useUIStore = create<UIState>((set, get) => ({
   isFullscreen: false,
   showControls: true,
   hudVisible: false,
   hudType: null,
   hudValue: 0,
+  hudTimeoutId: null,
 
   setFullscreen: (fullscreen) => set({ isFullscreen: fullscreen }),
   setShowControls: (show) => set({ showControls: show }),
 
   showHUD: (type, value) => {
-    set({ hudVisible: true, hudType: type, hudValue: value });
+    const { hudTimeoutId } = get();
 
-    // 2秒后自动隐藏
-    setTimeout(() => {
-      set({ hudVisible: false, hudType: null });
+    // 清除之前的 timeout
+    if (hudTimeoutId) {
+      clearTimeout(hudTimeoutId);
+    }
+
+    // 设置新的 timeout
+    const timeoutId = window.setTimeout(() => {
+      set({ hudVisible: false, hudType: null, hudTimeoutId: null });
     }, 2000);
+
+    set({
+      hudVisible: true,
+      hudType: type,
+      hudValue: value,
+      hudTimeoutId: timeoutId
+    });
   },
 
-  hideHUD: () => set({ hudVisible: false, hudType: null }),
+  hideHUD: () => {
+    const { hudTimeoutId } = get();
+    if (hudTimeoutId) {
+      clearTimeout(hudTimeoutId);
+    }
+    set({ hudVisible: false, hudType: null, hudTimeoutId: null });
+  },
 }));
