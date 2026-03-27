@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resetPlaybackRate, stepPlaybackRate } from './playback';
+import { resetPlaybackRate, seekBy, stepPlaybackRate } from './playback';
 
 describe('playback helpers', () => {
   it('clamps stepped playback rate', () => {
@@ -16,5 +16,21 @@ describe('playback helpers', () => {
 
     expect(resetPlaybackRate(video)).toBe(1);
     expect(video.playbackRate).toBe(1);
+  });
+
+  it('seeks within media bounds', () => {
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'currentTime', {
+      value: 8,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(video, 'duration', {
+      value: 12,
+      configurable: true,
+    });
+
+    expect(seekBy(video, 5)).toBe(12);
+    expect(seekBy(video, -20)).toBe(0);
   });
 });

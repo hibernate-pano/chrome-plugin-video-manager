@@ -167,7 +167,7 @@ export class FullscreenController {
 
     overlay.classList.add('vsc-active');
     document.body.style.overflow = 'hidden';
-    video.controls = false;
+    video.controls = true;
 
     if (mode === 'reparent') {
       this.applyFullscreenLayout(video, 'reparent');
@@ -209,7 +209,7 @@ export class FullscreenController {
       this.applySnapshot(video);
     }
 
-    video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--cover');
+    video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--css-cover');
     video.controls = this.state.originalControls;
     video.setAttribute('style', this.state.originalStyle);
 

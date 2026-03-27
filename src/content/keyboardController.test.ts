@@ -9,6 +9,15 @@ const createVideo = () => {
     writable: true,
     configurable: true,
   });
+  Object.defineProperty(video, 'currentTime', {
+    value: 12,
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(video, 'duration', {
+    value: 100,
+    configurable: true,
+  });
   return video;
 };
 
@@ -97,5 +106,24 @@ describe('KeyboardController', () => {
 
     expect(controller.handleKeyDown(event)).toBe(true);
     expect(exitFullscreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeks backward and forward with arrow keys in fullscreen', () => {
+    controller = new KeyboardController({
+      getShortcuts: () => shortcuts,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => true,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedHud,
+    });
+
+    const backwardEvent = new KeyboardEvent('keydown', { key: 'ArrowLeft' });
+    const forwardEvent = new KeyboardEvent('keydown', { key: 'ArrowRight' });
+
+    expect(controller.handleKeyDown(backwardEvent)).toBe(true);
+    expect(video?.currentTime).toBe(7);
+    expect(controller.handleKeyDown(forwardEvent)).toBe(true);
+    expect(video?.currentTime).toBe(12);
   });
 });

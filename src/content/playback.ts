@@ -10,3 +10,12 @@ export const resetPlaybackRate = (video: HTMLVideoElement) => {
   video.playbackRate = 1;
   return video.playbackRate;
 };
+
+export const seekBy = (video: HTMLVideoElement, seconds: number) => {
+  const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  const duration = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+  const nextTime = clamp(currentTime + seconds, 0, duration);
+
+  video.currentTime = Number(nextTime.toFixed(2));
+  return video.currentTime;
+};

@@ -43,7 +43,7 @@ const styles = `
   isolation: isolate;
 }
 
-.vsc-page-fullscreen-video--cover {
+.vsc-page-fullscreen-video--css-cover {
   isolation: isolate;
 }
 

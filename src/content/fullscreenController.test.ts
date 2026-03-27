@@ -24,12 +24,15 @@ describe('FullscreenController', () => {
     expect(document.getElementById('vsc-page-fullscreen-overlay')).not.toBeNull();
     expect(video.classList.contains('vsc-page-fullscreen-video')).toBe(true);
     expect(video.style.position).toBe('fixed');
+    expect(video.controls).toBe(true);
 
     controller.exit();
 
     expect(controller.isActive()).toBe(false);
     expect(parent.contains(video)).toBe(true);
     expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    expect(video.controls).toBe(false);
+    expect(video.classList.contains('vsc-page-fullscreen-video--css-cover')).toBe(false);
   });
 
   it('refuses to enter fullscreen for videos outside the top document', () => {

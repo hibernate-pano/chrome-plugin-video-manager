@@ -1,4 +1,4 @@
-import { resetPlaybackRate, stepPlaybackRate } from './playback';
+import { resetPlaybackRate, seekBy, stepPlaybackRate } from './playback';
 import { matchesShortcut } from '../shared/shortcuts';
 import type { ShortcutSettings } from '../shared/types';
 
@@ -93,6 +93,20 @@ export class KeyboardController {
 
     if (!activeVideo) {
       return false;
+    }
+
+    if (fullscreenActive && event.key === 'ArrowLeft') {
+      this.intercept(event);
+      this.clearRepeat();
+      seekBy(activeVideo, -5);
+      return true;
+    }
+
+    if (fullscreenActive && event.key === 'ArrowRight') {
+      this.intercept(event);
+      this.clearRepeat();
+      seekBy(activeVideo, 5);
+      return true;
     }
 
     if (matchesShortcut(event, shortcuts.increaseSpeed)) {
