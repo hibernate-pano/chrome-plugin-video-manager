@@ -2,13 +2,13 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "Video Speed Controller",
-  "version": "4.0.1",
-  "description": "Control video playback speed with keyboard shortcuts - Modern Edition",
+  "version": "5.0.0",
+  "description": "Minimal video speed shortcuts and page fullscreen for HTML5 video",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
   "web_accessible_resources": [
     {
-      "resources": ["content.js", "chunks/*.js", "globals.css"],
+      "resources": ["content.js", "chunks/*.js"],
       "matches": ["<all_urls>"]
     }
   ],

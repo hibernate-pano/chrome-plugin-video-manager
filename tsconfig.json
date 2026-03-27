@@ -10,16 +10,15 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    },
     "types": ["chrome"]
   },
-  "include": ["src"]
+  "include": [
+    "src/content/**/*.ts",
+    "src/options/**/*.ts",
+    "src/shared/**/*.ts"
+  ]
 }
