@@ -4,7 +4,7 @@ const styles = `
 #vsc-page-fullscreen-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2147483646;
+  z-index: 2147483645;
   display: none;
   background:
     radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 34%),
@@ -22,7 +22,7 @@ const styles = `
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  z-index: 2147483647;
+  z-index: 2147483646;
 }
 
 .vsc-page-fullscreen-video {
@@ -35,7 +35,7 @@ const styles = `
   max-width: 100vw;
   max-height: 100vh;
   object-fit: contain;
-  z-index: 2147483647;
+  z-index: 2147483646;
   background: #000;
 }
 

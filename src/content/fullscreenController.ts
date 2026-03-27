@@ -101,7 +101,7 @@ export class FullscreenController {
     video.style.setProperty('max-width', '100vw', 'important');
     video.style.setProperty('max-height', '100vh', 'important');
     video.style.setProperty('object-fit', 'contain', 'important');
-    video.style.setProperty('z-index', '2147483647', 'important');
+    video.style.setProperty('z-index', '2147483646', 'important');
     video.style.setProperty('background', '#000', 'important');
   }
 

@@ -48,6 +48,17 @@ export class SpeedHud {
     return root;
   }
 
+  private bringToFront(root: HTMLDivElement) {
+    if (root.parentElement !== document.body) {
+      document.body.appendChild(root);
+      return;
+    }
+
+    if (document.body.lastElementChild !== root) {
+      document.body.appendChild(root);
+    }
+  }
+
   private updatePosition() {
     if (!this.root || !this.activeVideo) {
       return;
@@ -78,6 +89,7 @@ export class SpeedHud {
 
   show(rate: number, video: HTMLVideoElement) {
     const root = this.ensureRoot();
+    this.bringToFront(root);
     this.activeVideo = video;
     this.updatePosition();
     this.updateTrend(rate);
