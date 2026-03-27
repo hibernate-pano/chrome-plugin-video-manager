@@ -21,6 +21,11 @@ if (!existsSync(resolve(distDir, '_locales', 'zh_CN'))) {
 // 复制 manifest.json
 copyFileSync(resolve(rootDir, 'manifest.json'), resolve(distDir, 'manifest.json'));
 
+// 复制 content script bootstrap
+if (existsSync(resolve(rootDir, 'content-loader.js'))) {
+  copyFileSync(resolve(rootDir, 'content-loader.js'), resolve(distDir, 'content-loader.js'));
+}
+
 // 复制 icons
 if (existsSync(resolve(rootDir, 'icons', 'icon16.png'))) {
   copyFileSync(resolve(rootDir, 'icons', 'icon16.png'), resolve(distDir, 'icons', 'icon16.png'));

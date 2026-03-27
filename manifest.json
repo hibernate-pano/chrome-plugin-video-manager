@@ -1,17 +1,24 @@
 {
   "manifest_version": 3,
+  "default_locale": "en",
   "name": "Video Speed Controller",
   "version": "4.0.1",
-  "description": "Control video playback speed with keyboard shortcuts - Cyberpunk Edition",
+  "description": "Control video playback speed with keyboard shortcuts - Modern Edition",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["content.js", "chunks/*.js", "globals.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_title": "Video Speed Controller"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["content-loader.js"],
       "run_at": "document_end"
     }
   ],

@@ -1,100 +1,157 @@
-import { useEffect, useRef } from 'react';
-import { mediaDetector } from '../core/mediaDetector';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { activeMediaSession } from '../core/runtime';
 import { KeyboardHandler } from '../core/keyboardHandler';
 import { useMediaStore } from '../stores/mediaStore';
 import { useUIStore } from '../stores/uiStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import {
+  ResumeRecord,
+  clearResumePosition,
+  getResumePositionForCurrentPage,
+  saveResumePosition,
+} from '../core/learningMemory';
 import Lightbox from './Lightbox/Lightbox';
 import HUD from './HUD/HUD';
+import ResumePrompt from './HUD/ResumePrompt';
 
 export default function ContentApp() {
-  const { setPlaybackRate, setVolume, setIsPlaying, setCurrentTime, setDuration } = useMediaStore();
-  const { showHUD, isFullscreen } = useUIStore();
-  const { shortcuts } = useSettingsStore();
+  const {
+    currentMedia,
+    currentTime,
+    duration,
+    isInLightbox,
+  } = useMediaStore((state) => ({
+    currentMedia: state.currentMedia,
+    currentTime: state.currentTime,
+    duration: state.duration,
+    isInLightbox: state.isInLightbox,
+  }));
+  const showHUD = useUIStore((state) => state.showHUD);
+  const {
+    shortcuts,
+    hydrate,
+    speedProfiles,
+    activeProfileId,
+    resumeEnabled,
+    hasHydrated,
+  } = useSettingsStore((state) => ({
+    shortcuts: state.shortcuts,
+    hydrate: state.hydrate,
+    speedProfiles: state.speedProfiles,
+    activeProfileId: state.activeProfileId,
+    resumeEnabled: state.resumeEnabled,
+    hasHydrated: state.hasHydrated,
+  }));
+  const handlerRef = useRef<KeyboardHandler | null>(null);
+  const lastPromptedKeyRef = useRef<string | null>(null);
+  const profileAppliedRef = useRef(new WeakMap<HTMLMediaElement, string>());
+  const [resumePrompt, setResumePrompt] = useState<ResumeRecord | null>(null);
 
-  // 使用 ref 来存储回调，避免无限循环
-  const showHUDRef = useRef(showHUD);
-  showHUDRef.current = showHUD;
-
-  const setPlaybackRateRef = useRef(setPlaybackRate);
-  setPlaybackRateRef.current = setPlaybackRate;
-
-  const setVolumeRef = useRef(setVolume);
-  setVolumeRef.current = setVolume;
-
-  const setIsPlayingRef = useRef(setIsPlaying);
-  setIsPlayingRef.current = setIsPlaying;
-
-  const setCurrentTimeRef = useRef(setCurrentTime);
-  setCurrentTimeRef.current = setCurrentTime;
-
-  const setDurationRef = useRef(setDuration);
-  setDurationRef.current = setDuration;
+  const activeProfile = useMemo(
+    () => speedProfiles.find((profile) => profile.id === activeProfileId) ?? speedProfiles[0],
+    [activeProfileId, speedProfiles],
+  );
 
   useEffect(() => {
-    const handleAction = (action: string, value: number) => {
-      if (action === 'speed') {
-        showHUDRef.current('speed', value);
-        setPlaybackRateRef.current(value);
-      } else if (action === 'volume') {
-        showHUDRef.current('volume', value);
-        setVolumeRef.current(value);
-      } else if (action === 'seek') {
-        showHUDRef.current('seek', value);
-      } else if (action === 'mute') {
-        showHUDRef.current('mute', value);
-      }
-    };
-
-    const handler = new KeyboardHandler(shortcuts, handleAction);
+    void hydrate();
+    activeMediaSession.start((type, value) => showHUD(type, value));
+    const handler = new KeyboardHandler(shortcuts);
+    handlerRef.current = handler;
     handler.init();
 
-    // 跟踪当前媒体元素，避免重复添加事件监听
-    let currentMedia: HTMLMediaElement | null = null;
-
-    const interval = setInterval(() => {
-      const media = mediaDetector.getCurrentMedia();
-      if (media && media !== currentMedia) {
-        // 媒体元素变化了
-        currentMedia = media;
-        useMediaStore.getState().setCurrentMedia(media);
-        useMediaStore.getState().setPlaybackRate(media.playbackRate);
-        useMediaStore.getState().setVolume(media.volume);
-        useMediaStore.getState().setIsPlaying(!media.paused);
-        useMediaStore.getState().setCurrentTime(media.currentTime);
-        useMediaStore.getState().setDuration(media.duration);
-      } else if (media) {
-        // 同步状态
-        useMediaStore.getState().setCurrentTime(media.currentTime);
-        useMediaStore.getState().setIsPlaying(!media.paused);
-      }
-    }, 500);
-
     return () => {
-      clearInterval(interval);
-      currentMedia = null;
+      handler.destroy();
+      handlerRef.current = null;
+      activeMediaSession.stop();
     };
+  }, [hydrate, showHUD]);
+
+  useEffect(() => {
+    handlerRef.current?.updateShortcuts(shortcuts);
   }, [shortcuts]);
 
-  // 处理全屏快捷键
   useEffect(() => {
-    const handleFullscreenKey = (e: KeyboardEvent) => {
-      if (e.key === shortcuts.fullscreen) {
-        const media = mediaDetector.getCurrentMedia();
-        if (media) {
-          useUIStore.getState().setFullscreen(!useUIStore.getState().isFullscreen);
-        }
+    if (!currentMedia || !activeProfile || !hasHydrated) {
+      return;
+    }
+
+    const appliedProfileId = profileAppliedRef.current.get(currentMedia);
+    if (appliedProfileId === activeProfile.id) {
+      return;
+    }
+
+    profileAppliedRef.current.set(currentMedia, activeProfile.id);
+    activeMediaSession.setPlaybackRate(activeProfile.speed);
+  }, [activeProfile, currentMedia, hasHydrated]);
+
+  useEffect(() => {
+    if (!resumeEnabled || !currentMedia || duration <= 0 || currentTime > 2) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void getResumePositionForCurrentPage().then((record) => {
+      if (cancelled || !record) {
+        return;
       }
+
+      if (record.pageKey === lastPromptedKeyRef.current) {
+        return;
+      }
+
+      if (record.currentTime < 5 || record.currentTime >= record.duration - 15) {
+        return;
+      }
+
+      lastPromptedKeyRef.current = record.pageKey;
+      setResumePrompt(record);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentMedia, currentTime, duration, resumeEnabled]);
+
+  useEffect(() => {
+    if (!resumeEnabled || !currentMedia) {
+      return;
+    }
+
+    const persist = () => void saveResumePosition(currentMedia);
+    const onEnded = () => {
+      setResumePrompt(null);
+      void clearResumePosition();
     };
 
-    document.addEventListener('keydown', handleFullscreenKey);
-    return () => document.removeEventListener('keydown', handleFullscreenKey);
-  }, [shortcuts.fullscreen]);
+    const intervalId = window.setInterval(persist, 5000);
+    window.addEventListener('pagehide', persist);
+    currentMedia.addEventListener('ended', onEnded);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('pagehide', persist);
+      currentMedia.removeEventListener('ended', onEnded);
+      persist();
+    };
+  }, [currentMedia, resumeEnabled]);
 
   return (
     <>
       <HUD />
-      {isFullscreen && <Lightbox />}
+      {resumePrompt ? (
+        <ResumePrompt
+          currentTime={resumePrompt.currentTime}
+          playbackRate={resumePrompt.playbackRate}
+          onResume={() => {
+            activeMediaSession.seekTo(resumePrompt.currentTime);
+            activeMediaSession.setPlaybackRate(resumePrompt.playbackRate);
+            setResumePrompt(null);
+          }}
+          onDismiss={() => setResumePrompt(null)}
+        />
+      ) : null}
+      {isInLightbox ? <Lightbox /> : null}
     </>
   );
 }

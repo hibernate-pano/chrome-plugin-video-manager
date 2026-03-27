@@ -1,37 +1,42 @@
 import { create } from 'zustand';
+import type { ActiveMediaSessionState } from '../core/types';
 
 interface MediaState {
   currentMedia: HTMLMediaElement | null;
+  mediaKind: ActiveMediaSessionState['mediaKind'];
   playbackRate: number;
   volume: number;
   isMuted: boolean;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
-
+  isInLightbox: boolean;
+  canFullscreen: boolean;
   setCurrentMedia: (media: HTMLMediaElement | null) => void;
-  setPlaybackRate: (rate: number) => void;
-  setVolume: (volume: number) => void;
-  toggleMute: () => void;
-  setIsPlaying: (playing: boolean) => void;
-  setCurrentTime: (time: number) => void;
-  setDuration: (duration: number) => void;
+  setSessionState: (state: ActiveMediaSessionState) => void;
 }
 
 export const useMediaStore = create<MediaState>((set) => ({
   currentMedia: null,
-  playbackRate: 1.0,
-  volume: 1.0,
+  mediaKind: null,
+  playbackRate: 1,
+  volume: 1,
   isMuted: false,
   isPlaying: false,
   currentTime: 0,
   duration: 0,
-
+  isInLightbox: false,
+  canFullscreen: false,
   setCurrentMedia: (media) => set({ currentMedia: media }),
-  setPlaybackRate: (rate) => set({ playbackRate: rate }),
-  setVolume: (volume) => set({ volume }),
-  toggleMute: () => set((state) => ({ isMuted: !state.isMuted })),
-  setIsPlaying: (playing) => set({ isPlaying: playing }),
-  setCurrentTime: (time) => set({ currentTime: time }),
-  setDuration: (duration) => set({ duration }),
+  setSessionState: (state) => set({
+    mediaKind: state.mediaKind,
+    playbackRate: state.playbackRate,
+    volume: state.volume,
+    isMuted: state.muted,
+    isPlaying: state.isPlaying,
+    currentTime: state.currentTime,
+    duration: state.duration,
+    isInLightbox: state.isInLightbox,
+    canFullscreen: state.canFullscreen,
+  }),
 }));

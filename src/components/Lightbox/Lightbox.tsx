@@ -1,41 +1,52 @@
-import { motion, AnimatePresence } from 'framer-motion';
-import { useUIStore } from '../../stores/uiStore';
-import { useMediaStore } from '../../stores/mediaStore';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AnimatePresence } from 'framer-motion';
+import { lightboxManager } from '../../core/runtime';
 import Controls from './Controls';
 
 export default function Lightbox() {
-  const { isFullscreen, showControls, setShowControls } = useUIStore();
-  const { currentMedia } = useMediaStore();
+  const controlsRoot = lightboxManager.getOverlayRoot();
+  const [showControls, setShowControls] = useState(true);
 
-  if (!isFullscreen || !currentMedia) return null;
+  useEffect(() => {
+    const overlay = document.getElementById('vsc-lightbox-overlay');
+    if (!overlay) {
+      return undefined;
+    }
 
-  return (
-    <motion.div
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[999999] bg-black"
-      onMouseMove={() => setShowControls(true)}
-    >
-      {/* 霓虹边框效果 */}
-      <div className="absolute inset-4 border-2 border-[#00f3ff]/30 rounded-lg shadow-[0_0_30px_rgba(0,243,255,0.3)]" />
+    let hideTimer = window.setTimeout(() => setShowControls(false), 2400);
 
-      {/* 视频容器 */}
-      <div className="absolute inset-8 flex items-center justify-center">
-        <video
-          ref={(el) => {
-            if (el) useMediaStore.getState().setCurrentMedia(el);
-          }}
-          className="max-w-full max-h-full object-contain"
-          src={(currentMedia as HTMLVideoElement).src}
-          controls={false}
-          autoPlay
-        />
-      </div>
+    const resetVisibility = () => {
+      setShowControls(true);
+      window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setShowControls(false), 2400);
+    };
 
-      {/* 控制栏 */}
-      <AnimatePresence>
-        {showControls && <Controls />}
-      </AnimatePresence>
-    </motion.div>
-  );
+    const keepVisibleOnPause = () => {
+      const media = lightboxManager.getMedia();
+      if (media?.paused) {
+        setShowControls(true);
+      }
+    };
+
+    overlay.addEventListener('mousemove', resetVisibility);
+    document.addEventListener('keydown', resetVisibility, true);
+    const media = lightboxManager.getMedia();
+    media?.addEventListener('pause', keepVisibleOnPause);
+
+    return () => {
+      window.clearTimeout(hideTimer);
+      overlay.removeEventListener('mousemove', resetVisibility);
+      document.removeEventListener('keydown', resetVisibility, true);
+      media?.removeEventListener('pause', keepVisibleOnPause);
+    };
+  }, [controlsRoot]);
+
+  const content = useMemo(() => (
+    <AnimatePresence>
+      {showControls ? <Controls /> : null}
+    </AnimatePresence>
+  ), [showControls]);
+
+  return controlsRoot ? createPortal(content, controlsRoot) : null;
 }

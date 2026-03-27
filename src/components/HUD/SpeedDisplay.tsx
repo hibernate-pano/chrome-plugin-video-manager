@@ -6,16 +6,17 @@ interface Props {
 
 export default function SpeedDisplay({ value }: Props) {
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex items-center gap-2">
       <motion.span
         key={value}
-        initial={{ scale: 1.5, color: '#00f3ff' }}
-        animate={{ scale: 1, color: '#ffffff' }}
-        className="text-6xl font-bold font-['Orbitron'] text-white"
+        initial={{ scale: 1.3, opacity: 0.5 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="text-3xl font-bold text-white"
       >
         {value.toFixed(1)}
       </motion.span>
-      <span className="text-4xl text-[#00f3ff] font-['Orbitron']">x</span>
+      <span className="text-xl text-white/60">x</span>
+      <span className="text-sm text-white/50 ml-2">播放速度</span>
     </div>
   );
 }

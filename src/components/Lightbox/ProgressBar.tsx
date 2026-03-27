@@ -1,24 +1,35 @@
-import { motion } from 'framer-motion';
+import { activeMediaSession } from '../../core/runtime';
 import { useMediaStore } from '../../stores/mediaStore';
 
 export default function ProgressBar() {
-  const { currentTime, duration, setCurrentTime } = useMediaStore();
-
+  const { currentTime, duration } = useMediaStore();
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  const seekWithPointer = (clientX: number, container: HTMLDivElement) => {
+    if (duration <= 0) {
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const percent = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    activeMediaSession.seekToPercent(percent);
+  };
+
   return (
-    <div className="h-2 bg-white/20 rounded-full cursor-pointer relative overflow-hidden">
-      <motion.div
-        className="absolute left-0 top-0 bottom-0 bg-gradient-to-r from-[#00f3ff] to-[#bc13fe]"
-        style={{ width: `${progress}%` }}
-      />
+    <div
+      className="vsc-progress"
+      onClick={(event) => seekWithPointer(event.clientX, event.currentTarget)}
+    >
+      <div className="vsc-progress-track" />
+      <div className="vsc-progress-fill" style={{ width: `${progress}%` }} />
+      <div className="vsc-progress-thumb" style={{ left: `calc(${progress}% - 6px)` }} />
       <input
         type="range"
         min={0}
         max={duration || 100}
         value={currentTime}
-        onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
-        className="absolute inset-0 w-full opacity-0 cursor-pointer"
+        onChange={(event) => activeMediaSession.seekTo(Number(event.target.value))}
+        className="vsc-progress-input"
       />
     </div>
   );
