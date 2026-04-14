@@ -1,6 +1,6 @@
 {
   "name": "video-speed-controller",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Chrome extension for controlling video playback speed with keyboard shortcuts",
   "type": "module",
   "scripts": {

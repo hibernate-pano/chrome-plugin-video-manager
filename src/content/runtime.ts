@@ -1,5 +1,5 @@
 import { loadSettings, subscribeToSettings } from '../shared/settings';
-import { PersistedSettings } from '../shared/types';
+import { DEFAULT_SHORTCUTS, PersistedSettings } from '../shared/types';
 import { FullscreenController } from './fullscreenController';
 import { KeyboardController } from './keyboardController';
 import { installRuntimeStyles } from './runtimeStyles';
@@ -37,7 +37,13 @@ export class ContentRuntime {
 
   async start() {
     installRuntimeStyles();
-    this.settings = await loadSettings();
+    try {
+      this.settings = await loadSettings();
+    } catch (error) {
+      console.error('Video Speed Controller failed to load settings, using defaults', error);
+      this.settings = { shortcuts: DEFAULT_SHORTCUTS };
+    }
+
     this.unsubscribeSettings = subscribeToSettings((settings) => {
       this.settings = settings;
     });

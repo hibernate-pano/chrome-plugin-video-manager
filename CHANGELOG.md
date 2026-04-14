@@ -5,6 +5,18 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.2] - 2026-04-14
+
+### 修复 (Fixed)
+
+- 修复设置页在 `chrome.storage` 失败时仍提示保存成功的问题
+- 修复内容脚本在读取设置失败时可能直接失效的问题
+
+### 文档 (Documentation)
+
+- 同步 README、测试说明和架构文档到当前真实实现
+- 清理不再执行的旧测试资产，避免测试信号失真
+
 ## [1.5.1] - 2026-04-14
 
 ### 修复 (Fixed)

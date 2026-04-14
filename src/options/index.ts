@@ -372,9 +372,15 @@ const applyShortcuts = (shortcuts: typeof DEFAULT_SHORTCUTS) => {
   validateInputs();
 };
 
-void loadSettings().then((settings) => {
-  applyShortcuts(settings.shortcuts);
-});
+void loadSettings()
+  .then((settings) => {
+    applyShortcuts(settings.shortcuts);
+  })
+  .catch((error) => {
+    console.error('Failed to load Video Speed Controller settings', error);
+    applyShortcuts(DEFAULT_SHORTCUTS);
+    setStatus('读取设置失败，已回退到默认快捷键。', 'error');
+  });
 
 resetButton.addEventListener('click', () => {
   applyShortcuts(DEFAULT_SHORTCUTS);
@@ -388,8 +394,13 @@ saveButton.addEventListener('click', () => {
     return;
   }
 
-  void saveSettings({ shortcuts: getShortcutSnapshot() }).then(() => {
-    setStatus('快捷键已保存，并会在已打开页面中立即生效。', 'success');
-    window.setTimeout(() => setStatus(''), 1600);
-  });
+  void saveSettings({ shortcuts: getShortcutSnapshot() })
+    .then(() => {
+      setStatus('快捷键已保存，并会在已打开页面中立即生效。', 'success');
+      window.setTimeout(() => setStatus(''), 1600);
+    })
+    .catch((error) => {
+      console.error('Failed to save Video Speed Controller settings', error);
+      setStatus('保存设置失败，请稍后重试。', 'error');
+    });
 });

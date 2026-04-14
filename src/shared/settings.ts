@@ -14,6 +14,27 @@ const inMemoryStorage = new Map<string, unknown>();
 const hasChromeStorage = () =>
   typeof chrome !== 'undefined' && typeof chrome.storage !== 'undefined';
 
+const getRuntimeError = () => {
+  if (typeof chrome === 'undefined' || typeof chrome.runtime === 'undefined') {
+    return null;
+  }
+
+  return chrome.runtime.lastError ?? null;
+};
+
+const rejectOnRuntimeError = (
+  reject: (reason?: unknown) => void,
+  resolve: () => void,
+) => {
+  const error = getRuntimeError();
+  if (error) {
+    reject(new Error(error.message));
+    return;
+  }
+
+  resolve();
+};
+
 const getChromeStorageArea = (namespace: StorageNamespace) => {
   if (!hasChromeStorage()) {
     return null;
@@ -28,8 +49,16 @@ const getValue = async <T>(namespace: StorageNamespace, key: string): Promise<T 
     return inMemoryStorage.get(`${namespace}:${key}`) as T | undefined;
   }
 
-  return new Promise<T | undefined>((resolve) => {
-    storageArea.get(key, (result) => resolve(result[key] as T | undefined));
+  return new Promise<T | undefined>((resolve, reject) => {
+    storageArea.get(key, (result) => {
+      const error = getRuntimeError();
+      if (error) {
+        reject(new Error(error.message));
+        return;
+      }
+
+      resolve(result[key] as T | undefined);
+    });
   });
 };
 
@@ -40,8 +69,8 @@ const setValue = async (namespace: StorageNamespace, key: string, value: unknown
     return;
   }
 
-  return new Promise<void>((resolve) => {
-    storageArea.set({ [key]: value }, () => resolve());
+  return new Promise<void>((resolve, reject) => {
+    storageArea.set({ [key]: value }, () => rejectOnRuntimeError(reject, resolve));
   });
 };
 
@@ -52,8 +81,8 @@ const removeValue = async (namespace: StorageNamespace, key: string): Promise<vo
     return;
   }
 
-  return new Promise<void>((resolve) => {
-    storageArea.remove(key, () => resolve());
+  return new Promise<void>((resolve, reject) => {
+    storageArea.remove(key, () => rejectOnRuntimeError(reject, resolve));
   });
 };
 
