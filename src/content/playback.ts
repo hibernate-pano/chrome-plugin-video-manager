@@ -11,6 +11,18 @@ export const resetPlaybackRate = (video: HTMLVideoElement) => {
   return video.playbackRate;
 };
 
+export const togglePlayback = (video: HTMLVideoElement) => {
+  if (video.paused) {
+    void video.play().catch(() => {
+      // Best effort.
+    });
+    return true;
+  }
+
+  video.pause();
+  return false;
+};
+
 export const seekBy = (video: HTMLVideoElement, seconds: number) => {
   const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
   const duration = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;

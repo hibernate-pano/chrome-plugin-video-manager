@@ -4,6 +4,7 @@ import { ShortcutSettings } from '../shared/types';
 
 const createVideo = () => {
   const video = document.createElement('video');
+  let paused = false;
   Object.defineProperty(video, 'playbackRate', {
     value: 1,
     writable: true,
@@ -16,6 +17,26 @@ const createVideo = () => {
   });
   Object.defineProperty(video, 'duration', {
     value: 100,
+    configurable: true,
+  });
+  Object.defineProperty(video, 'paused', {
+    get: () => paused,
+    set: (value: boolean) => {
+      paused = value;
+    },
+    configurable: true,
+  });
+  Object.defineProperty(video, 'play', {
+    value: vi.fn(() => {
+      paused = false;
+      return Promise.resolve();
+    }),
+    configurable: true,
+  });
+  Object.defineProperty(video, 'pause', {
+    value: vi.fn(() => {
+      paused = true;
+    }),
     configurable: true,
   });
   return video;
@@ -125,5 +146,27 @@ describe('KeyboardController', () => {
     expect(video?.currentTime).toBe(7);
     expect(controller.handleKeyDown(forwardEvent)).toBe(true);
     expect(video?.currentTime).toBe(12);
+  });
+
+  it('toggles playback with space in fullscreen', () => {
+    controller = new KeyboardController({
+      getShortcuts: () => shortcuts,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => true,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedHud,
+    });
+
+    const pauseEvent = new KeyboardEvent('keydown', { key: ' ' });
+    const playEvent = new KeyboardEvent('keydown', { key: ' ' });
+
+    expect(controller.handleKeyDown(pauseEvent)).toBe(true);
+    expect(video?.pause).toHaveBeenCalledTimes(1);
+    expect(video?.paused).toBe(true);
+
+    expect(controller.handleKeyDown(playEvent)).toBe(true);
+    expect(video?.play).toHaveBeenCalledTimes(1);
+    expect(video?.paused).toBe(false);
   });
 });

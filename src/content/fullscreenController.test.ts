@@ -35,6 +35,55 @@ describe('FullscreenController', () => {
     expect(video.classList.contains('vsc-page-fullscreen-video--css-cover')).toBe(false);
   });
 
+  it('preserves the live playback position when exiting fullscreen', () => {
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+
+    let currentTime = 12;
+    Object.defineProperty(video, 'currentTime', {
+      get: () => currentTime,
+      set: (value: number) => {
+        currentTime = value;
+      },
+      configurable: true,
+    });
+
+    Object.defineProperty(video, 'playbackRate', {
+      value: 1,
+      writable: true,
+      configurable: true,
+    });
+
+    Object.defineProperty(video, 'muted', {
+      value: false,
+      writable: true,
+      configurable: true,
+    });
+
+    Object.defineProperty(video, 'paused', {
+      value: false,
+      writable: true,
+      configurable: true,
+    });
+
+    Object.defineProperty(video, 'play', {
+      value: vi.fn(() => Promise.resolve()),
+      configurable: true,
+    });
+
+    expect(controller.enter(video)).toBe(true);
+
+    currentTime = 18;
+
+    controller.exit();
+
+    expect(currentTime).toBe(18);
+    expect(parent.contains(video)).toBe(true);
+  });
+
   it('refuses to enter fullscreen for videos outside the top document', () => {
     const controller = new FullscreenController();
     const video = document.createElement('video');

@@ -16,6 +16,13 @@ interface FullscreenSnapshot {
   muted: boolean;
 }
 
+interface PlaybackSnapshot {
+  currentTime: number;
+  playbackRate: number;
+  paused: boolean;
+  muted: boolean;
+}
+
 const OVERLAY_ID = 'vsc-page-fullscreen-overlay';
 const STAGE_ID = 'vsc-page-fullscreen-stage';
 
@@ -74,17 +81,26 @@ export class FullscreenController {
     return { overlay, stage };
   }
 
-  private applySnapshot(video: HTMLVideoElement) {
+  private capturePlaybackSnapshot(video: HTMLVideoElement): PlaybackSnapshot {
+    return {
+      currentTime: video.currentTime,
+      playbackRate: video.playbackRate,
+      paused: video.paused,
+      muted: video.muted,
+    };
+  }
+
+  private applySnapshot(video: HTMLVideoElement, snapshot: PlaybackSnapshot) {
     try {
-      video.currentTime = this.state.currentTime;
+      video.currentTime = snapshot.currentTime;
     } catch {
       // Best effort.
     }
 
-    video.playbackRate = this.state.playbackRate;
-    video.muted = this.state.muted;
+    video.playbackRate = snapshot.playbackRate;
+    video.muted = snapshot.muted;
 
-    if (!this.state.paused) {
+    if (!snapshot.paused) {
       void video.play().catch(() => {
         // Best effort.
       });
@@ -115,10 +131,11 @@ export class FullscreenController {
       return;
     }
 
+    const playbackSnapshot = this.capturePlaybackSnapshot(video);
     this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
     this.state.mode = 'css-cover';
     this.applyCssCover(video);
-    this.applySnapshot(video);
+    this.applySnapshot(video, playbackSnapshot);
   }
 
   private startHealthCheck() {
@@ -170,9 +187,10 @@ export class FullscreenController {
     video.controls = true;
 
     if (mode === 'reparent') {
+      const playbackSnapshot = this.capturePlaybackSnapshot(video);
       this.applyFullscreenLayout(video, 'reparent');
       stage.appendChild(video);
-      this.applySnapshot(video);
+      this.applySnapshot(video, playbackSnapshot);
 
       window.setTimeout(() => {
         if (!this.state.video || this.state.video !== video || this.state.mode !== 'reparent') {
@@ -205,8 +223,9 @@ export class FullscreenController {
     const overlay = document.getElementById(OVERLAY_ID);
 
     if (this.state.mode === 'reparent' && this.state.originalParent) {
+      const playbackSnapshot = this.capturePlaybackSnapshot(video);
       this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
-      this.applySnapshot(video);
+      this.applySnapshot(video, playbackSnapshot);
     }
 
     video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--css-cover');

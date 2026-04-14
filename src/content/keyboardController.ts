@@ -1,4 +1,4 @@
-import { resetPlaybackRate, seekBy, stepPlaybackRate } from './playback';
+import { resetPlaybackRate, seekBy, stepPlaybackRate, togglePlayback } from './playback';
 import { matchesShortcut } from '../shared/shortcuts';
 import type { ShortcutSettings } from '../shared/types';
 
@@ -106,6 +106,13 @@ export class KeyboardController {
       this.intercept(event);
       this.clearRepeat();
       seekBy(activeVideo, 5);
+      return true;
+    }
+
+    if (fullscreenActive && (event.key === ' ' || event.key === 'Spacebar')) {
+      this.intercept(event);
+      this.clearRepeat();
+      togglePlayback(activeVideo);
       return true;
     }
 
