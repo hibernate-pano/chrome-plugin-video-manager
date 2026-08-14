@@ -1,6 +1,11 @@
 const HUD_ID = 'vsc-speed-hud';
 
-const formatRate = (value: number) => value.toFixed(2).replace(/\.00$/, '.0');
+const RATE_HIDE_DELAY = 1400;
+const PLAYBACK_HIDE_DELAY = 800;
+
+/** 1.50 -> "1.5"，1.00 -> "1"，1.25 -> "1.25"。 */
+const formatRate = (value: number) =>
+  value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 
 export class SpeedHud {
   private root: HTMLDivElement | null = null;
@@ -18,29 +23,10 @@ export class SpeedHud {
     root.id = HUD_ID;
     root.setAttribute('aria-hidden', 'true');
     root.innerHTML = `
-      <div class="vsc-speed-hud__shell">
-        <div class="vsc-speed-hud__aura"></div>
-        <div class="vsc-speed-hud__header">
-          <span>VSC</span>
-          <span>HUD</span>
-          <span class="vsc-speed-hud__label">SPEED</span>
-        </div>
-        <div class="vsc-speed-hud__body">
-          <div>
-            <div class="vsc-speed-hud__value">
-              <div class="vsc-speed-hud__rate">1.0</div>
-              <div class="vsc-speed-hud__unit">x</div>
-            </div>
-            <div class="vsc-speed-hud__meta">
-              <span class="vsc-speed-hud__trend">•</span>
-              <span class="vsc-speed-hud__label">SPEED</span>
-              <span>PLAYBACK VECTOR</span>
-            </div>
-          </div>
-          <div class="vsc-speed-hud__orb">
-            <div class="vsc-speed-hud__ring"></div>
-          </div>
-        </div>
+      <div class="vsc-hud__inner">
+        <span class="vsc-hud__glyph"></span>
+        <span class="vsc-hud__value"><span class="vsc-hud__rate">1</span><span class="vsc-hud__unit">x</span></span>
+        <span class="vsc-hud__trend"></span>
       </div>
     `;
     document.body.appendChild(root);
@@ -69,39 +55,15 @@ export class SpeedHud {
     this.root.style.left = `${Math.max(12, rect.left + 12)}px`;
   }
 
-  private updateTrend(nextRate: number) {
-    if (!this.root) {
-      return;
-    }
-
-    const trend = nextRate > this.lastRate ? 'up' : nextRate < this.lastRate ? 'down' : 'up';
-    this.root.dataset.trend = trend;
-
-    const trendGlyph = this.root.querySelector<HTMLElement>('.vsc-speed-hud__trend');
-    const label = this.root.querySelectorAll<HTMLElement>('.vsc-speed-hud__label');
-    if (trendGlyph) {
-      trendGlyph.textContent = trend === 'up' ? '▲' : '▼';
-    }
-    label.forEach((node) => {
-      node.textContent = trend === 'up' ? 'FASTER' : 'SLOWER';
-    });
-  }
-
-  show(rate: number, video: HTMLVideoElement) {
+  private show(mode: 'rate' | 'playback', hideDelay: number) {
     const root = this.ensureRoot();
     this.bringToFront(root);
-    this.activeVideo = video;
     this.updatePosition();
-    this.updateTrend(rate);
-
-    const rateNode = root.querySelector<HTMLElement>('.vsc-speed-hud__rate');
-    if (rateNode) {
-      rateNode.textContent = formatRate(rate);
-    }
 
     root.classList.remove('vsc-visible');
     void root.offsetWidth;
     root.classList.add('vsc-visible');
+    root.dataset.mode = mode;
 
     if (this.hideTimer !== null) {
       window.clearTimeout(this.hideTimer);
@@ -114,9 +76,54 @@ export class SpeedHud {
       root.classList.remove('vsc-visible');
       window.removeEventListener('scroll', this.boundUpdatePosition, true);
       window.removeEventListener('resize', this.boundUpdatePosition);
-    }, 1400);
+    }, hideDelay);
+  }
 
+  /** 速度模式：大数字 + 趋势箭头。 */
+  showRate(rate: number, video: HTMLVideoElement) {
+    const root = this.ensureRoot();
+    this.activeVideo = video;
+    this.updateTrend(rate);
+
+    const rateNode = root.querySelector<HTMLElement>('.vsc-hud__rate');
+    if (rateNode) {
+      rateNode.textContent = formatRate(rate);
+    }
+
+    this.show('rate', RATE_HIDE_DELAY);
     this.lastRate = rate;
+  }
+
+  /** 播放/暂停模式：状态字形 + 当前速度。 */
+  showPlayback(playing: boolean, video: HTMLVideoElement) {
+    const root = this.ensureRoot();
+    this.activeVideo = video;
+
+    const glyph = root.querySelector<HTMLElement>('.vsc-hud__glyph');
+    if (glyph) {
+      glyph.textContent = playing ? '▶' : '⏸';
+    }
+
+    const rateNode = root.querySelector<HTMLElement>('.vsc-hud__rate');
+    if (rateNode) {
+      rateNode.textContent = formatRate(video.playbackRate);
+    }
+
+    this.show('playback', PLAYBACK_HIDE_DELAY);
+  }
+
+  private updateTrend(nextRate: number) {
+    if (!this.root) {
+      return;
+    }
+
+    const trend = nextRate > this.lastRate ? 'up' : nextRate < this.lastRate ? 'down' : 'up';
+    this.root.dataset.trend = trend;
+
+    const trendNode = this.root.querySelector<HTMLElement>('.vsc-hud__trend');
+    if (trendNode) {
+      trendNode.textContent = trend === 'up' ? '▲' : '▼';
+    }
   }
 
   destroy() {

@@ -1,7 +1,15 @@
 import {
+  DEFAULT_MAX_SPEED,
+  DEFAULT_PRESET_SPEEDS,
   DEFAULT_SHORTCUTS,
+  DEFAULT_SITE_SPEED_MEMORY,
+  DEFAULT_SPACE_TOGGLE_PLAY,
   LEGACY_SHORTCUTS_KEY,
+  MAX_SPEED_MAX,
+  MAX_SPEED_MIN,
   PersistedSettings,
+  PRESET_SPEED_MAX,
+  PRESET_SPEED_MIN,
   STORAGE_KEY,
   ShortcutSettings,
 } from './types';
@@ -100,6 +108,30 @@ const migrateLegacyShortcuts = (legacyValue: unknown): Partial<ShortcutSettings>
   };
 };
 
+const roundToTwo = (value: number) => Math.round(value * 100) / 100;
+
+/** 归一化预设速度：非法值回退默认，逐项限制在 [PRESET_SPEED_MIN, PRESET_SPEED_MAX]。 */
+export const normalizePresetSpeeds = (value: unknown): number[] => {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_PRESET_SPEEDS];
+  }
+
+  const speeds = value
+    .filter((item): item is number => typeof item === 'number' && Number.isFinite(item))
+    .map((item) => roundToTwo(Math.min(PRESET_SPEED_MAX, Math.max(PRESET_SPEED_MIN, item))));
+
+  return speeds.length > 0 ? speeds : [...DEFAULT_PRESET_SPEEDS];
+};
+
+/** 归一化最大速度：非法值回退默认，限制在 [MAX_SPEED_MIN, MAX_SPEED_MAX]。 */
+export const normalizeMaxSpeed = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_MAX_SPEED;
+  }
+
+  return roundToTwo(Math.min(MAX_SPEED_MAX, Math.max(MAX_SPEED_MIN, value)));
+};
+
 export const normalizePersistedSettings = (
   currentValue: unknown,
   legacyValue?: unknown,
@@ -120,6 +152,14 @@ export const normalizePersistedSettings = (
       ...(shortcutsCandidate as Partial<ShortcutSettings> | null ?? {}),
       ...legacyShortcuts,
     }),
+    presetSpeeds: normalizePresetSpeeds(currentRecord?.presetSpeeds),
+    spaceTogglePlay: typeof currentRecord?.spaceTogglePlay === 'boolean'
+      ? currentRecord.spaceTogglePlay
+      : DEFAULT_SPACE_TOGGLE_PLAY,
+    maxSpeed: normalizeMaxSpeed(currentRecord?.maxSpeed),
+    siteSpeedMemory: typeof currentRecord?.siteSpeedMemory === 'boolean'
+      ? currentRecord.siteSpeedMemory
+      : DEFAULT_SITE_SPEED_MEMORY,
   };
 };
 

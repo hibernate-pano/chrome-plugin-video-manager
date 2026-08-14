@@ -162,5 +162,217 @@
   "exitFullscreen": {
     "message": "ページフルスクリーンモードでは、ESCキーを押してフルスクリーンを終了できます。",
     "description": "Exit fullscreen note"
+  },
+  "optEyebrow": {
+    "message": "Video Speed Controller v5.2",
+    "description": "optEyebrow"
+  },
+  "optTitle": {
+    "message": "3つのことだけ：速度調整、プリセット速度、ページ全画面。",
+    "description": "optTitle"
+  },
+  "optDescription": {
+    "message": "履歴機能も追加パネルも隠し操作もありません。ショートカット・プリセット速度・再生制限を設定するだけで、コンテンツスクリプトが即座に反映します。",
+    "description": "optDescription"
+  },
+  "optShortcutsTitle": {
+    "message": "キーボードショートカット",
+    "description": "optShortcutsTitle"
+  },
+  "optShortcutsDesc": {
+    "message": "入力欄をクリックして新しいキーを押してください。保存後、開いているページに即時反映されます。",
+    "description": "optShortcutsDesc"
+  },
+  "optPresetsTitle": {
+    "message": "プリセット速度",
+    "description": "optPresetsTitle"
+  },
+  "optPresetsDesc": {
+    "message": "数字キー 1-4 でよく使う速度に直接切り替え。細かい調整は不要です。",
+    "description": "optPresetsDesc"
+  },
+  "optPresetPlaceholder": {
+    "message": "例: 1.5",
+    "description": "optPresetPlaceholder"
+  },
+  "optSpaceTitle": {
+    "message": "スペースキーで再生/一時停止",
+    "description": "optSpaceTitle"
+  },
+  "optSpaceDesc": {
+    "message": "ページ全画面以外でもスペースキーで再生/一時停止を切り替えます（全画面と同じ動作）。",
+    "description": "optSpaceDesc"
+  },
+  "optMaxSpeedTitle": {
+    "message": "最大速度",
+    "description": "optMaxSpeedTitle"
+  },
+  "optMaxSpeedDesc": {
+    "message": "ステップとプリセットの上限。長押しでの暴走を防ぎます。",
+    "description": "optMaxSpeedDesc"
+  },
+  "optMemoryTitle": {
+    "message": "サイトごとの速度を記憶",
+    "description": "optMemoryTitle"
+  },
+  "optMemoryDesc": {
+    "message": "ページの再読み込みや再オープン時に、そのサイトの前回速度を自動復元します。",
+    "description": "optMemoryDesc"
+  },
+  "optMemoryClearLabel": {
+    "message": "記憶をすべて消去",
+    "description": "optMemoryClearLabel"
+  },
+  "optMemoryCleared": {
+    "message": "記憶したサイト速度をすべて消去しました。",
+    "description": "optMemoryCleared"
+  },
+  "optReset": {
+    "message": "デフォルトに戻す",
+    "description": "optReset"
+  },
+  "optSave": {
+    "message": "設定を保存",
+    "description": "optSave"
+  },
+  "optPressKey": {
+    "message": "新しいショートカットを押す",
+    "description": "optPressKey"
+  },
+  "optSaved": {
+    "message": "設定を保存しました。開いているページに即時反映されます。",
+    "description": "optSaved"
+  },
+  "optSaveFailed": {
+    "message": "設定の保存に失敗しました。もう一度お試しください。",
+    "description": "optSaveFailed"
+  },
+  "optLoadFailed": {
+    "message": "設定の読み込みに失敗しました。デフォルト設定を使用します。",
+    "description": "optLoadFailed"
+  },
+  "optResetDone": {
+    "message": "デフォルト設定に戻しました。保存すると反映されます。",
+    "description": "optResetDone"
+  },
+  "optDuplicate": {
+    "message": "重複するショートカットがあります。各操作に異なるキーを割り当ててください。",
+    "description": "optDuplicate"
+  },
+  "optReserved": {
+    "message": "一部のショートカットはブラウザ標準の操作と競合し、ブラウザが優先される場合があります。",
+    "description": "optReserved"
+  },
+  "optFixDuplicate": {
+    "message": "先に重複するショートカットを修正してください。",
+    "description": "optFixDuplicate"
+  },
+  "optPresetRange": {
+    "message": "プリセット速度は 0.25〜8 の範囲で指定してください。",
+    "description": "optPresetRange"
+  },
+  "optMaxSpeedRange": {
+    "message": "最大速度は 1.5〜16 の範囲で指定してください。",
+    "description": "optMaxSpeedRange"
+  },
+  "shortcutIncrease": {
+    "message": "速度アップ",
+    "description": "shortcutIncrease"
+  },
+  "shortcutIncreaseDesc": {
+    "message": "再生速度を上げる（+0.1）",
+    "description": "shortcutIncreaseDesc"
+  },
+  "shortcutDecrease": {
+    "message": "速度ダウン",
+    "description": "shortcutDecrease"
+  },
+  "shortcutDecreaseDesc": {
+    "message": "再生速度を下げる（-0.1）",
+    "description": "shortcutDecreaseDesc"
+  },
+  "shortcutReset": {
+    "message": "速度をリセット",
+    "description": "shortcutReset"
+  },
+  "shortcutResetDesc": {
+    "message": "1.0x に戻す",
+    "description": "shortcutResetDesc"
+  },
+  "shortcutFullscreen": {
+    "message": "ページ全画面",
+    "description": "shortcutFullscreen"
+  },
+  "shortcutFullscreenDesc": {
+    "message": "ページ全画面に入る/出る",
+    "description": "shortcutFullscreenDesc"
+  },
+  "popupPlaying": {
+    "message": "再生中",
+    "description": "popupPlaying"
+  },
+  "popupPaused": {
+    "message": "一時停止中",
+    "description": "popupPaused"
+  },
+  "popupKeyIncrease": {
+    "message": "速度アップ",
+    "description": "popupKeyIncrease"
+  },
+  "popupKeyDecrease": {
+    "message": "速度ダウン",
+    "description": "popupKeyDecrease"
+  },
+  "popupKeyReset": {
+    "message": "リセット",
+    "description": "popupKeyReset"
+  },
+  "popupKeyPresets": {
+    "message": "プリセット",
+    "description": "popupKeyPresets"
+  },
+  "popupKeyPlay": {
+    "message": "再生/一時停止",
+    "description": "popupKeyPlay"
+  },
+  "popupKeyFullscreen": {
+    "message": "全画面",
+    "description": "popupKeyFullscreen"
+  },
+  "popupCurrentSpeed": {
+    "message": "現在の速度",
+    "description": "popupCurrentSpeed"
+  },
+  "popupResetSpeed": {
+    "message": "1x にリセット",
+    "description": "popupResetSpeed"
+  },
+  "popupOpenSettings": {
+    "message": "設定",
+    "description": "popupOpenSettings"
+  },
+  "popupShortcuts": {
+    "message": "ショートカット",
+    "description": "popupShortcuts"
+  },
+  "popupOpenOptions": {
+    "message": "詳細設定を開く",
+    "description": "popupOpenOptions"
+  },
+  "popupNoTab": {
+    "message": "現在のタブにアクセスできません",
+    "description": "popupNoTab"
+  },
+  "popupNoVideo": {
+    "message": "このページに操作できる動画はありません",
+    "description": "popupNoVideo"
+  },
+  "popupSiteMemory": {
+    "message": "このサイトの速度を記憶",
+    "description": "popupSiteMemory"
+  },
+  "popupSiteMemoryDesc": {
+    "message": "ページを再度開いたときに復元されます",
+    "description": "popupSiteMemoryDesc"
   }
 }

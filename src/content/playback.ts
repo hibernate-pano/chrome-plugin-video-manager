@@ -1,13 +1,22 @@
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-export const stepPlaybackRate = (video: HTMLVideoElement, delta: number) => {
-  const nextRate = clamp(video.playbackRate + delta, 0.1, 16);
+/** 媒体速率绝对下限。 */
+export const MIN_PLAYBACK_RATE = 0.1;
+
+export const stepPlaybackRate = (video: HTMLVideoElement, delta: number, max = 16) => {
+  const nextRate = clamp(video.playbackRate + delta, MIN_PLAYBACK_RATE, max);
   video.playbackRate = Number(nextRate.toFixed(2));
   return video.playbackRate;
 };
 
 export const resetPlaybackRate = (video: HTMLVideoElement) => {
   video.playbackRate = 1;
+  return video.playbackRate;
+};
+
+export const applyPresetSpeed = (video: HTMLVideoElement, preset: number, max = 16) => {
+  const nextRate = clamp(preset, MIN_PLAYBACK_RATE, max);
+  video.playbackRate = Number(nextRate.toFixed(2));
   return video.playbackRate;
 };
 

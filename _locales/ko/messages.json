@@ -162,5 +162,217 @@
   "exitFullscreen": {
     "message": "페이지 전체 화면 모드에서 ESC 키를 눌러 전체 화면을 종료할 수 있습니다.",
     "description": "Exit fullscreen note"
+  },
+  "optEyebrow": {
+    "message": "Video Speed Controller v5.2",
+    "description": "optEyebrow"
+  },
+  "optTitle": {
+    "message": "딱 세 가지: 속도 조절, 프리셋 속도, 페이지 전체 화면.",
+    "description": "optTitle"
+  },
+  "optDescription": {
+    "message": "히스토리 기능, 추가 패널, 숨은 동작이 없습니다. 단축키·프리셋 속도·재생 제한만 설정하면 콘텐츠 스크립트가 즉시 반영합니다.",
+    "description": "optDescription"
+  },
+  "optShortcutsTitle": {
+    "message": "키보드 단축키",
+    "description": "optShortcutsTitle"
+  },
+  "optShortcutsDesc": {
+    "message": "필드를 클릭하고 새 키 조합을 누르세요. 저장 후 열려 있는 페이지에 즉시 반영됩니다.",
+    "description": "optShortcutsDesc"
+  },
+  "optPresetsTitle": {
+    "message": "사전 설정 속도",
+    "description": "optPresetsTitle"
+  },
+  "optPresetsDesc": {
+    "message": "숫자 키 1-4로 자주 쓰는 속도로 바로 전환, 세밀한 조정 불필요.",
+    "description": "optPresetsDesc"
+  },
+  "optPresetPlaceholder": {
+    "message": "예: 1.5",
+    "description": "optPresetPlaceholder"
+  },
+  "optSpaceTitle": {
+    "message": "스페이스바 재생/일시정지",
+    "description": "optSpaceTitle"
+  },
+  "optSpaceDesc": {
+    "message": "페이지 전체 화면 밖에서도 스페이스바로 재생/일시정지를 전환합니다(전체 화면과 동일).",
+    "description": "optSpaceDesc"
+  },
+  "optMaxSpeedTitle": {
+    "message": "최대 재생 속도",
+    "description": "optMaxSpeedTitle"
+  },
+  "optMaxSpeedDesc": {
+    "message": "단계 및 프리셋 상한. 키를 길게 눌렀을 때 과속을 방지합니다.",
+    "description": "optMaxSpeedDesc"
+  },
+  "optMemoryTitle": {
+    "message": "사이트별 속도 기억",
+    "description": "optMemoryTitle"
+  },
+  "optMemoryDesc": {
+    "message": "새로고침하거나 다시 열 때 해당 사이트에서 마지막으로 사용한 속도를 자동 복원합니다.",
+    "description": "optMemoryDesc"
+  },
+  "optMemoryClearLabel": {
+    "message": "기억 모두 지우기",
+    "description": "optMemoryClearLabel"
+  },
+  "optMemoryCleared": {
+    "message": "기억된 사이트 속도를 모두 지웠습니다.",
+    "description": "optMemoryCleared"
+  },
+  "optReset": {
+    "message": "기본값 복원",
+    "description": "optReset"
+  },
+  "optSave": {
+    "message": "설정 저장",
+    "description": "optSave"
+  },
+  "optPressKey": {
+    "message": "새 단축키를 누르세요",
+    "description": "optPressKey"
+  },
+  "optSaved": {
+    "message": "설정이 저장되었고 열려 있는 페이지에 즉시 적용됩니다.",
+    "description": "optSaved"
+  },
+  "optSaveFailed": {
+    "message": "설정 저장에 실패했습니다. 잠시 후 다시 시도하세요.",
+    "description": "optSaveFailed"
+  },
+  "optLoadFailed": {
+    "message": "설정을 불러오지 못해 기본값을 사용합니다.",
+    "description": "optLoadFailed"
+  },
+  "optResetDone": {
+    "message": "기본값이 복원되었습니다. 저장을 클릭하면 적용됩니다.",
+    "description": "optResetDone"
+  },
+  "optDuplicate": {
+    "message": "단축키가 중복되었습니다. 각 동작에 다른 키를 지정하세요.",
+    "description": "optDuplicate"
+  },
+  "optReserved": {
+    "message": "일부 단축키는 브라우저 기본 단축키와 충돌하여 브라우저가 우선 처리할 수 있습니다.",
+    "description": "optReserved"
+  },
+  "optFixDuplicate": {
+    "message": "중복 단축키를 먼저 수정하세요.",
+    "description": "optFixDuplicate"
+  },
+  "optPresetRange": {
+    "message": "프리셋 속도는 0.25~8 사이여야 합니다.",
+    "description": "optPresetRange"
+  },
+  "optMaxSpeedRange": {
+    "message": "최대 속도는 1.5~16 사이여야 합니다.",
+    "description": "optMaxSpeedRange"
+  },
+  "shortcutIncrease": {
+    "message": "빨리 감기",
+    "description": "shortcutIncrease"
+  },
+  "shortcutIncreaseDesc": {
+    "message": "재생 속도 높이기(+0.1)",
+    "description": "shortcutIncreaseDesc"
+  },
+  "shortcutDecrease": {
+    "message": "느리게",
+    "description": "shortcutDecrease"
+  },
+  "shortcutDecreaseDesc": {
+    "message": "재생 속도 낮추기(-0.1)",
+    "description": "shortcutDecreaseDesc"
+  },
+  "shortcutReset": {
+    "message": "속도 초기화",
+    "description": "shortcutReset"
+  },
+  "shortcutResetDesc": {
+    "message": "1.0x로 복원",
+    "description": "shortcutResetDesc"
+  },
+  "shortcutFullscreen": {
+    "message": "페이지 전체 화면",
+    "description": "shortcutFullscreen"
+  },
+  "shortcutFullscreenDesc": {
+    "message": "페이지 전체 화면 전환",
+    "description": "shortcutFullscreenDesc"
+  },
+  "popupPlaying": {
+    "message": "재생 중",
+    "description": "popupPlaying"
+  },
+  "popupPaused": {
+    "message": "일시정지됨",
+    "description": "popupPaused"
+  },
+  "popupKeyIncrease": {
+    "message": "빨리 감기",
+    "description": "popupKeyIncrease"
+  },
+  "popupKeyDecrease": {
+    "message": "느리게",
+    "description": "popupKeyDecrease"
+  },
+  "popupKeyReset": {
+    "message": "초기화",
+    "description": "popupKeyReset"
+  },
+  "popupKeyPresets": {
+    "message": "프리셋",
+    "description": "popupKeyPresets"
+  },
+  "popupKeyPlay": {
+    "message": "재생/일시정지",
+    "description": "popupKeyPlay"
+  },
+  "popupKeyFullscreen": {
+    "message": "전체 화면",
+    "description": "popupKeyFullscreen"
+  },
+  "popupCurrentSpeed": {
+    "message": "현재 속도",
+    "description": "popupCurrentSpeed"
+  },
+  "popupResetSpeed": {
+    "message": "1x로 초기화",
+    "description": "popupResetSpeed"
+  },
+  "popupOpenSettings": {
+    "message": "설정",
+    "description": "popupOpenSettings"
+  },
+  "popupShortcuts": {
+    "message": "단축키",
+    "description": "popupShortcuts"
+  },
+  "popupOpenOptions": {
+    "message": "전체 설정 열기",
+    "description": "popupOpenOptions"
+  },
+  "popupNoTab": {
+    "message": "현재 탭에 접근할 수 없습니다",
+    "description": "popupNoTab"
+  },
+  "popupNoVideo": {
+    "message": "이 페이지에 제어할 수 있는 동영상이 없습니다",
+    "description": "popupNoVideo"
+  },
+  "popupSiteMemory": {
+    "message": "이 사이트 속도 기억",
+    "description": "popupSiteMemory"
+  },
+  "popupSiteMemoryDesc": {
+    "message": "페이지를 다시 열 때 복원됩니다",
+    "description": "popupSiteMemoryDesc"
   }
 }

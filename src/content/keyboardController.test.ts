@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { KeyboardController } from './keyboardController';
-import { ShortcutSettings } from '../shared/types';
+import { DEFAULT_PRESET_SPEEDS, PersistedSettings } from '../shared/types';
 
 const createVideo = () => {
   const video = document.createElement('video');
@@ -42,23 +42,36 @@ const createVideo = () => {
   return video;
 };
 
+const createSettings = (overrides: Partial<PersistedSettings> = {}): PersistedSettings => ({
+  shortcuts: {
+    increaseSpeed: '=',
+    decreaseSpeed: '-',
+    resetSpeed: '0',
+    fullscreen: 'f',
+  },
+  presetSpeeds: [...DEFAULT_PRESET_SPEEDS],
+  spaceTogglePlay: true,
+  maxSpeed: 4,
+  siteSpeedMemory: true,
+  ...overrides,
+});
+
+const keyEvent = (key: string, init: KeyboardEventInit = {}) =>
+  new KeyboardEvent('keydown', { key, ...init });
+
 describe('KeyboardController', () => {
-  let shortcuts: ShortcutSettings;
+  let settings: PersistedSettings;
   let video: HTMLVideoElement | null;
   let toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   let exitFullscreen: ReturnType<typeof vi.fn>;
   let showSpeedHud: ReturnType<typeof vi.fn>;
+  let showPlaybackState: ReturnType<typeof vi.fn>;
   let lastToggledVideo: HTMLVideoElement | null | undefined;
   let controller: KeyboardController;
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    shortcuts = {
-      increaseSpeed: '=',
-      decreaseSpeed: '-',
-      resetSpeed: '0',
-      fullscreen: 'f',
-    };
+    settings = createSettings();
     video = createVideo();
     lastToggledVideo = undefined;
     toggleFullscreen = (target) => {
@@ -67,28 +80,30 @@ describe('KeyboardController', () => {
     };
     exitFullscreen = vi.fn();
     showSpeedHud = vi.fn();
+    showPlaybackState = vi.fn();
 
     controller = new KeyboardController({
-      getShortcuts: () => shortcuts,
+      getSettings: () => settings,
       getCurrentVideo: () => video,
       isFullscreenActive: () => false,
       toggleFullscreen,
       exitFullscreen,
       showSpeedHud,
+      showPlaybackState,
     });
   });
 
   it('ignores editable targets', () => {
     const input = document.createElement('input');
-    const event = new KeyboardEvent('keydown', { key: '=' });
+    const event = keyEvent('=');
     Object.defineProperty(event, 'target', { value: input });
 
     expect(controller.handleKeyDown(event)).toBe(false);
   });
 
   it('uses updated shortcut mappings immediately', () => {
-    shortcuts = { ...shortcuts, increaseSpeed: 'k' };
-    const event = new KeyboardEvent('keydown', { key: 'k' });
+    settings = createSettings({ shortcuts: { ...settings.shortcuts, increaseSpeed: 'k' } });
+    const event = keyEvent('k');
 
     expect(controller.handleKeyDown(event)).toBe(true);
     expect(showSpeedHud).toHaveBeenCalledTimes(1);
@@ -100,14 +115,14 @@ describe('KeyboardController', () => {
     }
 
     video.playbackRate = 2.3;
-    const event = new KeyboardEvent('keydown', { key: '0' });
+    const event = keyEvent('0');
 
     expect(controller.handleKeyDown(event)).toBe(true);
     expect(video.playbackRate).toBe(1);
   });
 
   it('toggles fullscreen with the configured shortcut', () => {
-    const event = new KeyboardEvent('keydown', { key: 'f' });
+    const event = keyEvent('f');
 
     expect(controller.handleKeyDown(event)).toBe(true);
     expect(lastToggledVideo).toBe(video);
@@ -115,15 +130,16 @@ describe('KeyboardController', () => {
 
   it('exits fullscreen on escape', () => {
     controller = new KeyboardController({
-      getShortcuts: () => shortcuts,
+      getSettings: () => settings,
       getCurrentVideo: () => video,
       isFullscreenActive: () => true,
       toggleFullscreen,
       exitFullscreen,
       showSpeedHud,
+      showPlaybackState,
     });
 
-    const event = new KeyboardEvent('keydown', { key: 'Escape' });
+    const event = keyEvent('Escape');
 
     expect(controller.handleKeyDown(event)).toBe(true);
     expect(exitFullscreen).toHaveBeenCalledTimes(1);
@@ -131,16 +147,17 @@ describe('KeyboardController', () => {
 
   it('seeks backward and forward with arrow keys in fullscreen', () => {
     controller = new KeyboardController({
-      getShortcuts: () => shortcuts,
+      getSettings: () => settings,
       getCurrentVideo: () => video,
       isFullscreenActive: () => true,
       toggleFullscreen,
       exitFullscreen,
       showSpeedHud,
+      showPlaybackState,
     });
 
-    const backwardEvent = new KeyboardEvent('keydown', { key: 'ArrowLeft' });
-    const forwardEvent = new KeyboardEvent('keydown', { key: 'ArrowRight' });
+    const backwardEvent = keyEvent('ArrowLeft');
+    const forwardEvent = keyEvent('ArrowRight');
 
     expect(controller.handleKeyDown(backwardEvent)).toBe(true);
     expect(video?.currentTime).toBe(7);
@@ -150,23 +167,155 @@ describe('KeyboardController', () => {
 
   it('toggles playback with space in fullscreen', () => {
     controller = new KeyboardController({
-      getShortcuts: () => shortcuts,
+      getSettings: () => settings,
       getCurrentVideo: () => video,
       isFullscreenActive: () => true,
       toggleFullscreen,
       exitFullscreen,
       showSpeedHud,
+      showPlaybackState,
     });
 
-    const pauseEvent = new KeyboardEvent('keydown', { key: ' ' });
-    const playEvent = new KeyboardEvent('keydown', { key: ' ' });
+    const pauseEvent = keyEvent(' ');
+    const playEvent = keyEvent(' ');
 
     expect(controller.handleKeyDown(pauseEvent)).toBe(true);
     expect(video?.pause).toHaveBeenCalledTimes(1);
     expect(video?.paused).toBe(true);
+    expect(showPlaybackState).toHaveBeenLastCalledWith(false, video);
 
     expect(controller.handleKeyDown(playEvent)).toBe(true);
     expect(video?.play).toHaveBeenCalledTimes(1);
     expect(video?.paused).toBe(false);
+    expect(showPlaybackState).toHaveBeenLastCalledWith(true, video);
+  });
+
+  it('toggles playback with space outside fullscreen when enabled', () => {
+    const pauseEvent = keyEvent(' ');
+
+    expect(controller.handleKeyDown(pauseEvent)).toBe(true);
+    expect(video?.pause).toHaveBeenCalledTimes(1);
+    expect(video?.paused).toBe(true);
+    expect(showPlaybackState).toHaveBeenCalledWith(false, video);
+  });
+
+  it('ignores space outside fullscreen when disabled', () => {
+    settings = createSettings({ spaceTogglePlay: false });
+
+    const event = keyEvent(' ');
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(video?.pause).not.toHaveBeenCalled();
+  });
+
+  it('ignores repeated space keydowns', () => {
+    const event = keyEvent(' ', { repeat: true });
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(video?.pause).not.toHaveBeenCalled();
+  });
+
+  it('applies a preset speed with the matching digit key', () => {
+    const event = keyEvent('2');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video?.playbackRate).toBe(1.5);
+    expect(showSpeedHud).toHaveBeenCalledWith(1.5, video);
+  });
+
+  it('does nothing for digits without a configured preset', () => {
+    const event = keyEvent('9');
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(showSpeedHud).not.toHaveBeenCalled();
+  });
+
+  it('does not treat modified digit keys as presets', () => {
+    const event = keyEvent('2', { ctrlKey: true });
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(video?.playbackRate).toBe(1);
+  });
+
+  it('applies presets in fullscreen mode too', () => {
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => true,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedHud,
+      showPlaybackState,
+    });
+
+    const event = keyEvent('4');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video?.playbackRate).toBe(2);
+  });
+
+  it('gives a custom Space shortcut priority over global play/pause', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    settings = createSettings({ shortcuts: { ...settings.shortcuts, resetSpeed: 'Space' } });
+
+    const event = keyEvent(' ');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video?.playbackRate).toBe(1);
+    expect(video?.pause).not.toHaveBeenCalled();
+    expect(showPlaybackState).not.toHaveBeenCalled();
+  });
+
+  it('clamps stepped speed at the configured maxSpeed', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    settings = createSettings({ maxSpeed: 2 });
+    video.playbackRate = 1.9;
+    const event = keyEvent('=');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video.playbackRate).toBe(2);
+
+    const again = keyEvent('=');
+    expect(controller.handleKeyDown(again)).toBe(true);
+    expect(video.playbackRate).toBe(2);
+  });
+
+  it('clamps preset speeds at the configured maxSpeed', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    settings = createSettings({ maxSpeed: 2 });
+    video.playbackRate = 1;
+
+    const event = keyEvent('4'); // preset 2.0 == max, fine
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video.playbackRate).toBe(2);
+
+    settings = createSettings({ maxSpeed: 1.5, presetSpeeds: [1.25, 1.5, 1.75, 2] });
+    const event2 = keyEvent('3'); // preset 1.75 > max 1.5
+    expect(controller.handleKeyDown(event2)).toBe(true);
+    expect(video.playbackRate).toBe(1.5);
+  });
+
+  it('gives custom shortcuts priority over digit presets', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    settings = createSettings({ shortcuts: { ...settings.shortcuts, resetSpeed: '2' } });
+    video.playbackRate = 2.5;
+
+    const event = keyEvent('2');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video.playbackRate).toBe(1);
+    expect(showSpeedHud).toHaveBeenCalledWith(1, video);
   });
 });

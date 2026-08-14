@@ -38,11 +38,15 @@ if (existsSync(resolve(rootDir, 'icons', 'icon128.png'))) {
 }
 
 // 复制 _locales
-if (existsSync(resolve(rootDir, '_locales', 'en', 'messages.json'))) {
-  copyFileSync(resolve(rootDir, '_locales', 'en', 'messages.json'), resolve(distDir, '_locales', 'en', 'messages.json'));
-}
-if (existsSync(resolve(rootDir, '_locales', 'zh_CN', 'messages.json'))) {
-  copyFileSync(resolve(rootDir, '_locales', 'zh_CN', 'messages.json'), resolve(distDir, '_locales', 'zh_CN', 'messages.json'));
+for (const locale of ['en', 'zh_CN', 'ja', 'ko']) {
+  const source = resolve(rootDir, '_locales', locale, 'messages.json');
+  if (existsSync(source)) {
+    const targetDir = resolve(distDir, '_locales', locale);
+    if (!existsSync(targetDir)) {
+      mkdirSync(targetDir, { recursive: true });
+    }
+    copyFileSync(source, resolve(targetDir, 'messages.json'));
+  }
 }
 
 console.log('Assets copied successfully!');

@@ -1,14 +1,21 @@
-import { resetPlaybackRate, seekBy, stepPlaybackRate, togglePlayback } from './playback';
+import {
+  applyPresetSpeed,
+  resetPlaybackRate,
+  seekBy,
+  stepPlaybackRate,
+  togglePlayback,
+} from './playback';
 import { matchesShortcut } from '../shared/shortcuts';
-import type { ShortcutSettings } from '../shared/types';
+import type { PersistedSettings } from '../shared/types';
 
 interface KeyboardControllerOptions {
-  getShortcuts: () => ShortcutSettings;
+  getSettings: () => PersistedSettings;
   getCurrentVideo: () => HTMLVideoElement | null;
   isFullscreenActive: () => boolean;
   toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   exitFullscreen: () => void;
   showSpeedHud: (rate: number, video: HTMLVideoElement) => void;
+  showPlaybackState: (playing: boolean, video: HTMLVideoElement) => void;
 }
 
 const isEditableTarget = (target: EventTarget | null) => {
@@ -22,11 +29,14 @@ const isEditableTarget = (target: EventTarget | null) => {
     || target.isContentEditable;
 };
 
+const isPlainKey = (event: KeyboardEvent) =>
+  !event.ctrlKey && !event.altKey && !event.metaKey;
+
 export class KeyboardController {
   private readonly options: KeyboardControllerOptions;
   private repeatDelayTimer: ReturnType<typeof setTimeout> | null = null;
   private repeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
-  private repeatingShortcut: keyof ShortcutSettings | null = null;
+  private repeatingShortcut: keyof PersistedSettings['shortcuts'] | null = null;
   private readonly boundHandleKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
   private readonly boundHandleKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event);
 
@@ -60,14 +70,42 @@ export class KeyboardController {
       return;
     }
 
+    const maxSpeed = this.options.getSettings().maxSpeed;
     const rate = delta === 0
       ? resetPlaybackRate(video)
-      : stepPlaybackRate(video, delta);
+      : stepPlaybackRate(video, delta, maxSpeed);
 
     this.options.showSpeedHud(rate, video);
   }
 
-  private startRepeat(shortcutId: keyof ShortcutSettings, delta: number) {
+  private runPreset(index: number) {
+    const video = this.options.getCurrentVideo();
+    if (!video) {
+      return;
+    }
+
+    const settings = this.options.getSettings();
+    const preset = settings.presetSpeeds[index];
+    if (typeof preset !== 'number' || !Number.isFinite(preset)) {
+      return;
+    }
+
+    const rate = applyPresetSpeed(video, preset, settings.maxSpeed);
+    this.options.showSpeedHud(rate, video);
+  }
+
+  private runTogglePlayback() {
+    const video = this.options.getCurrentVideo();
+    if (!video) {
+      return false;
+    }
+
+    const playing = togglePlayback(video);
+    this.options.showPlaybackState(playing, video);
+    return true;
+  }
+
+  private startRepeat(shortcutId: keyof PersistedSettings['shortcuts'], delta: number) {
     this.clearRepeat();
     this.repeatingShortcut = shortcutId;
     this.repeatDelayTimer = setTimeout(() => {
@@ -81,7 +119,8 @@ export class KeyboardController {
       return false;
     }
 
-    const shortcuts = this.options.getShortcuts();
+    const settings = this.options.getSettings();
+    const shortcuts = settings.shortcuts;
     const activeVideo = this.options.getCurrentVideo();
     const fullscreenActive = this.options.isFullscreenActive();
 
@@ -112,7 +151,7 @@ export class KeyboardController {
     if (fullscreenActive && (event.key === ' ' || event.key === 'Spacebar')) {
       this.intercept(event);
       this.clearRepeat();
-      togglePlayback(activeVideo);
+      this.runTogglePlayback();
       return true;
     }
 
@@ -152,6 +191,24 @@ export class KeyboardController {
       return true;
     }
 
+    if (!fullscreenActive && settings.spaceTogglePlay && (event.key === ' ' || event.key === 'Spacebar') && !event.repeat && isPlainKey(event)) {
+      this.intercept(event);
+      this.clearRepeat();
+      this.runTogglePlayback();
+      return true;
+    }
+
+    if (isPlainKey(event) && !event.repeat && /^[1-9]$/.test(event.key)) {
+      const index = Number(event.key) - 1;
+      const preset = settings.presetSpeeds[index];
+      if (typeof preset === 'number' && Number.isFinite(preset)) {
+        this.intercept(event);
+        this.clearRepeat();
+        this.runPreset(index);
+        return true;
+      }
+    }
+
     return false;
   }
 
@@ -161,7 +218,7 @@ export class KeyboardController {
       return false;
     }
 
-    const shortcuts = this.options.getShortcuts();
+    const shortcuts = this.options.getSettings().shortcuts;
     if (!matchesShortcut(event, shortcuts[repeatingShortcut])) {
       return false;
     }

@@ -43,3 +43,8 @@ test-results/
 
 # Worktrees
 .worktrees/
+.omx/
+
+# Store packages (build artifacts)
+dist.zip
+release/

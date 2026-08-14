@@ -2,23 +2,41 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "Video Speed Controller",
-  "version": "1.5.2",
-  "description": "Minimal video speed shortcuts and page fullscreen for HTML5 video",
-  "permissions": ["storage"],
-  "host_permissions": ["<all_urls>"],
+  "version": "5.2.0",
+  "description": "Minimal video speed shortcuts, presets and page fullscreen for HTML5 video",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "web_accessible_resources": [
     {
-      "resources": ["content.js", "chunks/*.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "content.js",
+        "chunks/*.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "action": {
-    "default_title": "Video Speed Controller"
+    "default_title": "Video Speed Controller",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content-loader.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content-loader.js"
+      ],
       "run_at": "document_end"
     }
   ],

@@ -186,5 +186,217 @@
   "dashboardTab": {
     "message": "Stats",
     "description": "Dashboard tab"
+  },
+  "optEyebrow": {
+    "message": "Video Speed Controller v5.2",
+    "description": "optEyebrow"
+  },
+  "optTitle": {
+    "message": "Just three things: speed control, preset speeds and page fullscreen.",
+    "description": "optTitle"
+  },
+  "optDescription": {
+    "message": "No history features, no extra panels, no hidden actions. Configure shortcuts, preset speeds and playback limits - the content script picks them up instantly.",
+    "description": "optDescription"
+  },
+  "optShortcutsTitle": {
+    "message": "Keyboard Shortcuts",
+    "description": "optShortcutsTitle"
+  },
+  "optShortcutsDesc": {
+    "message": "Click a field and press the new key combination. Open pages update instantly after saving.",
+    "description": "optShortcutsDesc"
+  },
+  "optPresetsTitle": {
+    "message": "Preset Speeds",
+    "description": "optPresetsTitle"
+  },
+  "optPresetsDesc": {
+    "message": "Press 1-4 to jump directly to common speeds, no fine-tuning needed.",
+    "description": "optPresetsDesc"
+  },
+  "optPresetPlaceholder": {
+    "message": "e.g. 1.5",
+    "description": "optPresetPlaceholder"
+  },
+  "optSpaceTitle": {
+    "message": "Space to play/pause",
+    "description": "optSpaceTitle"
+  },
+  "optSpaceDesc": {
+    "message": "Space toggles play/pause outside page fullscreen too (same as in fullscreen).",
+    "description": "optSpaceDesc"
+  },
+  "optMaxSpeedTitle": {
+    "message": "Maximum speed",
+    "description": "optMaxSpeedTitle"
+  },
+  "optMaxSpeedDesc": {
+    "message": "Upper limit for stepping and presets. Prevents overshooting when holding a key.",
+    "description": "optMaxSpeedDesc"
+  },
+  "optMemoryTitle": {
+    "message": "Remember speed per site",
+    "description": "optMemoryTitle"
+  },
+  "optMemoryDesc": {
+    "message": "Restore the last speed used on this site after refresh or reopening.",
+    "description": "optMemoryDesc"
+  },
+  "optMemoryClearLabel": {
+    "message": "Clear all memory",
+    "description": "optMemoryClearLabel"
+  },
+  "optMemoryCleared": {
+    "message": "All remembered site speeds cleared.",
+    "description": "optMemoryCleared"
+  },
+  "optReset": {
+    "message": "Reset to default",
+    "description": "optReset"
+  },
+  "optSave": {
+    "message": "Save settings",
+    "description": "optSave"
+  },
+  "optPressKey": {
+    "message": "Press a new shortcut",
+    "description": "optPressKey"
+  },
+  "optSaved": {
+    "message": "Settings saved and applied to open pages.",
+    "description": "optSaved"
+  },
+  "optSaveFailed": {
+    "message": "Failed to save settings, please try again.",
+    "description": "optSaveFailed"
+  },
+  "optLoadFailed": {
+    "message": "Failed to load settings, using defaults.",
+    "description": "optLoadFailed"
+  },
+  "optResetDone": {
+    "message": "Defaults restored. Click Save to write them.",
+    "description": "optResetDone"
+  },
+  "optDuplicate": {
+    "message": "Duplicate shortcuts detected. Each action needs a different key.",
+    "description": "optDuplicate"
+  },
+  "optReserved": {
+    "message": "Some shortcuts conflict with common browser shortcuts and may be overridden.",
+    "description": "optReserved"
+  },
+  "optFixDuplicate": {
+    "message": "Please fix the duplicate shortcuts first.",
+    "description": "optFixDuplicate"
+  },
+  "optPresetRange": {
+    "message": "Preset speeds must be between 0.25 and 8.",
+    "description": "optPresetRange"
+  },
+  "optMaxSpeedRange": {
+    "message": "Maximum speed must be between 1.5 and 16.",
+    "description": "optMaxSpeedRange"
+  },
+  "shortcutIncrease": {
+    "message": "Speed up",
+    "description": "shortcutIncrease"
+  },
+  "shortcutIncreaseDesc": {
+    "message": "Increase playback speed (+0.1)",
+    "description": "shortcutIncreaseDesc"
+  },
+  "shortcutDecrease": {
+    "message": "Slow down",
+    "description": "shortcutDecrease"
+  },
+  "shortcutDecreaseDesc": {
+    "message": "Decrease playback speed (-0.1)",
+    "description": "shortcutDecreaseDesc"
+  },
+  "shortcutReset": {
+    "message": "Reset speed",
+    "description": "shortcutReset"
+  },
+  "shortcutResetDesc": {
+    "message": "Restore to 1.0x",
+    "description": "shortcutResetDesc"
+  },
+  "shortcutFullscreen": {
+    "message": "Page fullscreen",
+    "description": "shortcutFullscreen"
+  },
+  "shortcutFullscreenDesc": {
+    "message": "Enter or exit page fullscreen",
+    "description": "shortcutFullscreenDesc"
+  },
+  "popupPlaying": {
+    "message": "Playing",
+    "description": "popupPlaying"
+  },
+  "popupPaused": {
+    "message": "Paused",
+    "description": "popupPaused"
+  },
+  "popupKeyIncrease": {
+    "message": "Speed up",
+    "description": "popupKeyIncrease"
+  },
+  "popupKeyDecrease": {
+    "message": "Slow down",
+    "description": "popupKeyDecrease"
+  },
+  "popupKeyReset": {
+    "message": "Reset",
+    "description": "popupKeyReset"
+  },
+  "popupKeyPresets": {
+    "message": "Presets",
+    "description": "popupKeyPresets"
+  },
+  "popupKeyPlay": {
+    "message": "Play/Pause",
+    "description": "popupKeyPlay"
+  },
+  "popupKeyFullscreen": {
+    "message": "Fullscreen",
+    "description": "popupKeyFullscreen"
+  },
+  "popupCurrentSpeed": {
+    "message": "Current speed",
+    "description": "popupCurrentSpeed"
+  },
+  "popupResetSpeed": {
+    "message": "Reset to 1x",
+    "description": "popupResetSpeed"
+  },
+  "popupOpenSettings": {
+    "message": "Settings",
+    "description": "popupOpenSettings"
+  },
+  "popupShortcuts": {
+    "message": "Shortcuts",
+    "description": "popupShortcuts"
+  },
+  "popupOpenOptions": {
+    "message": "Open full settings",
+    "description": "popupOpenOptions"
+  },
+  "popupNoTab": {
+    "message": "Cannot access the current tab",
+    "description": "popupNoTab"
+  },
+  "popupNoVideo": {
+    "message": "No controllable video on this page",
+    "description": "popupNoVideo"
+  },
+  "popupSiteMemory": {
+    "message": "Remember speed on this site",
+    "description": "popupSiteMemory"
+  },
+  "popupSiteMemoryDesc": {
+    "message": "Restored when the page is reopened",
+    "description": "popupSiteMemoryDesc"
   }
 }

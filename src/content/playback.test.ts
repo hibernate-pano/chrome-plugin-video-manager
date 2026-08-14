@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resetPlaybackRate, seekBy, stepPlaybackRate } from './playback';
+import { applyPresetSpeed, resetPlaybackRate, seekBy, stepPlaybackRate } from './playback';
 
 describe('playback helpers', () => {
   it('clamps stepped playback rate', () => {
@@ -16,6 +16,34 @@ describe('playback helpers', () => {
 
     expect(resetPlaybackRate(video)).toBe(1);
     expect(video.playbackRate).toBe(1);
+  });
+
+  it('applies a preset speed rounded to two decimals', () => {
+    const video = document.createElement('video');
+    video.playbackRate = 1;
+
+    expect(applyPresetSpeed(video, 1.5)).toBe(1.5);
+    expect(video.playbackRate).toBe(1.5);
+
+    expect(applyPresetSpeed(video, 1.234)).toBe(1.23);
+  });
+
+  it('clamps preset speeds to the media rate bounds', () => {
+    const video = document.createElement('video');
+    video.playbackRate = 1;
+
+    expect(applyPresetSpeed(video, 0.01)).toBe(0.1);
+    expect(applyPresetSpeed(video, 99)).toBe(16);
+  });
+
+  it('respects a custom max when stepping and applying presets', () => {
+    const video = document.createElement('video');
+    video.playbackRate = 3.9;
+
+    expect(stepPlaybackRate(video, 0.1, 4)).toBe(4);
+    expect(stepPlaybackRate(video, 0.1, 4)).toBe(4);
+
+    expect(applyPresetSpeed(video, 8, 4)).toBe(4);
   });
 
   it('seeks within media bounds', () => {

@@ -3,7 +3,7 @@ import { DEFAULT_SHORTCUTS, ShortcutSettings } from './types';
 const MODIFIER_KEYS = new Set(['ctrl', 'alt', 'shift', 'meta']);
 
 const normalizeMainKey = (value: string) => {
-  if (value === ' ' || value === 'Space' || value === 'Spacebar') {
+  if (value === '' || value === ' ' || value === 'Space' || value === 'Spacebar') {
     return ' ';
   }
 
@@ -14,11 +14,21 @@ const normalizeMainKey = (value: string) => {
   return value;
 };
 
-export const normalizeShortcut = (value: string) =>
-  value
+/**
+ * 规范化快捷键字符串：
+ * - 修饰键小写（ctrl/alt/shift/meta）
+ * - 主键统一（'Space'/'Spacebar'/' ' -> ' '）
+ * - 空串原样返回（非法输入不产生有效快捷键）
+ */
+export const normalizeShortcut = (value: string) => {
+  if (value === '') {
+    return '';
+  }
+
+  return value
     .split('+')
     .map((part) => part.trim())
-    .filter(Boolean)
+    .filter((part, index, parts) => part !== '' || index === parts.length - 1)
     .map((part, index, parts) => {
       if (index < parts.length - 1) {
         return part.toLowerCase();
@@ -27,6 +37,7 @@ export const normalizeShortcut = (value: string) =>
       return normalizeMainKey(part);
     })
     .join('+');
+};
 
 export const normalizeShortcutSettings = (
   value?: Partial<ShortcutSettings> | null,

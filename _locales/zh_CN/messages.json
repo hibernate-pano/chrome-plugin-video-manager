@@ -186,5 +186,217 @@
   "dashboardTab": {
     "message": "统计",
     "description": "数据统计标签"
+  },
+  "optEyebrow": {
+    "message": "Video Speed Controller v5.2",
+    "description": "optEyebrow"
+  },
+  "optTitle": {
+    "message": "只保留三件事：调速、预设速度、网页全屏。",
+    "description": "optTitle"
+  },
+  "optDescription": {
+    "message": "这里没有历史功能，没有额外面板，没有隐藏操作。配置快捷键、预设速度与播放限制，内容脚本会实时读取并立即生效。",
+    "description": "optDescription"
+  },
+  "optShortcutsTitle": {
+    "message": "快捷键设置",
+    "description": "optShortcutsTitle"
+  },
+  "optShortcutsDesc": {
+    "message": "点击输入框后按下新的组合键。保存后，已打开页面中的映射会热更新。",
+    "description": "optShortcutsDesc"
+  },
+  "optPresetsTitle": {
+    "message": "预设速度",
+    "description": "optPresetsTitle"
+  },
+  "optPresetsDesc": {
+    "message": "按数字键 1-4 直达常用速度，无需逐档微调。",
+    "description": "optPresetsDesc"
+  },
+  "optPresetPlaceholder": {
+    "message": "如 1.5",
+    "description": "optPresetPlaceholder"
+  },
+  "optSpaceTitle": {
+    "message": "空格键播放/暂停",
+    "description": "optSpaceTitle"
+  },
+  "optSpaceDesc": {
+    "message": "网页全屏外，按空格键也能切换播放与暂停（与全屏模式行为一致）。",
+    "description": "optSpaceDesc"
+  },
+  "optMaxSpeedTitle": {
+    "message": "最大播放速度",
+    "description": "optMaxSpeedTitle"
+  },
+  "optMaxSpeedDesc": {
+    "message": "加速与预设档位的上限，防止长按冲过头。",
+    "description": "optMaxSpeedDesc"
+  },
+  "optMemoryTitle": {
+    "message": "记住每个网站的速度",
+    "description": "optMemoryTitle"
+  },
+  "optMemoryDesc": {
+    "message": "刷新或重新打开页面时，自动恢复该网站上次使用的播放速度。",
+    "description": "optMemoryDesc"
+  },
+  "optMemoryClearLabel": {
+    "message": "清除全部记忆",
+    "description": "optMemoryClearLabel"
+  },
+  "optMemoryCleared": {
+    "message": "已清除全部站点速度记忆。",
+    "description": "optMemoryCleared"
+  },
+  "optReset": {
+    "message": "恢复默认",
+    "description": "optReset"
+  },
+  "optSave": {
+    "message": "保存设置",
+    "description": "optSave"
+  },
+  "optPressKey": {
+    "message": "按下新的快捷键",
+    "description": "optPressKey"
+  },
+  "optSaved": {
+    "message": "设置已保存，并会在已打开页面中立即生效。",
+    "description": "optSaved"
+  },
+  "optSaveFailed": {
+    "message": "保存设置失败，请稍后重试。",
+    "description": "optSaveFailed"
+  },
+  "optLoadFailed": {
+    "message": "读取设置失败，已回退到默认配置。",
+    "description": "optLoadFailed"
+  },
+  "optResetDone": {
+    "message": "默认配置已恢复。点击保存后写入扩展设置。",
+    "description": "optResetDone"
+  },
+  "optDuplicate": {
+    "message": "检测到重复快捷键。每个动作必须使用不同按键。",
+    "description": "optDuplicate"
+  },
+  "optReserved": {
+    "message": "部分快捷键与浏览器常用组合冲突，浏览器可能会优先处理。",
+    "description": "optReserved"
+  },
+  "optFixDuplicate": {
+    "message": "请先修正重复快捷键。",
+    "description": "optFixDuplicate"
+  },
+  "optPresetRange": {
+    "message": "预设速度必须是 0.25–8 之间的数字。",
+    "description": "optPresetRange"
+  },
+  "optMaxSpeedRange": {
+    "message": "最大速度必须是 1.5–16 之间的数字。",
+    "description": "optMaxSpeedRange"
+  },
+  "shortcutIncrease": {
+    "message": "加速",
+    "description": "shortcutIncrease"
+  },
+  "shortcutIncreaseDesc": {
+    "message": "增加视频播放速度（+0.1）",
+    "description": "shortcutIncreaseDesc"
+  },
+  "shortcutDecrease": {
+    "message": "减速",
+    "description": "shortcutDecrease"
+  },
+  "shortcutDecreaseDesc": {
+    "message": "降低视频播放速度（-0.1）",
+    "description": "shortcutDecreaseDesc"
+  },
+  "shortcutReset": {
+    "message": "重置速度",
+    "description": "shortcutReset"
+  },
+  "shortcutResetDesc": {
+    "message": "恢复到 1.0x",
+    "description": "shortcutResetDesc"
+  },
+  "shortcutFullscreen": {
+    "message": "网页全屏",
+    "description": "shortcutFullscreen"
+  },
+  "shortcutFullscreenDesc": {
+    "message": "进入或退出网页全屏",
+    "description": "shortcutFullscreenDesc"
+  },
+  "popupPlaying": {
+    "message": "播放中",
+    "description": "popupPlaying"
+  },
+  "popupPaused": {
+    "message": "已暂停",
+    "description": "popupPaused"
+  },
+  "popupKeyIncrease": {
+    "message": "加速",
+    "description": "popupKeyIncrease"
+  },
+  "popupKeyDecrease": {
+    "message": "减速",
+    "description": "popupKeyDecrease"
+  },
+  "popupKeyReset": {
+    "message": "重置",
+    "description": "popupKeyReset"
+  },
+  "popupKeyPresets": {
+    "message": "档位",
+    "description": "popupKeyPresets"
+  },
+  "popupKeyPlay": {
+    "message": "播放/暂停",
+    "description": "popupKeyPlay"
+  },
+  "popupKeyFullscreen": {
+    "message": "网页全屏",
+    "description": "popupKeyFullscreen"
+  },
+  "popupCurrentSpeed": {
+    "message": "当前速度",
+    "description": "popupCurrentSpeed"
+  },
+  "popupResetSpeed": {
+    "message": "重置 1x",
+    "description": "popupResetSpeed"
+  },
+  "popupOpenSettings": {
+    "message": "设置",
+    "description": "popupOpenSettings"
+  },
+  "popupShortcuts": {
+    "message": "快捷键",
+    "description": "popupShortcuts"
+  },
+  "popupOpenOptions": {
+    "message": "打开完整设置",
+    "description": "popupOpenOptions"
+  },
+  "popupNoTab": {
+    "message": "无法访问当前标签页",
+    "description": "popupNoTab"
+  },
+  "popupNoVideo": {
+    "message": "当前页面没有可控制的视频",
+    "description": "popupNoVideo"
+  },
+  "popupSiteMemory": {
+    "message": "记住本站速度",
+    "description": "popupSiteMemory"
+  },
+  "popupSiteMemoryDesc": {
+    "message": "刷新或重新打开页面时自动恢复",
+    "description": "popupSiteMemoryDesc"
   }
 }
