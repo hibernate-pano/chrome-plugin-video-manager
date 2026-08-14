@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#15803d"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- 绿色渐变圆角底 -->
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="url(#bg)"/>
+  <rect x="0" y="0" width="128" height="62" rx="28" fill="url(#gloss)"/>
+  <!-- 速度表表盘：上方 200° 白色圆弧，底部留缺口 -->
+  <circle cx="64" cy="70" r="38" pathLength="360" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-dasharray="200 360" stroke-dashoffset="-170"/>
+  <!-- 指针：指向右上方（约 1.5x 档位） -->
+  <line x1="64" y1="70" x2="80" y2="48" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <!-- 轴心 -->
+  <circle cx="64" cy="70" r="10.5" fill="#ffffff"/>
+</svg>

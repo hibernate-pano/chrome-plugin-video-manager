@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Demo Player</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0b1220;
+      font-family: Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+    }
+    .page-title {
+      color: #94a3b8;
+      font-size: 14px;
+      letter-spacing: 0.06em;
+    }
+    .player {
+      width: 960px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #000;
+      position: relative;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+    }
+    video {
+      width: 960px;
+      height: 540px;
+      display: block;
+      background: linear-gradient(135deg, #14532d 0%, #052e16 45%, #0f172a 100%);
+    }
+    .bar {
+      background: #020617;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #cbd5e1;
+      font-size: 12px;
+    }
+    .progress {
+      flex: 1;
+      height: 4px;
+      border-radius: 999px;
+      background: #1e293b;
+      position: relative;
+    }
+    .progress::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 42%;
+      border-radius: 999px;
+      background: #22c55e;
+    }
+  </style>
+</head>
+<body>
+  <p class="page-title">示例页面 · 在线课程视频</p>
+  <div class="player">
+    <video id="demo-video"></video>
+    <div class="bar">
+      <span>▶</span>
+      <div class="progress"></div>
+      <span>18:24 / 43:50</span>
+      <span>1.5x</span>
+      <span>🔊</span>
+    </div>
+  </div>
+  <script type="module" src="../../dist/content.js"></script>
+</body>
+</html>

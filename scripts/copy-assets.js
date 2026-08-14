@@ -27,8 +27,11 @@ if (existsSync(resolve(rootDir, 'content-loader.js'))) {
 }
 
 // 复制 icons
-if (existsSync(resolve(rootDir, 'icons', 'icon16.png'))) {
-  copyFileSync(resolve(rootDir, 'icons', 'icon16.png'), resolve(distDir, 'icons', 'icon16.png'));
+for (const iconSize of ['16', '32', '48', '128']) {
+  const source = resolve(rootDir, 'icons', `icon${iconSize}.png`);
+  if (existsSync(source)) {
+    copyFileSync(source, resolve(distDir, 'icons', `icon${iconSize}.png`));
+  }
 }
 if (existsSync(resolve(rootDir, 'icons', 'icon48.png'))) {
   copyFileSync(resolve(rootDir, 'icons', 'icon48.png'), resolve(distDir, 'icons', 'icon48.png'));
