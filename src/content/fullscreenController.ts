@@ -165,6 +165,14 @@ export class FullscreenController {
     }
 
     const { overlay, stage } = this.ensureOverlay();
+    // 若页面正处于系统原生全屏（如之前点了站点自己的全屏按钮），先退出：
+    // 否则后续按 ESC 会被浏览器拿去退系统全屏，keydown 不再派发给页面，
+    // 我们的 overlay 盖在最上层，看起来就像“按 ESC 没反应”。
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {
+        // Best effort.
+      });
+    }
     const shouldTryReparent = getSiteAdapter(window.location.hostname).shouldTryReparent(video);
     const mode: FullscreenMode = shouldTryReparent ? 'reparent' : 'css-cover';
 

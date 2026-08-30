@@ -235,16 +235,33 @@ export class KeyboardController {
   }
 
   start() {
-    // 用 window 捕获而非 document：页面脚本（如 YouTube）先于内容脚本注册 keydown，
-    // document 上注册顺序已落后；window 是传播路径最外层，永远先于 document 触发，
-    // 否则页面先切一次播放状态，我们再切一次，表现为“按空格暂停一下又继续”。
-    window.addEventListener('keydown', this.boundHandleKeyDown, true);
-    window.addEventListener('keyup', this.boundHandleKeyUp, true);
+    // 优先挂到 content-loader 在 document_start 同步注册的桥接监听器上：
+    // 那是 window 捕获阶段的第一个监听器，先于所有页面脚本，
+    // 保证我们的拦截（ESC 退全屏、空格、f 等）不会被页面脚本抢跑或吞掉。
+    const bridgeWindow = window as typeof window & {
+      __vscRegisterKeyboard?: (type: 'keydown' | 'keyup', handler: ((event: KeyboardEvent) => void) | null) => void;
+    };
+    if (bridgeWindow.__vscRegisterKeyboard) {
+      bridgeWindow.__vscRegisterKeyboard('keydown', this.boundHandleKeyDown);
+      bridgeWindow.__vscRegisterKeyboard('keyup', this.boundHandleKeyUp);
+    } else {
+      // 桥接不存在（如单元测试环境）时直接注册。
+      window.addEventListener('keydown', this.boundHandleKeyDown, true);
+      window.addEventListener('keyup', this.boundHandleKeyUp, true);
+    }
   }
 
   stop() {
     this.clearRepeat();
-    window.removeEventListener('keydown', this.boundHandleKeyDown, true);
-    window.removeEventListener('keyup', this.boundHandleKeyUp, true);
+    const bridgeWindow = window as typeof window & {
+      __vscRegisterKeyboard?: (type: 'keydown' | 'keyup', handler: ((event: KeyboardEvent) => void) | null) => void;
+    };
+    if (bridgeWindow.__vscRegisterKeyboard) {
+      bridgeWindow.__vscRegisterKeyboard('keydown', null);
+      bridgeWindow.__vscRegisterKeyboard('keyup', null);
+    } else {
+      window.removeEventListener('keydown', this.boundHandleKeyDown, true);
+      window.removeEventListener('keyup', this.boundHandleKeyUp, true);
+    }
   }
 }
