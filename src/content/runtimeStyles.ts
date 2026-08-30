@@ -49,21 +49,19 @@ const styles = `
 
 /* --- Target indicator (hover) --- */
 
+/* 不画全框描边：全框在所有页面场景里都过于抢眼，信息由左上角胶囊承担。 */
 #vsc-target-indicator {
   position: fixed;
   z-index: 2147483646;
   pointer-events: none;
-  display: none;
-  box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.75);
-  border-radius: 4px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease, visibility 120ms ease;
 }
 
 #vsc-target-indicator.vsc-visible {
-  display: block;
-}
-
-#vsc-target-indicator[data-current='false'] {
-  box-shadow: inset 0 0 0 2px rgba(100, 116, 139, 0.55);
+  opacity: 1;
+  visibility: visible;
 }
 
 .vsc-target-indicator__pill {
@@ -75,8 +73,8 @@ const styles = `
   gap: 6px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(2, 6, 23, 0.85);
-  border: 1px solid rgba(14, 165, 233, 0.5);
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.28);
   color: #e0f2fe;
   font-size: 12px;
   font-weight: 600;

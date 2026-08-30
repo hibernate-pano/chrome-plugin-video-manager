@@ -8,6 +8,8 @@ const formatRate = (value: number) =>
   value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 
 export class SpeedHud {
+  /** HUD 显示/隐藏时通知外部（例如让悬停指示器让位）。 */
+  onVisibilityChange: (() => void) | null = null;
   private root: HTMLDivElement | null = null;
   private hideTimer: number | null = null;
   private lastRate = 1;
@@ -60,10 +62,14 @@ export class SpeedHud {
     this.bringToFront(root);
     this.updatePosition();
 
+    const wasVisible = this.isVisible();
     root.classList.remove('vsc-visible');
     void root.offsetWidth;
     root.classList.add('vsc-visible');
     root.dataset.mode = mode;
+    if (!wasVisible) {
+      this.onVisibilityChange?.();
+    }
 
     if (this.hideTimer !== null) {
       window.clearTimeout(this.hideTimer);
@@ -76,7 +82,12 @@ export class SpeedHud {
       root.classList.remove('vsc-visible');
       window.removeEventListener('scroll', this.boundUpdatePosition, true);
       window.removeEventListener('resize', this.boundUpdatePosition);
+      this.onVisibilityChange?.();
     }, hideDelay);
+  }
+
+  isVisible() {
+    return this.root?.classList.contains('vsc-visible') ?? false;
   }
 
   /** 速度模式：大数字 + 趋势箭头。 */

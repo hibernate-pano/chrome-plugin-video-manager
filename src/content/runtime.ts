@@ -48,7 +48,10 @@ export class ContentRuntime {
     showSpeedHud: (rate, video) => this.speedHud.showRate(rate, video),
     showPlaybackState: (playing, video) => this.speedHud.showPlayback(playing, video),
   });
-  private readonly targetIndicator = new TargetIndicator(() => this.getCurrentVideo());
+  private readonly targetIndicator = new TargetIndicator(
+    () => this.getCurrentVideo(),
+    () => this.speedHud.isVisible(),
+  );
   private settings: PersistedSettings = createDefaultSettings();
   private unsubscribeSettings: (() => void) | null = null;
   private readonly boundHandleRateChange = (event: Event) => this.handleRateChange(event);
@@ -81,6 +84,8 @@ export class ContentRuntime {
     this.unsubscribeSettings = subscribeToSettings((settings) => {
       this.settings = settings;
     });
+    // HUD 与悬停胶囊同处视频左上角且内容重叠：HUD 可见期间胶囊让位，消失后恢复。
+    this.speedHud.onVisibilityChange = () => this.targetIndicator.refresh();
     this.registry.start();
     this.keyboardController.start();
     this.targetIndicator.start();

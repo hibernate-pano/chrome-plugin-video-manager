@@ -12,14 +12,19 @@ const isVideo = (node: unknown): node is HTMLVideoElement => node instanceof HTM
 export class TargetIndicator {
   private root: HTMLDivElement | null = null;
   private hoveredVideo: HTMLVideoElement | null = null;
+  private showTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly SHOW_DELAY_MS = 200;
   private readonly getCurrent: () => HTMLVideoElement | null;
+  /** HUD 等瞬态反馈可见时让位，避免两个速度胶囊重叠。 */
+  private readonly isSuppressed: () => boolean;
   private readonly boundHandleMouseOver = (event: MouseEvent) => this.handleMouseOver(event);
   private readonly boundHandleMouseOut = (event: MouseEvent) => this.handleMouseOut(event);
   private readonly boundHandlePointerDown = () => this.update();
   private readonly boundHandleScroll = () => this.updatePosition();
 
-  constructor(getCurrent: () => HTMLVideoElement | null) {
+  constructor(getCurrent: () => HTMLVideoElement | null, isSuppressed: () => boolean = () => false) {
     this.getCurrent = getCurrent;
+    this.isSuppressed = isSuppressed;
   }
 
   start() {
@@ -99,10 +104,22 @@ export class TargetIndicator {
     this.hide();
   }
 
+  /** HUD 可见性变化后重新评估：被抑制则让位，抑制结束且仍在悬停则恢复。 */
+  refresh() {
+    if (this.hoveredVideo) {
+      this.update();
+    }
+  }
+
   private update() {
     const video = this.hoveredVideo;
     if (!video || !video.isConnected) {
       this.hoveredVideo = null;
+      this.hide();
+      return;
+    }
+
+    if (this.isSuppressed()) {
       this.hide();
       return;
     }
@@ -118,8 +135,16 @@ export class TargetIndicator {
         : 'VSC · 点击后控制';
     }
 
-    root.classList.add('vsc-visible');
-    this.updatePosition();
+    // 悬停短暂停留后才浮现，避免鼠标扫过视频时突兀闪现。
+    if (this.showTimer === null) {
+      this.showTimer = setTimeout(() => {
+        this.showTimer = null;
+        if (this.hoveredVideo?.isConnected && !this.isSuppressed()) {
+          this.updatePosition();
+          this.root?.classList.add('vsc-visible');
+        }
+      }, TargetIndicator.SHOW_DELAY_MS);
+    }
   }
 
   private updatePosition() {
@@ -142,6 +167,10 @@ export class TargetIndicator {
   }
 
   private hide() {
+    if (this.showTimer !== null) {
+      clearTimeout(this.showTimer);
+      this.showTimer = null;
+    }
     if (this.root) {
       this.root.classList.remove('vsc-visible');
     }
