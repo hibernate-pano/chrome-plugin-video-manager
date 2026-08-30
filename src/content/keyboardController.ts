@@ -32,6 +32,13 @@ const isEditableTarget = (target: EventTarget | null) => {
 const isPlainKey = (event: KeyboardEvent) =>
   !event.ctrlKey && !event.altKey && !event.metaKey;
 
+/**
+ * YouTube 站点例外：它的播放器对空格有完整原生处理，且自身监听器先于我们注册，
+ * 双方同时切换会导致“暂停一下又继续”。普通模式和 overlay 全屏模式都不接管空格，
+ * 直接放行给 YouTube（我们不拦截时事件会正常到达 YouTube 的处理器）。
+ */
+const isYouTube = () => /(^|\.)youtube\.com$/.test(window.location.hostname);
+
 export class KeyboardController {
   private readonly options: KeyboardControllerOptions;
   private repeatDelayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -148,7 +155,7 @@ export class KeyboardController {
       return true;
     }
 
-    if (fullscreenActive && (event.key === ' ' || event.key === 'Spacebar')) {
+    if (fullscreenActive && !isYouTube() && (event.key === ' ' || event.key === 'Spacebar')) {
       this.intercept(event);
       this.clearRepeat();
       this.runTogglePlayback();
@@ -191,7 +198,7 @@ export class KeyboardController {
       return true;
     }
 
-    if (!fullscreenActive && settings.spaceTogglePlay && (event.key === ' ' || event.key === 'Spacebar') && !event.repeat && isPlainKey(event)) {
+    if (!fullscreenActive && settings.spaceTogglePlay && !isYouTube() && (event.key === ' ' || event.key === 'Spacebar') && !event.repeat && isPlainKey(event)) {
       this.intercept(event);
       this.clearRepeat();
       this.runTogglePlayback();
@@ -228,13 +235,16 @@ export class KeyboardController {
   }
 
   start() {
-    document.addEventListener('keydown', this.boundHandleKeyDown, true);
-    document.addEventListener('keyup', this.boundHandleKeyUp, true);
+    // 用 window 捕获而非 document：页面脚本（如 YouTube）先于内容脚本注册 keydown，
+    // document 上注册顺序已落后；window 是传播路径最外层，永远先于 document 触发，
+    // 否则页面先切一次播放状态，我们再切一次，表现为“按空格暂停一下又继续”。
+    window.addEventListener('keydown', this.boundHandleKeyDown, true);
+    window.addEventListener('keyup', this.boundHandleKeyUp, true);
   }
 
   stop() {
     this.clearRepeat();
-    document.removeEventListener('keydown', this.boundHandleKeyDown, true);
-    document.removeEventListener('keyup', this.boundHandleKeyUp, true);
+    window.removeEventListener('keydown', this.boundHandleKeyDown, true);
+    window.removeEventListener('keyup', this.boundHandleKeyUp, true);
   }
 }
