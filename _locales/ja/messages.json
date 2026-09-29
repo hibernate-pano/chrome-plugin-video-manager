@@ -224,8 +224,12 @@
     "description": "optMemoryClearLabel"
   },
   "optMemoryCleared": {
-    "message": "記憶したサイト速度をすべて消去しました。",
+    "message": "記憶したサイト速度とサイトごとの無効設定をすべて消去しました。",
     "description": "optMemoryCleared"
+  },
+  "optMemoryGlobalOff": {
+    "message": "サイトごとの速度記憶は設定でオフになっています",
+    "description": "optMemoryGlobalOff"
   },
   "optReset": {
     "message": "デフォルトに戻す",

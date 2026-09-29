@@ -248,8 +248,12 @@
     "description": "optMemoryClearLabel"
   },
   "optMemoryCleared": {
-    "message": "All remembered site speeds cleared.",
+    "message": "All remembered site speeds cleared, including per-site opt-outs.",
     "description": "optMemoryCleared"
+  },
+  "optMemoryGlobalOff": {
+    "message": "Site speed memory is turned off in the settings page.",
+    "description": "optMemoryGlobalOff"
   },
   "optReset": {
     "message": "Reset to default",

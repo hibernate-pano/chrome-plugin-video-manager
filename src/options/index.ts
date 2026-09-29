@@ -16,6 +16,7 @@ import {
   PRESET_SPEED_MAX,
   PRESET_SPEED_MIN,
   SHORTCUT_DEFINITIONS,
+  SITE_MEMORY_DISABLED_KEY,
   SITE_SPEEDS_KEY,
 } from '../shared/types';
 
@@ -207,7 +208,11 @@ body {
   font-size: 14px;
   font-family: "SFMono-Regular", Consolas, monospace;
   text-align: center;
-  outline: none;
+}
+
+.vsc-options__input:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 2px;
 }
 
 .vsc-options__input.vsc-warning {
@@ -225,7 +230,11 @@ body {
   font-size: 14px;
   font-family: "SFMono-Regular", Consolas, monospace;
   text-align: center;
-  outline: none;
+}
+
+.vsc-options__number-input:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 2px;
 }
 
 .vsc-options__number-input.vsc-warning {
@@ -269,7 +278,11 @@ body {
   font-size: 14px;
   font-family: "SFMono-Regular", Consolas, monospace;
   text-align: center;
-  outline: none;
+}
+
+.vsc-options__preset-input:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 2px;
 }
 
 .vsc-options__preset-input.vsc-warning {
@@ -317,6 +330,10 @@ body {
 
 .vsc-options__toggle input:checked + .vsc-options__toggle-track::after {
   transform: translateX(20px);
+}
+
+.vsc-options__toggle input:focus-visible + .vsc-options__toggle-track {
+  box-shadow: 0 0 0 2px #67e8f9;
 }
 
 .vsc-options__actions {
@@ -445,11 +462,11 @@ root.innerHTML = `
         <div class="vsc-options__rows">
           <div class="vsc-options__row">
             <div>
-              <p class="vsc-options__row-label">${tr('optSpaceTitle')}</p>
+              <p class="vsc-options__row-label" id="space-toggle-label">${tr('optSpaceTitle')}</p>
               <p class="vsc-options__row-description">${tr('optSpaceDesc')}</p>
             </div>
             <label class="vsc-options__toggle">
-              <input type="checkbox" id="space-toggle" />
+              <input type="checkbox" id="space-toggle" aria-labelledby="space-toggle-label" />
               <span class="vsc-options__toggle-track"></span>
             </label>
           </div>
@@ -464,13 +481,13 @@ root.innerHTML = `
 
           <div class="vsc-options__row vsc-options__row--wide">
             <div>
-              <p class="vsc-options__row-label">${tr('optMemoryTitle')}</p>
+              <p class="vsc-options__row-label" id="memory-toggle-label">${tr('optMemoryTitle')}</p>
               <p class="vsc-options__row-description">${tr('optMemoryDesc')}</p>
             </div>
             <div class="vsc-options__row-actions">
               <button type="button" class="vsc-options__button vsc-options__button--small" id="memory-clear-button">${tr('optMemoryClearLabel')}</button>
               <label class="vsc-options__toggle">
-                <input type="checkbox" id="memory-toggle" />
+                <input type="checkbox" id="memory-toggle" aria-labelledby="memory-toggle-label" />
                 <span class="vsc-options__toggle-track"></span>
               </label>
             </div>
@@ -479,7 +496,7 @@ root.innerHTML = `
       </section>
 
       <div class="vsc-options__actions">
-        <div class="vsc-options__status" id="status"></div>
+        <div class="vsc-options__status" id="status" role="status" aria-live="polite"></div>
         <div class="vsc-options__buttons">
           <button type="button" class="vsc-options__button" id="reset-button">${tr('optReset')}</button>
           <button type="button" class="vsc-options__button vsc-options__button--primary" id="save-button">${tr('optSave')}</button>
@@ -523,7 +540,7 @@ SHORTCUT_DEFINITIONS.forEach((definition) => {
   row.className = 'vsc-options__row';
   row.innerHTML = `
     <div>
-      <p class="vsc-options__row-label">${tr(texts.label)}</p>
+      <p class="vsc-options__row-label" id="shortcut-label-${definition.id}">${tr(texts.label)}</p>
       <p class="vsc-options__row-description">${tr(texts.description)}</p>
     </div>
   `;
@@ -533,6 +550,7 @@ SHORTCUT_DEFINITIONS.forEach((definition) => {
   input.readOnly = true;
   input.className = 'vsc-options__input';
   input.placeholder = tr('optPressKey');
+  input.setAttribute('aria-labelledby', `shortcut-label-${definition.id}`);
   input.addEventListener('keydown', (event) => {
     event.preventDefault();
     const shortcut = keyboardEventToShortcut(event);
@@ -738,8 +756,12 @@ memoryClearButton.addEventListener('click', () => {
   const clear = () => {
     if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       chrome.storage.local.remove(SITE_SPEEDS_KEY, () => {
-        setStatus(tr('optMemoryCleared'), 'success');
-        window.setTimeout(() => setStatus(''), 1600);
+        // 站点速度记忆有两张表：速度表和 per-site 禁用表。
+        // 只删前者会留下「该站点永久不记忆」的隐形状态，用户在设置页无从察觉。
+        chrome.storage.local.remove(SITE_MEMORY_DISABLED_KEY, () => {
+          setStatus(tr('optMemoryCleared'), 'success');
+          window.setTimeout(() => setStatus(''), 1600);
+        });
       });
       return;
     }

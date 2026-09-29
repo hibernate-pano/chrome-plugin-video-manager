@@ -248,8 +248,12 @@
     "description": "optMemoryClearLabel"
   },
   "optMemoryCleared": {
-    "message": "已清除全部站点速度记忆。",
+    "message": "已清除全部站点速度记忆，包含各站点的禁用记录。",
     "description": "optMemoryCleared"
+  },
+  "optMemoryGlobalOff": {
+    "message": "站点速度记忆总开关已在设置页关闭",
+    "description": "optMemoryGlobalOff"
   },
   "optReset": {
     "message": "恢复默认",

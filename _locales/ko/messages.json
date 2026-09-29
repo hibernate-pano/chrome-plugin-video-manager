@@ -224,8 +224,12 @@
     "description": "optMemoryClearLabel"
   },
   "optMemoryCleared": {
-    "message": "기억된 사이트 속도를 모두 지웠습니다.",
+    "message": "기억된 사이트 속도와 사이트별 제외 설정을 모두 지웠습니다.",
     "description": "optMemoryCleared"
+  },
+  "optMemoryGlobalOff": {
+    "message": "사이트별 속도 기억은 설정에서 꺼져 있습니다",
+    "description": "optMemoryGlobalOff"
   },
   "optReset": {
     "message": "기본값 복원",

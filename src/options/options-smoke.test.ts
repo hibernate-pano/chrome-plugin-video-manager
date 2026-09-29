@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { SITE_MEMORY_DISABLED_KEY, SITE_SPEEDS_KEY } from '../shared/types';
+import { createChromeMock, flush } from './options-test-env';
 
 /**
  * Options 页冒烟测试：验证页面能渲染出预设速度输入、空格开关与快捷键行，
@@ -6,24 +8,9 @@ import { describe, expect, it } from 'vitest';
  */
 describe('options page smoke', () => {
   it('renders presets, space toggle and shortcut rows with defaults', async () => {
-    document.body.innerHTML = '<div id="root"></div>';
+    const { render } = createChromeMock();
+    const root = await render();
 
-    (globalThis as Record<string, unknown>).chrome = {
-      runtime: { lastError: null },
-      storage: {
-        sync: {
-          get: (_key: string, callback: (result: Record<string, unknown>) => void) => callback({}),
-          set: (_value: Record<string, unknown>, callback?: () => void) => callback?.(),
-          remove: (_key: string, callback?: () => void) => callback?.(),
-        },
-        onChanged: { addListener: () => {}, removeListener: () => {} },
-      },
-    };
-
-    await import('./index');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const root = document.getElementById('root');
     expect(root).not.toBeNull();
 
     const presetInputs = root?.querySelectorAll('.vsc-options__preset-input') ?? [];
@@ -40,5 +27,22 @@ describe('options page smoke', () => {
 
     const saveButton = root?.querySelector('#save-button');
     expect(saveButton).not.toBeNull();
+  });
+
+  it('clears the per-site opt-out table together with the remembered speeds', async () => {
+    const { render, localRemoves } = createChromeMock({
+      local: {
+        [SITE_SPEEDS_KEY]: { 'example.com': 1.5 },
+        [SITE_MEMORY_DISABLED_KEY]: { 'example.com': true },
+      },
+    });
+
+    const root = await render();
+    (root.querySelector('#memory-clear-button') as HTMLButtonElement).click();
+    await flush();
+
+    // 只删速度表会留下「该站点永久不记忆」的隐形状态。
+    expect(localRemoves).toEqual([SITE_SPEEDS_KEY, SITE_MEMORY_DISABLED_KEY]);
+    expect(root.querySelector('#status')?.textContent).not.toBe('');
   });
 });

@@ -1,9 +1,15 @@
 import { t } from '../shared/i18n';
+import { formatShortcut } from '../shared/shortcuts';
+import { loadSettings } from '../shared/settings';
 import {
+  DEFAULT_PRESET_SPEEDS,
+  DEFAULT_SHORTCUTS,
+  DEFAULT_SPACE_TOGGLE_PLAY,
   GET_STATE_MESSAGE,
   RESET_SPEED_MESSAGE,
   SITE_MEMORY_DISABLED_KEY,
 } from '../shared/types';
+import type { PersistedSettings } from '../shared/types';
 
 const formatRate = (value: number) =>
   value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
@@ -180,6 +186,15 @@ body {
   transform: translateX(18px);
 }
 
+.vsc-popup__toggle input:focus-visible + .vsc-popup__toggle-track {
+  box-shadow: 0 0 0 2px #67e8f9;
+}
+
+.vsc-popup__toggle input:disabled + .vsc-popup__toggle-track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .vsc-popup__keys {
   margin-top: 12px;
   padding: 12px;
@@ -328,7 +343,7 @@ root.innerHTML = `
           <p class="vsc-popup__row-desc" id="memory-desc"></p>
         </div>
         <label class="vsc-popup__toggle">
-          <input type="checkbox" id="memory-toggle" />
+          <input type="checkbox" id="memory-toggle" aria-labelledby="memory-label" />
           <span class="vsc-popup__toggle-track"></span>
         </label>
       </div>
@@ -370,15 +385,25 @@ const setRate = (rate: number, playing: boolean | null) => {
   }
 };
 
-const renderKeys = () => {
-  const keys = [
-    ['=', t('popupKeyIncrease', '加速')],
-    ['-', t('popupKeyDecrease', '减速')],
-    ['0', t('popupKeyReset', '重置')],
-    ['1-4', t('popupKeyPresets', '档位')],
-    ['Space', t('popupKeyPlay', '播放/暂停')],
-    ['f', t('popupKeyFullscreen', '网页全屏')],
+/**
+ * 快捷键提示区必须反映设置页里的真实配置，否则用户改绑快捷键或关掉空格播放后，
+ * 弹窗仍在承诺按旧键位操作。settings 读取失败时退化为默认键位表。
+ */
+const renderKeys = (settings: PersistedSettings | null) => {
+  const shortcuts = settings?.shortcuts ?? DEFAULT_SHORTCUTS;
+  const presetCount = settings?.presetSpeeds.length ?? DEFAULT_PRESET_SPEEDS.length;
+  const keys: Array<[string, string]> = [
+    [formatShortcut(shortcuts.increaseSpeed), t('popupKeyIncrease', '加速')],
+    [formatShortcut(shortcuts.decreaseSpeed), t('popupKeyDecrease', '减速')],
+    [formatShortcut(shortcuts.resetSpeed), t('popupKeyReset', '重置')],
+    [`1-${presetCount}`, t('popupKeyPresets', '档位')],
   ];
+
+  if (settings?.spaceTogglePlay ?? DEFAULT_SPACE_TOGGLE_PLAY) {
+    keys.push(['Space', t('popupKeyPlay', '播放/暂停')]);
+  }
+
+  keys.push([formatShortcut(shortcuts.fullscreen), t('popupKeyFullscreen', '网页全屏')]);
 
   keyGrid.innerHTML = keys
     .map(([key, label]) => `<div class="vsc-popup__key"><span class="vsc-popup__kbd">${key}</span><span>${label}</span></div>`)
@@ -386,14 +411,20 @@ const renderKeys = () => {
 };
 
 const main = async () => {
-  renderKeys();
+  // 设置读取与标签页查询并行发起，避免弹窗首屏串行等待两轮 IPC。
+  const settingsPromise = loadSettings().catch(() => null);
+  const tabPromise = getActiveTab();
+
   statusLabelNode.textContent = t('popupCurrentSpeed', '当前速度');
   resetButton.textContent = t('popupResetSpeed', '重置 1x');
   optionsButton.textContent = t('popupOpenSettings', '设置');
   document.getElementById('keys-title')!.textContent = t('popupShortcuts', '快捷键');
   document.getElementById('changelog-link')!.textContent = t('popupOpenOptions', '打开完整设置');
 
-  const tab = await getActiveTab();
+  const settings = await settingsPromise;
+  renderKeys(settings);
+
+  const tab = await tabPromise;
   if (!tab) {
     setRate(1, null);
     hintNode.textContent = t('popupNoTab', '无法访问当前标签页');
@@ -414,20 +445,44 @@ const main = async () => {
   setRate(state.speed, state.playing);
   hintNode.textContent = state.hostname;
 
-  const disabled = await getMemoryDisabled(state.hostname);
-  memoryToggle.checked = !disabled;
+  // 全局站点记忆关闭时，内容脚本两道硬门直接 return，此处必须置灰并说明原因，
+  // 否则开关会显示为可用、点击却毫无效果，还会静默写一条永久禁用记录。
+  const globalMemoryOff = settings?.siteSpeedMemory === false;
+  if (globalMemoryOff) {
+    memoryToggle.checked = false;
+    memoryToggle.disabled = true;
+  } else {
+    const disabled = await getMemoryDisabled(state.hostname);
+    memoryToggle.checked = !disabled;
+  }
+
   document.getElementById('memory-label')!.textContent = t('popupSiteMemory', '记住本站速度');
-  document.getElementById('memory-desc')!.textContent = t('popupSiteMemoryDesc', '刷新或重新打开页面时自动恢复');
+  document.getElementById('memory-desc')!.textContent = globalMemoryOff
+    ? t('optMemoryGlobalOff', '站点速度记忆总开关已在设置页关闭')
+    : t('popupSiteMemoryDesc', '刷新或重新打开页面时自动恢复');
 
   memoryToggle.addEventListener('change', () => {
+    if (globalMemoryOff) {
+      return;
+    }
+
     void setMemoryDisabled(state.hostname, !memoryToggle.checked);
   });
 
   resetButton.addEventListener('click', () => {
-    void sendToTab<{ ok: boolean }>(tab.id, { type: RESET_SPEED_MESSAGE }).then((result) => {
-      if (result?.ok) {
-        setRate(1, null);
+    void sendToTab<{ ok: boolean }>(tab.id, { type: RESET_SPEED_MESSAGE }).then(async (result) => {
+      if (!result?.ok) {
+        return;
       }
+
+      // 重置响应只带 ok，播放状态要再问一次内容脚本；查询失败仍走 '—' 兜底。
+      const next = await sendToTab<TabState>(tab.id, { type: GET_STATE_MESSAGE });
+      if (next?.hasVideo) {
+        setRate(next.speed, next.playing);
+        return;
+      }
+
+      setRate(1, null);
     });
   });
 };
