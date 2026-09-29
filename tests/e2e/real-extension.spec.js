@@ -49,18 +49,61 @@ const findChromium = () => {
  * 现有的 fullscreen-regression.spec.js 是把 dist/content.js 当普通 <script> 注入页面，
  * 那是页面主世界，不是扩展：content-loader 桥接、document_start 抢占注册、
  * 隔离世界里的 chrome.* 全部没被覆盖。v5.2.1 修的正是这些，所以必须真加载扩展。
+ *
+ * 关于 headless：Playwright 1.49 起把浏览器拆成了完整 chromium 和
+ * chromium_headless_shell，只有前者支持 --load-extension。直接给 executablePath
+ * 时 Playwright 未必走新 headless，在 ubuntu-latest 上会安静地加载不了扩展，
+ * 表现为每条用例 30 秒超时。所以优先用 channel: 'chromium'（Playwright 明确
+ * 对应完整构建），失败再回落到显式 executablePath。
  */
+const launchArgs = () => [
+  `--disable-extensions-except=${DIST}`,
+  `--load-extension=${DIST}`,
+  '--autoplay-policy=no-user-gesture-required',
+  // CI 容器里以 root 跑 Chrome 需要这两个，否则沙箱起不来或 /dev/shm 太小。
+  '--no-sandbox',
+  '--disable-dev-shm-usage',
+];
+
 const launchExtension = async () => {
   const profile = mkdtempSync(join(tmpdir(), 'vsc-profile-'));
-  const context = await chromium.launchPersistentContext(profile, {
-    executablePath: findChromium(),
-    headless: true,
-    args: [
-      `--disable-extensions-except=${DIST}`,
-      `--load-extension=${DIST}`,
-      '--autoplay-policy=no-user-gesture-required',
-    ],
-  });
+  const executablePath = findChromium();
+
+  const candidates = [
+    { label: 'channel:chromium', options: { channel: 'chromium', headless: true, args: launchArgs() } },
+    { label: 'executablePath', options: { executablePath, headless: true, args: launchArgs() } },
+  ];
+
+  let context = null;
+  const failures = [];
+  for (const candidate of candidates) {
+    if (candidate.options.executablePath === undefined) continue;
+    try {
+      context = await chromium.launchPersistentContext(profile, candidate.options);
+      break;
+    } catch (error) {
+      failures.push(`${candidate.label}: ${String(error).slice(0, 160)}`);
+    }
+  }
+
+  if (!context) {
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error('无法启动带扩展的浏览器：\n' + failures.join('\n'));
+  }
+
+  // 前置检查：扩展没加载成功时立刻失败。否则每条用例都会各等 30 秒超��，
+  // 报出来的是看不出原因的超时（这个坑在 ubuntu-latest 上真的踩过一次）。
+  const sw = context.serviceWorkers()[0]
+    ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
+  if (!sw) {
+    await context.close();
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error(
+      '浏览器起来了但扩展没加载：没有等到 background service worker。\n' +
+        'headless 下必须使用支持扩展的完整 chromium（channel: chromium），' +
+        'headless shell 不支持 --load-extension。',
+    );
+  }
 
   return {
     context,
