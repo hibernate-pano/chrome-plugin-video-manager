@@ -77,12 +77,17 @@ const launchExtension = async () => {
   let context = null;
   const failures = [];
   for (const candidate of candidates) {
-    if (candidate.options.executablePath === undefined) continue;
+    // 只在候选「指名要用 executablePath」而它又没解析出来时跳过；
+    // channel 候选根本没有这个键，不能被这条守卫一起跳掉。
+    if ('executablePath' in candidate.options && candidate.options.executablePath === undefined) {
+      continue;
+    }
+
     try {
       context = await chromium.launchPersistentContext(profile, candidate.options);
       break;
     } catch (error) {
-      failures.push(`${candidate.label}: ${String(error).slice(0, 160)}`);
+      failures.push(`${candidate.label}: ${String(error).slice(0, 200)}`);
     }
   }
 
