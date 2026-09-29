@@ -1,0 +1,252 @@
+import { test, expect, chromium } from '@playwright/test';
+import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+// VSC_EXTENSION_DIR 可以指向别的构建目录（例如故意改坏的副本），
+// 默认测 dist/。走环境变量而不是硬编码，是为了让「变异验证」能在不碰源码的前提下跑。
+const DIST = process.env.VSC_EXTENSION_DIR
+  ? resolve(process.env.VSC_EXTENSION_DIR)
+  : resolve(process.cwd(), 'dist');
+
+/**
+ * 找到本机已装的 Chrome for Testing。
+ *
+ * Playwright 缓存里的浏览器版本号未必和它自己期望的一致，硬编码版本路径会在别人
+ * 机器上直接报 "Executable doesn't exist"。所以扫描缓存目录、按平台取对应的可执行
+ * 路径；扫不到就返回 undefined，交给 Playwright 用它自己的解析（CI 上
+ * `playwright install chromium` 之后走的就是这条）。
+ */
+const findChromium = () => {
+  const cache = join(homedir(), 'Library/Caches/ms-playwright');
+  if (!existsSync(cache)) return undefined;
+
+  const relativeCandidates = [
+    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+    'chrome-linux/chrome',
+  ];
+
+  const versions = readdirSync(cache)
+    .filter((name) => name.startsWith('chromium-'))
+    .map((name) => name.slice('chromium-'.length))
+    .filter((version) => /^\d+$/.test(version))
+    .sort((a, b) => Number(b) - Number(a));
+
+  for (const version of versions) {
+    for (const relative of relativeCandidates) {
+      const candidate = join(cache, `chromium-${version}`, relative);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+
+  return undefined;
+};
+
+/**
+ * 真实加载 dist/ 的扩展跑一遍。
+ *
+ * 现有的 fullscreen-regression.spec.js 是把 dist/content.js 当普通 <script> 注入页面，
+ * 那是页面主世界，不是扩展：content-loader 桥接、document_start 抢占注册、
+ * 隔离世界里的 chrome.* 全部没被覆盖。v5.2.1 修的正是这些，所以必须真加载扩展。
+ */
+const launchExtension = async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'vsc-profile-'));
+  const context = await chromium.launchPersistentContext(profile, {
+    executablePath: findChromium(),
+    headless: true,
+    args: [
+      `--disable-extensions-except=${DIST}`,
+      `--load-extension=${DIST}`,
+      '--autoplay-policy=no-user-gesture-required',
+    ],
+  });
+
+  return {
+    context,
+    async close() {
+      await context.close();
+      rmSync(profile, { recursive: true, force: true });
+    },
+  };
+};
+
+/**
+ * 服务测试页：内容脚本跑在隔离世界，用 evaluate 改不到它，只能从页面可见结果断言。
+ *
+ * 辅助函数全部放 <head> 且惰性取节点：内容脚本在 document_start 就注入样式，
+ * waitForSelector 会在 <body> 内联脚本执行之前返回，辅助函数若定义在 body 就会
+ * 和这个等待形成竞态（曾经真的偶发失败过一次）。
+ */
+const testHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>vsc real ext</title>
+<style>body{margin:0}video{width:480px;height:270px;background:#000}</style>
+<script>
+  window.__rate = () => document.getElementById('v1').playbackRate;
+  window.__dirty = false;
+  // 页面自己抢一个冒泡阶段的 keydown 监听器。内容脚本的拦截跑在捕获阶段，
+  // 若它真的抢到了 window 捕获的最前位，这条永远不该被看到。
+  window.addEventListener('keydown', (e) => { if (e.key === '7') window.__dirty = true; });
+<\/script>
+</head><body>
+<video id="v1" width="480" height="270" muted playsinline></video>
+</body></html>`;
+
+/**
+ * 只劫持页面请求。扩展的内容脚本是靠动态 import 拉 chrome-extension://.../content.js
+ * 的，那个请求一旦也被 fulfill 成 text/html，MIME 严格检查会直接让 import 失败。
+ */
+const serveHtml = async (page, html) => {
+  await page.route('**/*', (route) => {
+    if (route.request().url().startsWith('chrome-extension://')) {
+      return route.continue();
+    }
+
+    return route.fulfill({ status: 200, contentType: 'text/html', body: html });
+  });
+};
+
+test.describe('真实扩展运行时', () => {
+  test('内容脚本在隔离世界注入样式，并能响应数字键改速', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await serveHtml(page, testHtml);
+      await page.goto('https://example.com/');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+
+      await page.locator('#v1').click();
+      await page.evaluate(() => {
+        const v = document.getElementById('v1');
+        Object.defineProperty(v, 'readyState', { value: 4, configurable: true });
+        Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
+      });
+
+      // 预设档位：1→1.25  2→1.5
+      await page.keyboard.press('2');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+      await page.keyboard.press('1');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.25);
+
+      // 0 键重置
+      await page.keyboard.press('0');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1);
+
+      // 页面主世界的自定义键 7 不该被内容脚本动到
+      await page.keyboard.press('7');
+      await expect.poll(() => page.evaluate(() => window.__dirty)).toBe(true);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  test('内容脚本不会打断页面自身的输入框打字', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      const html = testHtml.replace(
+        '</body>',
+        '<input id="txt" /></body>',
+      );
+      await serveHtml(page, html);
+      await page.goto('https://example.com/');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+
+      await page.locator('#txt').fill('');
+      await page.locator('#txt').pressSequentially('0123456789');
+      await expect.poll(() => page.locator('#txt').inputValue()).toBe('0123456789');
+      // 打字期间数字键属于输入框，速度必须还是 1
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  /**
+   * v5.2.1 那个提交修的就是这件事：页面脚本抢在前面 stopImmediatePropagation 把按键吞掉。
+   * 这里让页面在 document_start 就注册一个捕获阶段的吞键监听器 —— 它一定注册得比
+   * content-loader 晚，所以内容脚本必须仍然先拿到事件。
+   */
+  test('页面脚本用 stopImmediatePropagation 抢键也抢不过内容脚本', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><script>
+        window.__rate = () => document.getElementById('v1').playbackRate;
+        window.__swallowed = 0;
+        window.addEventListener('keydown', (e) => {
+          window.__swallowed += 1;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }, true);
+      <\/script></head><body>
+        <video id="v1" width="480" height="270" muted></video>
+      </body></html>`;
+
+      await serveHtml(page, html);
+      await page.goto('https://example.com/');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+      await page.locator('#v1').click();
+      await page.evaluate(() => {
+        const v = document.getElementById('v1');
+        Object.defineProperty(v, 'readyState', { value: 4, configurable: true });
+        Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
+      });
+
+      await page.keyboard.press('2');
+      // 无论页面吞不吞键，内容脚本都必须已经改掉速度
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+      // 页面那个捕获监听器一次都不该被触发：内容脚本的 intercept 用了 stopImmediatePropagation
+      await expect.poll(() => page.evaluate(() => window.__swallowed)).toBe(0);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  /** 站点速度记忆：改速 → 写 storage.local → 刷新 → play 事件触发自动恢复。 */
+  test('站点速度记忆跨刷新恢复', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await serveHtml(page, testHtml);
+      await page.goto('https://vsc-memory-test.example/');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+
+      await page.locator('#v1').click();
+      await page.evaluate(() => {
+        const v = document.getElementById('v1');
+        Object.defineProperty(v, 'readyState', { value: 4, configurable: true });
+        Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
+      });
+
+      await page.keyboard.press('2');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+
+      // 等记忆写盘，否则刷新可能抢在写入之前
+      await expect
+        .poll(async () => {
+          const sw = ext.context.serviceWorkers()[0];
+          if (!sw) return null;
+          return sw.evaluate(async (host) => {
+            const got = await chrome.storage.local.get('vsc-site-speeds');
+            return got['vsc-site-speeds']?.[host] ?? null;
+          }, 'vsc-memory-test.example');
+        }, { timeout: 10_000 })
+        .toBe(1.5);
+
+      await page.reload();
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+      await page.locator('#v1').click();
+      await page.evaluate(() => {
+        const v = document.getElementById('v1');
+        Object.defineProperty(v, 'readyState', { value: 4, configurable: true });
+        Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
+        v.dispatchEvent(new Event('play'));
+      });
+
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+    } finally {
+      await ext.close();
+    }
+  });
+});
