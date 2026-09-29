@@ -121,6 +121,12 @@ export class FullscreenController {
     video.style.setProperty('background', '#000', 'important');
   }
 
+  // css-cover 模式下视频留在页面自己的树里（靠 fixed + 最高 z-index 盖全屏），
+  // 跨不过页面祖先的层叠上下文：transform / filter / opacity / contain /
+  // position+z-index 都会在祖先上新建一个，把 fixed 视频关在里面。
+  // 所以这一模式下绝不能靠 overlay 提供不透明背板——背板反而会盖住视频。
+  // 视频自身已有 background:#000 与 object-fit:contain（见 applyFullscreenLayout），
+  // 退化成「浮在真实页面上」依然可看。
   private applyCssCover(video: HTMLVideoElement) {
     this.applyFullscreenLayout(video, 'css-cover');
   }
@@ -134,6 +140,10 @@ export class FullscreenController {
     const playbackSnapshot = this.capturePlaybackSnapshot(video);
     this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
     this.state.mode = 'css-cover';
+    // 摘掉 vsc-active 即彻底 display:none（runtimeStyles.ts:4-16），一个像素都不画。
+    // overlay 此刻仍在 DOM 里（只有 exit 会 remove 它），不清掉就会留下一层
+    // 98% 不透明的深色背板，把可能被页面祖先压住的视频整个盖住。
+    document.getElementById(OVERLAY_ID)?.classList.remove('vsc-active');
     this.applyCssCover(video);
     this.applySnapshot(video, playbackSnapshot);
   }
@@ -146,7 +156,10 @@ export class FullscreenController {
     this.healthTimer = window.setInterval(() => {
       const video = this.state.video;
       if (!video || !video.isConnected) {
-        this.exit();
+        // 页面已经把这个节点从文档里丢掉了：不能走 exit()，否则会把废弃节点
+        // 重新插回它原来的父节点（originalNextSibling 也可能已被移除 → NotFoundError），
+        // 还会对没人看的游离节点调 play()。这里只做清理。
+        this.release();
       }
     }, 500);
   }
@@ -222,25 +235,19 @@ export class FullscreenController {
     return true;
   }
 
-  exit() {
+  // 只清理、不碰视频在页面里的位置。给「节点已经不在文档里」的路径用：
+  // 还原 class/style/controls 对游离节点是 no-op，无副作用。
+  private release() {
     const video = this.state.video;
     if (!video) {
       return;
-    }
-
-    const overlay = document.getElementById(OVERLAY_ID);
-
-    if (this.state.mode === 'reparent' && this.state.originalParent) {
-      const playbackSnapshot = this.capturePlaybackSnapshot(video);
-      this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
-      this.applySnapshot(video, playbackSnapshot);
     }
 
     video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--css-cover');
     video.controls = this.state.originalControls;
     video.setAttribute('style', this.state.originalStyle);
 
-    overlay?.remove();
+    document.getElementById(OVERLAY_ID)?.remove();
     document.body.style.overflow = this.state.originalBodyOverflow;
 
     if (this.healthTimer !== null) {
@@ -261,6 +268,23 @@ export class FullscreenController {
       paused: true,
       muted: false,
     };
+  }
+
+  exit() {
+    const video = this.state.video;
+    if (!video) {
+      return;
+    }
+
+    // isConnected 守卫：页面若已把视频连同 originalNextSibling 一起丢弃，
+    // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。
+    if (this.state.mode === 'reparent' && this.state.originalParent && video.isConnected) {
+      const playbackSnapshot = this.capturePlaybackSnapshot(video);
+      this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
+      this.applySnapshot(video, playbackSnapshot);
+    }
+
+    this.release();
   }
 
   destroy() {

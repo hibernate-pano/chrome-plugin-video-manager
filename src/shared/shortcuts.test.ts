@@ -60,6 +60,22 @@ describe('normalizeShortcutSettings', () => {
     expect(settings.resetSpeed).toBe(' ');
     expect(matchesShortcut(new KeyboardEvent('keydown', { key: ' ' }), settings.resetSpeed)).toBe(true);
   });
+
+  it('drops bindings whose main key is a bare modifier', () => {
+    const settings = normalizeShortcutSettings({
+      increaseSpeed: 'shift+Shift',
+      decreaseSpeed: 'ctrl+Control',
+      resetSpeed: 'r',
+      fullscreen: 'f',
+    });
+
+    expect(settings).toEqual({
+      increaseSpeed: '=',
+      decreaseSpeed: '-',
+      resetSpeed: 'r',
+      fullscreen: 'f',
+    });
+  });
 });
 
 describe('keyboardEventToShortcut', () => {
@@ -68,5 +84,12 @@ describe('keyboardEventToShortcut', () => {
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: ' ', ctrlKey: true }))).toBe('ctrl+ ');
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'k' }))).toBe('k');
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Escape' }))).toBe('Escape');
+  });
+
+  it('ignores bare modifier key presses', () => {
+    expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true }))).toBeNull();
+    expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true }))).toBeNull();
+    expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Alt', altKey: true }))).toBeNull();
+    expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true }))).toBeNull();
   });
 });

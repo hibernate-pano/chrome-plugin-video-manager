@@ -318,4 +318,135 @@ describe('KeyboardController', () => {
     expect(video.playbackRate).toBe(1);
     expect(showSpeedHud).toHaveBeenCalledWith(1, video);
   });
+
+  it('gives a custom Space shortcut priority over fullscreen play/pause', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    settings = createSettings({ shortcuts: { ...settings.shortcuts, resetSpeed: 'Space' } });
+    video.playbackRate = 2.5;
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => true,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedHud,
+      showPlaybackState,
+    });
+
+    const event = keyEvent(' ');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(video.playbackRate).toBe(1);
+    expect(video.pause).not.toHaveBeenCalled();
+    expect(showPlaybackState).not.toHaveBeenCalled();
+  });
+
+  it('ignores space in fullscreen when spaceTogglePlay is disabled', () => {
+    settings = createSettings({ spaceTogglePlay: false });
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => true,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedHud,
+      showPlaybackState,
+    });
+
+    const event = keyEvent(' ');
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(video?.pause).not.toHaveBeenCalled();
+    expect(showPlaybackState).not.toHaveBeenCalled();
+  });
+
+  it('does not treat modified space as play/pause in fullscreen', () => {
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => true,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedHud,
+      showPlaybackState,
+    });
+
+    const event = keyEvent(' ', { shiftKey: true });
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(video?.pause).not.toHaveBeenCalled();
+    expect(showPlaybackState).not.toHaveBeenCalled();
+  });
+
+  it('stops the speed repeat when the window loses focus', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    vi.useFakeTimers();
+    try {
+      controller.start();
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+
+      // 越过 280ms 首次延迟与随后的 120ms 间隔，让长按真正跑起来。
+      vi.advanceTimersByTime(1000);
+      const hudCallsBeforeBlur = showSpeedHud.mock.calls.length;
+      const rateBeforeBlur = video.playbackRate;
+      expect(hudCallsBeforeBlur).toBeGreaterThan(1);
+
+      // 切走窗口后 keyup 永远不会再到达，只能靠 blur 兜底。
+      window.dispatchEvent(new Event('blur'));
+      vi.advanceTimersByTime(1000);
+
+      expect(showSpeedHud).toHaveBeenCalledTimes(hudCallsBeforeBlur);
+      expect(video.playbackRate).toBe(rateBeforeBlur);
+    } finally {
+      controller.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the speed repeat when the page is hidden', () => {
+    if (!video) {
+      throw new Error('video missing');
+    }
+
+    vi.useFakeTimers();
+    try {
+      controller.start();
+      controller.handleKeyDown(keyEvent('='));
+      vi.advanceTimersByTime(1000);
+      const hudCallsBeforeHide = showSpeedHud.mock.calls.length;
+      const rateBeforeHide = video.playbackRate;
+
+      document.dispatchEvent(new Event('visibilitychange'));
+      vi.advanceTimersByTime(1000);
+
+      expect(showSpeedHud).toHaveBeenCalledTimes(hudCallsBeforeHide);
+      expect(video.playbackRate).toBe(rateBeforeHide);
+    } finally {
+      controller.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a keyup that arrives after focus loss', () => {
+    vi.useFakeTimers();
+    try {
+      controller.start();
+      controller.handleKeyDown(keyEvent('='));
+      window.dispatchEvent(new Event('blur'));
+
+      const keyUp = new KeyboardEvent('keyup', { key: '=' });
+
+      expect(() => controller.handleKeyUp(keyUp)).not.toThrow();
+      expect(controller.handleKeyUp(keyUp)).toBe(false);
+    } finally {
+      controller.stop();
+      vi.useRealTimers();
+    }
+  });
 });

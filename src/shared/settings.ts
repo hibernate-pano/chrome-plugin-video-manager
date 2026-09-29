@@ -94,18 +94,30 @@ const removeValue = async (namespace: StorageNamespace, key: string): Promise<vo
   });
 };
 
+/**
+ * 把 v4 的 legacy shortcuts 映射到 v5 字段。
+ * 只映射真实存在的字符串键：缺失的键必须留在结果之外，
+ * 否则展开到 normalizePersistedSettings 末尾时，undefined 会覆盖用户已保存的 v5 值。
+ */
 const migrateLegacyShortcuts = (legacyValue: unknown): Partial<ShortcutSettings> => {
   if (!legacyValue || typeof legacyValue !== 'object') {
     return {};
   }
 
   const value = legacyValue as Record<string, unknown>;
-  return {
-    increaseSpeed: typeof value.increase === 'string' ? value.increase : undefined,
-    decreaseSpeed: typeof value.decrease === 'string' ? value.decrease : undefined,
-    resetSpeed: typeof value.reset === 'string' ? value.reset : undefined,
-    fullscreen: typeof value['toggle-fullscreen'] === 'string' ? value['toggle-fullscreen'] : undefined,
+  const mapped: Partial<ShortcutSettings> = {};
+  const assign = (id: keyof ShortcutSettings, raw: unknown) => {
+    if (typeof raw === 'string') {
+      mapped[id] = raw;
+    }
   };
+
+  assign('increaseSpeed', value.increase);
+  assign('decreaseSpeed', value.decrease);
+  assign('resetSpeed', value.reset);
+  assign('fullscreen', value['toggle-fullscreen']);
+
+  return mapped;
 };
 
 const roundToTwo = (value: number) => Math.round(value * 100) / 100;

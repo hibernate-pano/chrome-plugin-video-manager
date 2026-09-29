@@ -53,6 +53,42 @@ describe('normalizePersistedSettings', () => {
     expect(settings.siteSpeedMemory).toBe(true);
   });
 
+  it('keeps user v5 shortcuts for legacy keys that are absent', () => {
+    const settings = normalizePersistedSettings({
+      shortcuts: {
+        increaseSpeed: 'ArrowUp',
+        decreaseSpeed: 'ArrowDown',
+        resetSpeed: 'r',
+        fullscreen: 'g',
+      },
+    }, { increase: 'k' });
+
+    expect(settings.shortcuts).toEqual({
+      increaseSpeed: 'k',
+      decreaseSpeed: 'ArrowDown',
+      resetSpeed: 'r',
+      fullscreen: 'g',
+    });
+  });
+
+  it('keeps user v5 shortcuts when legacy data maps to no known key', () => {
+    const settings = normalizePersistedSettings({
+      shortcuts: {
+        increaseSpeed: 'ArrowUp',
+        decreaseSpeed: 'ArrowDown',
+        resetSpeed: 'r',
+        fullscreen: 'g',
+      },
+    }, { mute: 'm' });
+
+    expect(settings.shortcuts).toEqual({
+      increaseSpeed: 'ArrowUp',
+      decreaseSpeed: 'ArrowDown',
+      resetSpeed: 'r',
+      fullscreen: 'g',
+    });
+  });
+
   it('normalizes nested v5 settings', () => {
     const settings = normalizePersistedSettings({
       shortcuts: {

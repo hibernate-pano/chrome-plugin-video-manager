@@ -29,8 +29,10 @@ const isEditableTarget = (target: EventTarget | null) => {
     || target.isContentEditable;
 };
 
+// 「没按修饰键」的唯一定义：空格/数字档位这些无参数手势必须让带修饰键的组合
+// 原样放行（Shift+空格是播放器/页面的向上滚动等既有手势），所以 shift 也要算进来。
 const isPlainKey = (event: KeyboardEvent) =>
-  !event.ctrlKey && !event.altKey && !event.metaKey;
+  !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
 
 /**
  * YouTube 站点例外：它的播放器对空格有完整原生处理，且自身监听器先于我们注册，
@@ -46,6 +48,12 @@ export class KeyboardController {
   private repeatingShortcut: keyof PersistedSettings['shortcuts'] | null = null;
   private readonly boundHandleKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
   private readonly boundHandleKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event);
+  /**
+   * 窗口失焦（切走标签页/应用）或页面转入后台时，keyup 不会到达本窗口，
+   * 长按加速留下的重复定时器必须在这里被终止，否则会一直跑到页面销毁。
+   * 这两条不走桥接（桥接只转发 keydown/keyup），直接注册即可。
+   */
+  private readonly boundHandleFocusLoss = () => this.clearRepeat();
 
   constructor(options: KeyboardControllerOptions) {
     this.options = options;
@@ -117,7 +125,16 @@ export class KeyboardController {
     this.repeatingShortcut = shortcutId;
     this.repeatDelayTimer = setTimeout(() => {
       this.runSpeedChange(delta);
-      this.repeatIntervalTimer = setInterval(() => this.runSpeedChange(delta), 120);
+      this.repeatIntervalTimer = setInterval(() => {
+        // 守卫：若本轮重复已被别的路径接管（设置中途变更等），
+        // 先清干净再退出，避免留下孤儿定时器。
+        if (this.repeatingShortcut !== shortcutId) {
+          this.clearRepeat();
+          return;
+        }
+
+        this.runSpeedChange(delta);
+      }, 120);
     }, 280);
   }
 
@@ -155,7 +172,16 @@ export class KeyboardController {
       return true;
     }
 
-    if (fullscreenActive && !isYouTube() && (event.key === ' ' || event.key === 'Spacebar')) {
+    // 空格是否已被用户绑定：只要有绑定，全屏的空格逻辑就不该抢占它，
+    // 与非全屏路径（下方 spaceTogglePlay 分支）遵守同一份用户设置。
+    const spaceBound = [
+      shortcuts.increaseSpeed,
+      shortcuts.decreaseSpeed,
+      shortcuts.resetSpeed,
+      shortcuts.fullscreen,
+    ].some((shortcut) => matchesShortcut(event, shortcut));
+
+    if (fullscreenActive && !isYouTube() && (event.key === ' ' || event.key === 'Spacebar') && !spaceBound && isPlainKey(event) && settings.spaceTogglePlay) {
       this.intercept(event);
       this.clearRepeat();
       this.runTogglePlayback();
@@ -249,6 +275,10 @@ export class KeyboardController {
       window.addEventListener('keydown', this.boundHandleKeyDown, true);
       window.addEventListener('keyup', this.boundHandleKeyUp, true);
     }
+
+    // 失焦终止长按重复：keyup 不会到达本窗口，必须靠 blur/visibilitychange 兜底。
+    window.addEventListener('blur', this.boundHandleFocusLoss);
+    document.addEventListener('visibilitychange', this.boundHandleFocusLoss);
   }
 
   stop() {
@@ -263,5 +293,8 @@ export class KeyboardController {
       window.removeEventListener('keydown', this.boundHandleKeyDown, true);
       window.removeEventListener('keyup', this.boundHandleKeyUp, true);
     }
+
+    window.removeEventListener('blur', this.boundHandleFocusLoss);
+    document.removeEventListener('visibilitychange', this.boundHandleFocusLoss);
   }
 }

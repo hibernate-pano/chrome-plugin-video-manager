@@ -44,6 +44,9 @@ const styles = `
 }
 
 .vsc-page-fullscreen-video--css-cover {
+  /* isolation 只能在本元素自己身上新建层叠上下文，帮不了「跨过页面祖先的层叠上下文」。
+     祖先带 transform/filter/opacity/contain/position+z-index 时，fixed 视频依然被关在里面。
+     所以这一模式下不得再画不透明背板（见 fullscreenController.fallbackToCssCover）。 */
   isolation: isolate;
 }
 

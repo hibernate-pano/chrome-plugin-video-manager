@@ -1,6 +1,6 @@
 import { DEFAULT_SHORTCUTS, ShortcutSettings } from './types';
 
-const MODIFIER_KEYS = new Set(['ctrl', 'alt', 'shift', 'meta']);
+const MODIFIER_KEYS = new Set(['ctrl', 'control', 'alt', 'shift', 'meta', 'os']);
 
 const normalizeMainKey = (value: string) => {
   if (value === '' || value === ' ' || value === 'Space' || value === 'Spacebar') {
@@ -39,13 +39,28 @@ export const normalizeShortcut = (value: string) => {
     .join('+');
 };
 
+/** 末段主键归一化后落在修饰键集合里（历史脏数据 'shift+Shift' 之类），视为非法绑定。 */
+const hasModifierMainKey = (shortcut: string) => {
+  const parts = shortcut.split('+').filter(Boolean);
+  const mainKey = parts[parts.length - 1];
+
+  return mainKey !== undefined && MODIFIER_KEYS.has(normalizeMainKey(mainKey).toLowerCase());
+};
+
+/** 归一化单条绑定；主键是修饰键时回落到默认值，避免脏绑定被原样存盘后吞键。 */
+const normalizeBinding = (value: string | undefined, fallback: string) => {
+  const normalized = normalizeShortcut(value ?? fallback);
+
+  return hasModifierMainKey(normalized) ? normalizeShortcut(fallback) : normalized;
+};
+
 export const normalizeShortcutSettings = (
   value?: Partial<ShortcutSettings> | null,
 ): ShortcutSettings => ({
-  increaseSpeed: normalizeShortcut(value?.increaseSpeed ?? DEFAULT_SHORTCUTS.increaseSpeed),
-  decreaseSpeed: normalizeShortcut(value?.decreaseSpeed ?? DEFAULT_SHORTCUTS.decreaseSpeed),
-  resetSpeed: normalizeShortcut(value?.resetSpeed ?? DEFAULT_SHORTCUTS.resetSpeed),
-  fullscreen: normalizeShortcut(value?.fullscreen ?? DEFAULT_SHORTCUTS.fullscreen),
+  increaseSpeed: normalizeBinding(value?.increaseSpeed, DEFAULT_SHORTCUTS.increaseSpeed),
+  decreaseSpeed: normalizeBinding(value?.decreaseSpeed, DEFAULT_SHORTCUTS.decreaseSpeed),
+  resetSpeed: normalizeBinding(value?.resetSpeed, DEFAULT_SHORTCUTS.resetSpeed),
+  fullscreen: normalizeBinding(value?.fullscreen, DEFAULT_SHORTCUTS.fullscreen),
 });
 
 export const keyboardEventToShortcut = (event: KeyboardEvent) => {
@@ -65,7 +80,7 @@ export const keyboardEventToShortcut = (event: KeyboardEvent) => {
   }
 
   const key = normalizeMainKey(event.key);
-  if (MODIFIER_KEYS.has(key)) {
+  if (MODIFIER_KEYS.has(key.toLowerCase())) {
     return null;
   }
 
