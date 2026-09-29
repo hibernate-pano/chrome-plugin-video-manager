@@ -5,6 +5,52 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [5.3.0] - 2026-09-29
+
+### 修复 (Fixed)
+
+- 🔧 **CI 恢复可用**：此前所有 job 用 `npm ci` + `cache: 'npm'`，而仓库只有 `pnpm-lock.yaml`；
+  `lint` / `type-check` 两个 job 调用的 npm script 根本不存在；release 在 push 事件下用
+  `pull_request.head.sha` 拼 tag（恒为空）。现已改为 pnpm + 钉版本、产物传 `dist`、
+  用官方 `gh` CLI 发布
+- ⚡ **`getCurrentVideo()` 不再每次全页遍历**：原先每次 keydown / pointerdown / play /
+  ratechange 都会递归遍历整篇文档加所有 Shadow DOM 与同源 iframe，并对每个 video 强制重排。
+  现改为 rAF 帧号 + MutationObserver 的一帧内快照缓存，去重也从 O(n²) 降到 O(n)
+- 🐛 **非当前视频不再污染工具栏徽章**：页面上有第二个视频（广告、预览）时，它的速度变化
+  不再覆盖受控视频的徽章与站点记忆
+- 🐛 **跨 realm 修复补全**：同源 iframe 里的节点属于另一个 realm，此前只有 `isVideoElement`
+  做了回退，`collectVideos` 里的 `instanceof HTMLElement` / `HTMLIFrameElement` 仍会把
+  iframe 内的 Shadow DOM 和嵌套 iframe 整片漏掉；iframe 内 video 的视口判定也改为用
+  它自己 realm 的窗口尺寸
+- 🐛 **全屏退出不再抛错**：页面已丢弃视频节点时，退出会尝试重插废弃节点而抛
+  `NotFoundError` 中断清理；现已拆出私有 `release()` 区分「节点已被丢弃」与「用户主动退出」
+- 🐛 **切标签页回来不会一直冲速度**：`blur` / `visibilitychange` 时清理长按重复定时器
+- 🐛 **空格键在网页全屏下与设置页一致**：此前全屏分支没查 `spaceTogglePlay` 和修饰键，
+  用户关掉空格切换后全屏里依然生效
+- 🐛 **旧版快捷键迁移不再覆盖已存设置**：`migrateLegacyShortcuts` 不再产生显式 `undefined`；
+  修饰键全称（`Control`）能正确识别，已存的 `shift+Shift` 脏绑定会被清理
+- 🐛 **「清除全部记忆」现在会一并清掉各站点禁用记录**
+- 🐛 **Popup 重置后刷新显示**：重置成功后重新拉一次状态，不再停留在旧速度
+- 🐛 **测试收集面**：修正 `vitest.config.ts` 的 include，新增 `src/popup` 与 `scripts`，
+  此前放在这些目录下的测试永远不会被执行
+
+### 新增 (Added)
+
+- 🧪 **真实扩展 E2E**：用 `--load-extension` 真加载 `dist/` 跑浏览器，覆盖
+  `content-loader` 的 `document_start` 桥接、隔离世界、页面脚本抢键、真实 `chrome.storage`
+  往返 —— 这些是 jsdom 覆盖不到的
+- 🧪 **CI 配置契约测试**：把「配置必须满足的条件」固化成断言，改 CI 时先于 GitHub 给出结果
+- 🛡 **CI 新增 e2e job**，release 依赖 test / e2e / build 全绿
+- ♿ 设置页与 Popup 补 `aria-labelledby` / `aria-live`，焦点环改用 `:focus-visible`
+
+## [5.2.1] - 2026-04-19
+
+### 修复 (Fixed)
+
+- 🐛 **键盘监听改 `document_start` 桥接抢占注册**，根治站点脚本抢跑 / 吞键
+- 🐛 **YouTube 上空格完全放行原生处理**（含 overlay 全屏），避免与站点监听器双重切换
+- 🐛 **悬停视频不再全框描边**；overlay 全屏进入时先退系统全屏
+
 ## [5.2.0] - 2026-04-19
 
 ### 新增 (Added)

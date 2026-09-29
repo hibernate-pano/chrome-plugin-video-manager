@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "Video Speed Controller",
-  "version": "5.2.1",
+  "version": "5.3.0",
   "description": "Minimal video speed shortcuts, presets and page fullscreen for HTML5 video",
   "permissions": [
     "storage"

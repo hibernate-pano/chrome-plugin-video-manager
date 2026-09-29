@@ -64,10 +64,14 @@ pnpm build
 ## 测试命令
 
 ```bash
-pnpm test
-pnpm build
-pnpm test:e2e
+pnpm test          # 单元测试 + CI 配置契约测试
+pnpm build         # tsc 类型检查 + vite 构建 → dist/
+pnpm test:e2e      # 全部 Playwright（会先 build）
+pnpm test:e2e:ext  # 真加载扩展的 E2E（会先 build，需要本机有 Chromium）
 ```
+
+CI 会在 push / PR 上跑 `test` → `e2e` → `build` → `release` 四个 job，
+`release` 依赖前三个全绿。详见 [TESTING.md](./TESTING.md)。
 
 ## 当前边界
 

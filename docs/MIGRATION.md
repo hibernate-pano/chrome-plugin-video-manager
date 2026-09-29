@@ -293,7 +293,6 @@ npm run build
 
 **v2.0：**
 ```bash
-cd src-react
 pnpm install
 pnpm build
 ```
@@ -309,14 +308,12 @@ npm run lint     # 代码检查
 
 **v2.0：**
 ```bash
-cd src-react
-pnpm dev         # HMR 热更新
-pnpm test        # 运行所有测试
-pnpm test:unit   # 单元测试（Vitest）
-pnpm test:jest   # 扩展 API 测试（Jest）
+pnpm install     # 安装依赖（仓库用 pnpm，锁文件为 pnpm-lock.yaml）
+pnpm dev         # vite dev server，HMR 热更新
+pnpm build       # tsc + vite build + 复制静态资源，产出 dist/
+pnpm test        # 单元测试（Vitest）
+pnpm test:coverage  # 单元测试 + 覆盖率报告
 pnpm test:e2e    # E2E 测试（Playwright）
-pnpm lint        # 代码检查
-pnpm type-check  # 类型检查
 ```
 
 ### 添加新功能

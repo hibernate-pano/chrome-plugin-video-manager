@@ -190,36 +190,65 @@ class KeyboardHandler {
 
 ## 🔨 构建系统
 
-### esbuild 配置
+> **注意**：本项目早期基于 esbuild，产出根目录 `content-bundled.js`。
+> 现在的真实构建链是 **Vite + tsc + `scripts/copy-assets.js`**，仓库里
+> 已没有 esbuild 入口，也不再生成 `content-bundled.js`。
+
+### Vite 配置（vite.config.js）
 
 ```javascript
 {
-    entryPoints: ['src/main.js'],
-    bundle: true,
-    outfile: 'content-bundled.js',
-    format: 'iife',
-    target: 'chrome90',
-    platform: 'browser',
-    sourcemap: isWatch ? 'inline' : false,
-    minify: !isWatch
+    build: {
+        outDir: 'dist',
+        emptyOutDir: true,
+        sourcemap: false,
+        rollupOptions: {
+            input: {
+                content:   'src/content/index.ts',
+                background:'src/background/index.ts',
+                options:   'options.html',
+                popup:     'popup.html',
+            },
+            output: {
+                entryFileNames: '[name].js',            // dist/content.js ...
+                chunkFileNames: 'chunks/[name]-[hash].js',
+                assetFileNames: '[name].[ext]',
+            },
+        },
+    },
 }
 ```
 
-### 构建流程
+四个入口与 `manifest.json` 中声明的 `content.js` / `background.js` /
+`options.html` / `popup.html` 一一对应；`chunks/*.js` 对应 manifest 里的
+`web_accessible_resources`。
 
-1. **入口**：`src/main.js`
-2. **打包**：esbuild 将所有模块打包成单文件
-3. **格式**：IIFE（立即调用函数表达式）
-4. **输出**：`content-bundled.js`
+### 构建流程（`pnpm run build`）
+
+等价于：
+
+```bash
+tsc && vite build && node scripts/copy-assets.js
+```
+
+1. **类型检查**：`tsc`（`tsconfig.json` 已设 `noEmit: true`，只检查不出码）
+2. **打包**：`vite build` 产出 `dist/{content,background,options,popup}.js`、`dist/chunks/*`、`dist/*.html`
+3. **搬运静态资源**：`scripts/copy-assets.js` 把 `manifest.json`、`content-loader.js`、`icons/`、`_locales/`（`en` / `zh_CN` / `ja` / `ko`）复制进 `dist/`
+
+### 打包发布（`pnpm run package:ext`）
+
+把 `dist/` 打成 `release/video-speed-controller-v<manifest 版本号>.zip`
+（脚本会先校验 `dist/manifest.json` 存在，并清掉 `.DS_Store`）。
+`pnpm run build:ext` 是「构建 + 打包」两步合一。
 
 ### 开发 vs 生产
 
-| 特性       | 开发模式 | 生产模式 |
-| ---------- | -------- | -------- |
-| 代码压缩   | ❌       | ✅       |
-| Source Map | Inline   | ❌       |
-| 文件监听   | ✅       | ❌       |
-| 构建速度   | 快       | 慢       |
+| 特性       | 开发模式（`pnpm dev`） | 生产模式（`pnpm run build`） |
+| ---------- | --------------------- | --------------------------- |
+| 入口       | vite dev server       | vite build → `dist/`         |
+| 类型检查   | ❌ 不跑                 | ✅ `tsc` 先跑                 |
+| HMR        | ✅                     | ❌                            |
+| 产物       | 内存                  | `dist/` + `release/*.zip`    |
 
 ## 🧪 测试策略
 
@@ -408,60 +437,62 @@ new IntersectionObserver((entries) => {
 ```json
 {
   "recommendations": [
-    "dbaeumer.vscode-eslint",
     "esbenp.prettier-vscode",
-    "orta.vscode-jest",
     "eamodio.gitlens"
   ]
 }
 ```
 
-### 有用的 npm 脚本
+> 仓库里没有 eslint 依赖也没有可跑的 `lint` 脚本，所以不推荐 eslint / jest 扩展。
+> 类型检查由 `pnpm run build` 里的 `tsc` 负责。
+
+### 常用脚本
+
+以 [package.json](../package.json) 为准，当前实际存在的是：
 
 ```bash
-# 快速重新加载扩展
-npm run reload
-
-# 生成测试覆盖率报告
-npm run coverage
-
-# 性能分析
-npm run analyze
+pnpm dev            # vite dev server
+pnpm build          # tsc + vite build + 复制静态资源 → dist/
+pnpm test           # 单元测试 + CI 契约测试
+pnpm test:coverage  # 单元测试 + 覆盖率
+pnpm test:e2e       # 全部 Playwright（会先 build）
+pnpm test:e2e:ext   # 只跑真实扩展 E2E（会先 build）
+pnpm package:ext    # 把 dist/ 打成 release/ 下的 zip
 ```
+
+改扩展后重新加载：在 `chrome://extensions/` 里点一下刷新即可，不需要额外的 reload 脚本。
 
 ## ❓ 常见问题
 
 ### Q: 为什么使用 IIFE 格式而不是 ES 模块？
 
-A: Chrome 扩展的 content scripts 目前不支持 ES 模块的 `import/export`，需要打包成 IIFE 格式。
+A: `content-loader.js` 在 `document_start` 同步注册键盘桥接，再用动态 `import()` 加载
+真正的 `content.js`。这样我们必然是 window 捕获阶段的第一个 keydown 监听器，
+页面脚本无法用 `stopImmediatePropagation` 抢在我们前面吞键。`content.js` 本身是
+ESM，由 vite 打包后通过 `import()` 加载，所以不受「content script 不支持 ESM」的限制。
 
 ### Q: 如何添加新的快捷键动作？
 
-1. 在 `defaultShortcuts` 中添加新键
-2. 在 `KeyboardHandler.handleKeyDown` 中添加处理逻辑
-3. 更新国际化文件
-4. 添加测试
-
-### Q: 如何调试构建后的代码？
-
-在开发模式下启用 source map：
-
-```bash
-npm run watch
-```
+1. 在 `src/shared/types.ts` 的 `PersistedSettings['shortcuts']` 加字段，并给上默认值
+2. 在 `src/content/keyboardController.ts` 的 `handleKeyDown` 里加匹配分支
+3. 在 `src/shared/settings.ts` 的 `normalizePersistedSettings` 里加归一化
+4. 更新 `_locales/*/messages.json`
+5. 补 `src/content/keyboardController.test.ts`，并考虑在 `tests/e2e/real-extension.spec.js`
+   加一条真加载扩展的用例
 
 ### Q: 如何优化扩展的性能？
 
-1. 使用缓存减少 DOM 查询
-2. 防抖频繁的事件
-3. 使用 IntersectionObserver
-4. 按需初始化功能
+`getCurrentVideo()` 在每次 keydown / pointerdown / play / ratechange 都会被调用，是最值得优化的热点。
+现在它用 rAF 帧号 + MutationObserver 做了一帧内的快照缓存，命中缓存就不再遍历全页。
+改动这个函数时注意别把跨 realm 支持弄丢：同源 iframe 里的节点属于另一个 realm，
+`instanceof` 必须退回 `node.ownerDocument.defaultView` 的构造器。
 
 ## 📚 参考资料
 
 - [Chrome Extension API](https://developer.chrome.com/docs/extensions/reference/)
-- [esbuild 文档](https://esbuild.github.io/)
-- [Jest 文档](https://jestjs.io/)
+- [Vite 文档](https://vitejs.dev/)
+- [Vitest 文档](https://vitest.dev/)
+- [Playwright 文档](https://playwright.dev/)
 - [MDN Web APIs](https://developer.mozilla.org/en-US/docs/Web/API)
 
 ---

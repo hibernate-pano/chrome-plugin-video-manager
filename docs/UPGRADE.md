@@ -121,20 +121,20 @@ mediaDetector.cache;
 2. **安装依赖**
 
    ```bash
-   npm install
+   pnpm install
    ```
 
 3. **构建项目**
 
    ```bash
-   npm run build
+   pnpm run build
    ```
 
 4. **更新开发流程**
 
-   - 使用 `npm run dev` 开发
-   - 使用 `npm test` 运行测试
-   - 使用 `npm run lint` 检查代码
+   - 使用 `pnpm dev` 开发
+   - 使用 `pnpm test` 运行测试
+   - 类型检查已折进 `pnpm run build`（先跑 `tsc`），无需单独命令
 
 5. **适配代码**
 
@@ -187,21 +187,25 @@ v2.0.0 添加的新功能：
 
 ```bash
 # 运行测试
-npm test
+pnpm test
 
 # 查看覆盖率
-npm test -- --coverage
+pnpm test:coverage
+
+# 真实加载扩展的 E2E（需要已构建 dist/）
+pnpm test:e2e:ext
 ```
 
-#### 2. 代码规范检查
+#### 2. 类型检查
+
+仓库没有独立的 `lint` / `type-check` 脚本。类型检查折在构建里（`tsc` 先跑）：
 
 ```bash
-# 检查代码
-npm run lint
-
-# 自动修复
-npm run lint:fix
+pnpm build            # tsc + vite build，tsc 失败就不会产出 dist/
+npx tsc --noEmit      # 只做类型检查，不产出
 ```
+
+代码风格由 `.prettierrc` + husky 约定，不在 CI 门禁里。
 
 #### 3. 开发工具
 
