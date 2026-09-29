@@ -3,17 +3,6 @@ export interface SiteAdapter {
   shouldTryReparent: (video: HTMLVideoElement) => boolean;
 }
 
-const queryVideo = (root: Document | ShadowRoot, selectors: string[]) => {
-  for (const selector of selectors) {
-    const video = root.querySelector(selector);
-    if (video instanceof HTMLVideoElement) {
-      return video;
-    }
-  }
-
-  return null;
-};
-
 const adapters: Array<{
   match: (hostname: string) => boolean;
   adapter: SiteAdapter;
@@ -48,6 +37,3 @@ const genericAdapter: SiteAdapter = {
 
 export const getSiteAdapter = (hostname: string): SiteAdapter =>
   adapters.find((item) => item.match(hostname))?.adapter ?? genericAdapter;
-
-export const getPreferredVideo = (root: Document | ShadowRoot, hostname = window.location.hostname) =>
-  queryVideo(root, getSiteAdapter(hostname).selectors);

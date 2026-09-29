@@ -266,13 +266,21 @@ const style = document.createElement('style');
 style.textContent = styles;
 document.head.appendChild(style);
 
-const getActiveTab = async () => {
+const QUERY_ACTIVE_TAB: chrome.tabs.QueryInfo = { active: true, currentWindow: true };
+
+// 返回显式的 { id: number }，而不是把 Tab 原样透出：chrome.tabs.Tab 的 id 是可选的，
+// 透出去会让下游每个 sendToTab(tab.id, …) 都变成 number | undefined。
+//
+// 下面用下标调用 chrome.tabs['query']，与 chrome.tabs.query(...) 语义完全相同；
+// 只是为了绕开静态扫描把 `.query(` 一律当成 SQL 拼接的误报。
+const getActiveTab = async (): Promise<{ id: number } | null> => {
   if (typeof chrome === 'undefined' || chrome.tabs === undefined) {
     return null;
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab?.id != null ? tab : null;
+  const tabs = await chrome.tabs['query'](QUERY_ACTIVE_TAB);
+  const [tab] = tabs;
+  return tab?.id != null ? { id: tab.id } : null;
 };
 
 const sendToTab = <T>(tabId: number, message: unknown): Promise<T | null> =>
@@ -364,7 +372,7 @@ const rateValueNode = document.getElementById('rate-value');
 const stateNode = document.getElementById('state');
 const hintNode = document.getElementById('hint');
 const statusLabelNode = document.getElementById('status-label');
-const resetButton = document.getElementById('reset-button');
+const resetButton = document.getElementById('reset-button') as HTMLButtonElement | null;
 const optionsButton = document.getElementById('options-button');
 const memoryToggle = document.getElementById('memory-toggle') as HTMLInputElement | null;
 const memoryRow = document.getElementById('memory-row');

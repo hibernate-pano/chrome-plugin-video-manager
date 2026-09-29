@@ -12,7 +12,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { resolve } from 'node:path';
 
 // vitest 的 cwd 就是仓库根（本文件由 vitest.config.ts 收集，配置里没改 root）。
@@ -244,5 +246,49 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
 
   it('e2e 失败时 release 不会照样发出去', () => {
     expect(jobs['release']).toMatch(/needs:\s*\[[^\]]*\be2e\b[^\]]*\]/);
+  });
+});
+
+describe('类型检查覆盖面', () => {
+  it('tsconfig 的 include 覆盖 src 下每一个含有 TS 源码的子目录', () => {
+    // tsconfig 曾经只列了 content / options / shared，popup 和 background 整整
+    // ~900 行代码从来没被 tsc 看过 —— 那里有 10 个类型错误在 CI 全绿的情况下
+    // 一路发布到了商店。
+    //
+    // 这里不用字符串匹配去猜 glob：include 现在是 `src/**/*.ts` 这种通配写法，
+    // 里面根本不含目录名。直接问 TypeScript「你会检查哪些文件」，用它的
+    // getParsedCommandLineOfConfigFile，而不是自己实现 glob 语义。
+    const parsed = ts.getParsedCommandLineOfConfigFile(
+      resolve(repoRoot, 'tsconfig.json'),
+      {},
+      {
+        ...ts.sys,
+        onUnRecoverableConfigFileDiagnostic: () => {},
+      },
+    );
+
+    const checkedDirs = new Set(
+      (parsed?.fileNames ?? [])
+        .map((file) => path.relative(repoRoot, file).split(path.sep).slice(0, 2).join('/'))
+        .filter((entry) => entry.startsWith('src/')),
+    );
+
+    const srcRoot = resolve(repoRoot, 'src');
+    const srcDirs = readdirSync(srcRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((name) =>
+        readdirSync(resolve(srcRoot, name), { recursive: true })
+          .some((file) => String(file).endsWith('.ts')),
+      )
+      .sort();
+
+    expect(srcDirs.length).toBeGreaterThan(0);
+    for (const dir of srcDirs) {
+      expect(
+        checkedDirs.has(`src/${dir}`),
+        `tsc 不会检查 src/${dir}，该目录下的类型错误不会被 CI 拦住`,
+      ).toBe(true);
+    }
   });
 });

@@ -17,8 +17,6 @@
     "types": ["chrome"]
   },
   "include": [
-    "src/content/**/*.ts",
-    "src/options/**/*.ts",
-    "src/shared/**/*.ts"
+    "src/**/*.ts"
   ]
 }

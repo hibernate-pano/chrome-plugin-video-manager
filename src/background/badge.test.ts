@@ -5,7 +5,9 @@ type MessageListener = (message: unknown, sender: unknown) => void;
 
 describe('background badge', () => {
   it('sets badge text from speed change messages and clears at 1x', async () => {
-    let listener: MessageListener | null = null;
+    // 用数组收集而不是 let listener = null：赋值发生在 addListener 回调里，
+    // TypeScript 的控制流分析看不到，`listener?.()` 会被收窄成 never。
+    const listeners: MessageListener[] = [];
     const setBadgeText = vi.fn();
     const setBadgeBackgroundColor = vi.fn();
 
@@ -14,7 +16,7 @@ describe('background badge', () => {
       runtime: {
         onMessage: {
           addListener: (fn: MessageListener) => {
-            listener = fn;
+            listeners.push(fn);
           },
         },
         onInstalled: { addListener: () => {} },
@@ -25,6 +27,7 @@ describe('background badge', () => {
 
     expect(setBadgeBackgroundColor).toHaveBeenCalledWith({ color: '#0ea5e9' });
 
+    const listener = listeners[0];
     const sender = { tab: { id: 7 } };
     listener?.({ type: SPEED_CHANGED_MESSAGE, speed: 1.5 }, sender);
     expect(setBadgeText).toHaveBeenLastCalledWith({ tabId: 7, text: '1.5' });
@@ -41,7 +44,7 @@ describe('background badge', () => {
   });
 
   it('ignores messages without a tab', async () => {
-    let listener: MessageListener | null = null;
+    const listeners: MessageListener[] = [];
     const setBadgeText = vi.fn();
 
     vi.stubGlobal('chrome', {
@@ -49,7 +52,7 @@ describe('background badge', () => {
       runtime: {
         onMessage: {
           addListener: (fn: MessageListener) => {
-            listener = fn;
+            listeners.push(fn);
           },
         },
         onInstalled: { addListener: () => {} },
@@ -58,7 +61,7 @@ describe('background badge', () => {
 
     await import('./index');
 
-    listener?.({ type: SPEED_CHANGED_MESSAGE, speed: 2 }, {});
+    listeners[0]?.({ type: SPEED_CHANGED_MESSAGE, speed: 2 }, {});
     expect(setBadgeText).not.toHaveBeenCalled();
   });
 });
