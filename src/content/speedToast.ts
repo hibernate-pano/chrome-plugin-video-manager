@@ -1,6 +1,5 @@
 const TOAST_ID = 'vsc-speed-toast';
 const HIDE_DELAY = 900;
-const TOAST_HEIGHT = 30;
 
 /** 1.50 -> "1.5"，1.00 -> "1"。 */
 export const formatRate = (value: number) =>
@@ -17,7 +16,9 @@ export class SpeedToast {
   private readonly boundUpdatePosition = () => this.updatePosition();
 
   private ensureRoot() {
-    if (this.root) {
+    // 自愈：个别站点会主动清理不认识的外来 DOM 节点；root 被摘走后
+    // 若继续复用游离引用，toast 会静默失效。检测到脱离文档就重建。
+    if (this.root && this.root.isConnected) {
       return this.root;
     }
 
@@ -38,11 +39,9 @@ export class SpeedToast {
     }
 
     const rect = video.getBoundingClientRect();
-    const bottomOffset = Math.min(76, Math.max(16, rect.height * 0.28));
-    const top = Math.max(rect.top + 16, rect.top + rect.height - bottomOffset - TOAST_HEIGHT);
-
+    // 左上角：视频可见区域的左上，视频顶部滚出视口时钳到视口顶部，保证看得见。
     root.style.left = `${Math.max(16, rect.left + 16)}px`;
-    root.style.top = `${top}px`;
+    root.style.top = `${Math.max(16, rect.top + 16)}px`;
   }
 
   show(rate: number, video: HTMLVideoElement) {

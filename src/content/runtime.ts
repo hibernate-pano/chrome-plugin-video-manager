@@ -37,14 +37,9 @@ export class ContentRuntime {
       this.fullscreenController.exit();
       this.registry.setFullscreenVideo(null);
     },
-    // 全屏内控制条已实时显示速度（监听 ratechange），不再叠加 toast；
-    // 只有全屏外没有控制条时，才用极简 toast 做一次性反馈。
-    showSpeedFeedback: (rate, video) => {
-      if (this.fullscreenController.isActive()) {
-        return;
-      }
-      this.speedToast.show(rate, video);
-    },
+    // 全屏内外都给一次性提示：控制条鼠标静止 3 秒就隐藏，键盘调速时它
+    // 往往不在屏幕上，不能指望它承担反馈。toast 约 1 秒后自行消失。
+    showSpeedFeedback: (rate, video) => this.speedToast.show(rate, video),
   });
   private settings: PersistedSettings = createDefaultSettings();
   private unsubscribeSettings: (() => void) | null = null;

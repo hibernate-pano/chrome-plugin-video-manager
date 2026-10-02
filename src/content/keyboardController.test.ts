@@ -63,7 +63,10 @@ describe('KeyboardController', () => {
   let lastToggledVideo: HTMLVideoElement | null | undefined;
   let controller: KeyboardController;
 
-  const createController = (fullscreenActive = false) => {
+  const createController = (
+    fullscreenActive = false,
+    deferSpaceToSite?: () => boolean,
+  ) => {
     controller = new KeyboardController({
       getSettings: () => settings,
       getCurrentVideo: () => video,
@@ -71,6 +74,7 @@ describe('KeyboardController', () => {
       toggleFullscreen,
       exitFullscreen,
       showSpeedFeedback,
+      deferSpaceToSite,
     });
   };
 
@@ -183,6 +187,25 @@ describe('KeyboardController', () => {
 
     expect(controller.handleKeyDown(keyEvent('='))).toBe(false);
     expect(showSpeedFeedback).not.toHaveBeenCalled();
+  });
+
+  it('defers a bare space to the site on YouTube-style players', () => {
+    // YouTube 的原生空格处理挂在 keyup 上；我们在 keydown 切换一次、它的
+    // keyup 再切换一次 = 一次空格两次切换。所以裸空格必须整体放行。
+    createController(false, () => true);
+
+    expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+    expect(video?.pause).not.toHaveBeenCalled();
+    expect(video?.play).not.toHaveBeenCalled();
+  });
+
+  it('still honors a rebound play/pause key on YouTube-style players', () => {
+    // 用户把播放/暂停改绑到别的键时，那个键不受站点特判影响。
+    settings = createSettings({ togglePlay: 'p' });
+    createController(false, () => true);
+
+    expect(controller.handleKeyDown(keyEvent('p'))).toBe(true);
+    expect(video?.pause).toHaveBeenCalledTimes(1);
   });
 
   it('keeps repeating while a speed key is held, and stops on keyup', () => {

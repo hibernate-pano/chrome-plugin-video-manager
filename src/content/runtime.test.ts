@@ -206,18 +206,27 @@ describe('ContentRuntime integration', () => {
     instance.stop();
   });
 
-  it('shows the speed toast outside fullscreen but suppresses it inside', async () => {
+  it('shows the speed toast both outside and inside fullscreen', async () => {
     // 键盘控制器挂在 window 捕获阶段（无桥接时的回落路径），所以派发在 window 上。
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
+    // 松开按键停掉长按连续定时器，否则 toast 会被持续刷新、一直可见。
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: '=' }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(document.getElementById('vsc-speed-toast')).not.toBeNull();
+    const toast = () => document.getElementById('vsc-speed-toast');
+    expect(toast()?.classList.contains('vsc-visible')).toBe(true);
 
-    // 进入全屏后：控制条自己显示速度，toast 不再叠加。
+    // 进入全屏后仍然提示：控制条 3 秒无操作就隐藏，键盘调速时它不在屏幕上，
+    // 不能指望它承担反馈。
     lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
-    document.getElementById('vsc-speed-toast')?.remove();
+
+    // 让上一个 toast 自然消失，再在全屏内调速，断言它重新可见。
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(toast()?.classList.contains('vsc-visible')).toBe(false);
+
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: '=' }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(document.getElementById('vsc-speed-toast')).toBeNull();
+    expect(toast()?.classList.contains('vsc-visible')).toBe(true);
     expect(document.getElementById('vsc-controls')).not.toBeNull();
   });
 
