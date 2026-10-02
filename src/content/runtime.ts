@@ -1,30 +1,18 @@
 import { loadSettings, subscribeToSettings } from '../shared/settings';
 import {
-  DEFAULT_MAX_SPEED,
-  DEFAULT_PRESET_SPEEDS,
   DEFAULT_SHORTCUTS,
-  DEFAULT_SITE_SPEED_MEMORY,
-  DEFAULT_SPACE_TOGGLE_PLAY,
-  GET_STATE_MESSAGE,
   PersistedSettings,
-  RESET_SPEED_MESSAGE,
-  SPEED_CHANGED_MESSAGE,
+  TOGGLE_FULLSCREEN_MESSAGE,
 } from '../shared/types';
 import { FullscreenController } from './fullscreenController';
 import { KeyboardController } from './keyboardController';
-import { applyPresetSpeed, resetPlaybackRate } from './playback';
 import { installRuntimeStyles } from './runtimeStyles';
 import { SiteSpeedMemory } from './siteSpeedMemory';
-import { SpeedHud } from './speedHud';
-import { TargetIndicator } from './targetIndicator';
+import { SpeedToast } from './speedToast';
 import { VideoRegistry } from './videoRegistry';
 
 const createDefaultSettings = (): PersistedSettings => ({
   shortcuts: { ...DEFAULT_SHORTCUTS },
-  presetSpeeds: [...DEFAULT_PRESET_SPEEDS],
-  spaceTogglePlay: DEFAULT_SPACE_TOGGLE_PLAY,
-  maxSpeed: DEFAULT_MAX_SPEED,
-  siteSpeedMemory: DEFAULT_SITE_SPEED_MEMORY,
 });
 
 const logEventHandlerError = (error: unknown) => {
@@ -34,7 +22,7 @@ const logEventHandlerError = (error: unknown) => {
 export class ContentRuntime {
   private readonly registry = new VideoRegistry();
   private readonly fullscreenController = new FullscreenController();
-  private readonly speedHud = new SpeedHud();
+  private readonly speedToast = new SpeedToast();
   private readonly siteSpeedMemory = new SiteSpeedMemory();
   private readonly keyboardController = new KeyboardController({
     getSettings: () => this.settings,
@@ -49,13 +37,15 @@ export class ContentRuntime {
       this.fullscreenController.exit();
       this.registry.setFullscreenVideo(null);
     },
-    showSpeedHud: (rate, video) => this.speedHud.showRate(rate, video),
-    showPlaybackState: (playing, video) => this.speedHud.showPlayback(playing, video),
+    // 全屏内控制条已实时显示速度（监听 ratechange），不再叠加 toast；
+    // 只有全屏外没有控制条时，才用极简 toast 做一次性反馈。
+    showSpeedFeedback: (rate, video) => {
+      if (this.fullscreenController.isActive()) {
+        return;
+      }
+      this.speedToast.show(rate, video);
+    },
   });
-  private readonly targetIndicator = new TargetIndicator(
-    () => this.getCurrentVideo(),
-    () => this.speedHud.isVisible(),
-  );
   private settings: PersistedSettings = createDefaultSettings();
   private unsubscribeSettings: (() => void) | null = null;
   /** start() 同步赋值、只会 resolve：启动窗口内触发的事件等它落地再判定，而不是被永久丢弃。 */
@@ -74,13 +64,6 @@ export class ContentRuntime {
 
   private getCurrentVideo() {
     return this.fullscreenController.getActiveVideo() ?? this.registry.getCurrentVideo();
-  }
-
-  /** 是否可以读写站点速度记忆：功能开启 + 已加载完成 + 该站点未被禁用。 */
-  private shouldRecordMemory(hostname: string) {
-    return this.settings.siteSpeedMemory
-      && this.siteSpeedMemory.isLoaded()
-      && !this.siteSpeedMemory.isDisabled(hostname);
   }
 
   async start() {
@@ -112,11 +95,8 @@ export class ContentRuntime {
     this.unsubscribeSettings = subscribeToSettings((settings) => {
       this.settings = settings;
     });
-    // HUD 与悬停胶囊同处视频左上角且内容重叠：HUD 可见期间胶囊让位，消失后恢复。
-    this.speedHud.onVisibilityChange = () => this.targetIndicator.refresh();
     this.registry.start();
     this.keyboardController.start();
-    this.targetIndicator.start();
 
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener(this.boundHandleMessage);
@@ -136,8 +116,7 @@ export class ContentRuntime {
     this.keyboardController.stop();
     this.fullscreenController.destroy();
     this.registry.stop();
-    this.speedHud.destroy();
-    this.targetIndicator.destroy();
+    this.speedToast.destroy();
     this.siteSpeedMemory.destroy();
   }
 
@@ -149,19 +128,17 @@ export class ContentRuntime {
 
     const video = event.target;
     // 读侧与写侧共用同一套"当前视频"口径：广告位/悬停预览等自动播放的视频不吃记忆速度。
-    // 注意 ratechange/play 不跨 iframe 文档边界，而 getCurrentVideo 会遍历同源 iframe，两者范围本就不一致。
     const current = this.getCurrentVideo();
     if (current && video !== current) {
       return;
     }
 
-    const hostname = window.location.hostname;
     if (!this.siteSpeedMemory.isLoaded()) {
       // 启动窗口内的事件等 ready 落地再判定，不因"还没加载完"被永久丢弃。
       await this.ready;
     }
 
-    if (!this.shouldRecordMemory(hostname)) {
+    if (!this.siteSpeedMemory.isLoaded()) {
       return;
     }
 
@@ -169,87 +146,51 @@ export class ContentRuntime {
       return;
     }
 
-    const remembered = this.siteSpeedMemory.getSpeed(hostname);
+    const remembered = this.siteSpeedMemory.getSpeed(window.location.hostname);
     if (remembered === null || Math.abs(remembered - 1) < 1e-6) {
       return;
     }
 
-    applyPresetSpeed(video, remembered, this.settings.maxSpeed);
-    this.reportSpeed(video.playbackRate);
+    video.playbackRate = remembered;
   }
 
-  /** 任何速度变化：更新 badge；主视频的速度变化同步进站点记忆。 */
+  /** 任何速度变化：把主视频的速度同步进站点记忆。 */
   private async handleRateChange(event: Event) {
     if (!(event.target instanceof HTMLVideoElement)) {
       return;
     }
 
     const video = event.target;
-    // 先判归属再干活：徽章按 tab 覆盖，非当前视频的速度变化既不上报也不入库。
+    // 非当前视频（广告、预览）的速度变化不入库。
     const current = this.getCurrentVideo();
     if (current && video !== current) {
       return;
     }
 
-    this.reportSpeed(video.playbackRate);
-
-    const hostname = window.location.hostname;
     if (!this.siteSpeedMemory.isLoaded()) {
       await this.ready;
     }
 
-    if (!this.shouldRecordMemory(hostname)) {
+    if (!this.siteSpeedMemory.isLoaded()) {
       return;
     }
 
-    this.siteSpeedMemory.remember(hostname, video.playbackRate);
+    this.siteSpeedMemory.remember(window.location.hostname, video.playbackRate);
   }
 
-  /** popup 消息：查询状态 / 重置速度。 */
+  /** background 消息：工具栏图标点击 -> 切换当前标签页的网页全屏。 */
   private handleMessage(message: unknown, sendResponse: (response: unknown) => void) {
     if (typeof message !== 'object' || message === null) {
       return;
     }
 
     const { type } = message as { type?: unknown };
-
-    if (type === GET_STATE_MESSAGE) {
+    if (type === TOGGLE_FULLSCREEN_MESSAGE) {
       const video = this.getCurrentVideo();
-      sendResponse({
-        speed: video ? video.playbackRate : 1,
-        playing: video ? !video.paused : false,
-        hostname: window.location.hostname,
-        hasVideo: video !== null,
-      });
-      return;
-    }
-
-    if (type === RESET_SPEED_MESSAGE) {
-      const video = this.getCurrentVideo();
-      if (video) {
-        const rate = resetPlaybackRate(video);
-        this.speedHud.showRate(rate, video);
-        this.reportSpeed(rate);
-        // 记忆未加载成功时 speeds 是空 Map，remember(1) 走 delete 分支再整表覆盖写回，
-        // 会把用户所有站点的记忆一次性清空，所以守卫必须留在 runtime 侧。
-        const hostname = window.location.hostname;
-        if (this.shouldRecordMemory(hostname)) {
-          this.siteSpeedMemory.remember(hostname, rate);
-        }
-      }
-      sendResponse({ ok: true });
-    }
-  }
-
-  private reportSpeed(rate: number) {
-    if (typeof chrome === 'undefined' || chrome.runtime?.sendMessage === undefined) {
-      return;
-    }
-
-    try {
-      void chrome.runtime.sendMessage({ type: SPEED_CHANGED_MESSAGE, speed: rate });
-    } catch {
-      // Best effort.
+      this.fullscreenController.toggle(video);
+      this.registry.setFullscreenVideo(this.fullscreenController.getActiveVideo());
+      // toggle() 进入和退出都返回 true，所以这里回报真实状态而不是返回值。
+      sendResponse({ ok: true, active: this.fullscreenController.isActive() });
     }
   }
 }

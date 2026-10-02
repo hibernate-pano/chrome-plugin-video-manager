@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SITE_MEMORY_DISABLED_KEY, SITE_SPEEDS_KEY } from '../shared/types';
+import { SITE_SPEEDS_KEY } from '../shared/types';
 import { SiteSpeedMemory } from './siteSpeedMemory';
 
 describe('SiteSpeedMemory', () => {
@@ -25,12 +25,12 @@ describe('SiteSpeedMemory', () => {
             callback?.();
           },
         },
-        onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
       },
     });
   });
 
   afterEach(() => {
+    memory?.destroy();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -41,9 +41,8 @@ describe('SiteSpeedMemory', () => {
     return instance;
   };
 
-  it('loads existing speeds and disabled sites', async () => {
+  it('loads existing speeds and reports unknown hosts as null', async () => {
     store.set(SITE_SPEEDS_KEY, { 'youtube.com': 2, 'bilibili.com': 1.5 });
-    store.set(SITE_MEMORY_DISABLED_KEY, { 'youtube.com': true });
 
     memory = await createMemory();
 
@@ -51,8 +50,12 @@ describe('SiteSpeedMemory', () => {
     expect(memory.getSpeed('youtube.com')).toBe(2);
     expect(memory.getSpeed('bilibili.com')).toBe(1.5);
     expect(memory.getSpeed('unknown.com')).toBeNull();
-    expect(memory.isDisabled('youtube.com')).toBe(true);
-    expect(memory.isDisabled('bilibili.com')).toBe(false);
+  });
+
+  it('does not report speeds before loading finishes', () => {
+    memory = new SiteSpeedMemory();
+    expect(memory.isLoaded()).toBe(false);
+    expect(memory.getSpeed('youtube.com')).toBeNull();
   });
 
   it('remembers a speed and persists it after the debounce', async () => {
@@ -77,29 +80,13 @@ describe('SiteSpeedMemory', () => {
     expect(store.get(SITE_SPEEDS_KEY)).toEqual({});
   });
 
-  it('persists disabled sites immediately', async () => {
+  it('ignores non-finite speeds', async () => {
     memory = await createMemory();
-    memory.setDisabled('example.com', true);
-    await vi.advanceTimersByTimeAsync(0);
+    memory.remember('example.com', Number.NaN);
+    await vi.advanceTimersByTimeAsync(900);
 
-    expect(memory.isDisabled('example.com')).toBe(true);
-    expect(store.get(SITE_MEMORY_DISABLED_KEY)).toEqual({ 'example.com': true });
-
-    memory.setDisabled('example.com', false);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(memory.isDisabled('example.com')).toBe(false);
-    expect(store.get(SITE_MEMORY_DISABLED_KEY)).toEqual({});
-  });
-
-  it('clears all remembered speeds', async () => {
-    store.set(SITE_SPEEDS_KEY, { 'a.com': 1.5, 'b.com': 2 });
-    memory = await createMemory();
-
-    await memory.clearAll();
-
-    expect(memory.getSpeed('a.com')).toBeNull();
-    expect(memory.getSpeed('b.com')).toBeNull();
-    expect(store.get(SITE_SPEEDS_KEY)).toEqual({});
+    expect(memory.getSpeed('example.com')).toBeNull();
+    expect(store.get(SITE_SPEEDS_KEY)).toBeUndefined();
   });
 
   it('is inert without chrome storage', async () => {

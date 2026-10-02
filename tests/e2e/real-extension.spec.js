@@ -155,7 +155,7 @@ const serveHtml = async (page, html) => {
 };
 
 test.describe('真实扩展运行时', () => {
-  test('内容脚本在隔离世界注入样式，并能响应数字键改速', async () => {
+  test('内容脚本在隔离世界注入样式，并能响应速度快捷键', async () => {
     const ext = await launchExtension();
     try {
       const page = await ext.context.newPage();
@@ -170,11 +170,13 @@ test.describe('真实扩展运行时', () => {
         Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
       });
 
-      // 预设档位：1→1.25  2→1.5
-      await page.keyboard.press('2');
-      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
-      await page.keyboard.press('1');
-      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.25);
+      // 步进调速：= 加速、- 减速
+      await page.keyboard.press('=');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.1, 2);
+      await page.keyboard.press('=');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.2, 2);
+      await page.keyboard.press('-');
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.1, 2);
 
       // 0 键重置
       await page.keyboard.press('0');
@@ -241,9 +243,9 @@ test.describe('真实扩展运行时', () => {
         Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
       });
 
-      await page.keyboard.press('2');
+      await page.keyboard.press('=');
       // 无论页面吞不吞键，内容脚本都必须已经改掉速度
-      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.1, 2);
       // 页面那个捕获监听器一次都不该被触发：内容脚本的 intercept 用了 stopImmediatePropagation
       await expect.poll(() => page.evaluate(() => window.__swallowed)).toBe(0);
     } finally {
@@ -267,8 +269,11 @@ test.describe('真实扩展运行时', () => {
         Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
       });
 
-      await page.keyboard.press('2');
-      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+      // 从 1x 连按 5 次 = 步进到 1.5（数字档位已移除，改用步进键）。
+      for (let i = 0; i < 5; i += 1) {
+        await page.keyboard.press('=');
+      }
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.5, 2);
 
       // 等记忆写盘，否则刷新可能抢在写入之前
       await expect
@@ -292,7 +297,7 @@ test.describe('真实扩展运行时', () => {
         v.dispatchEvent(new Event('play'));
       });
 
-      await expect.poll(() => page.evaluate(() => window.__rate())).toBe(1.5);
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.5, 2);
     } finally {
       await ext.close();
     }

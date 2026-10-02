@@ -207,7 +207,6 @@ class KeyboardHandler {
                 content:   'src/content/index.ts',
                 background:'src/background/index.ts',
                 options:   'options.html',
-                popup:     'popup.html',
             },
             output: {
                 entryFileNames: '[name].js',            // dist/content.js ...
@@ -219,8 +218,8 @@ class KeyboardHandler {
 }
 ```
 
-四个入口与 `manifest.json` 中声明的 `content.js` / `background.js` /
-`options.html` / `popup.html` 一一对应；`chunks/*.js` 对应 manifest 里的
+三个入口与 `manifest.json` 中声明的 `content.js` / `background.js` /
+`options.html` 一一对应；`chunks/*.js` 对应 manifest 里的
 `web_accessible_resources`。
 
 ### 构建流程（`pnpm run build`）
@@ -232,8 +231,8 @@ tsc && vite build && node scripts/copy-assets.js
 ```
 
 1. **类型检查**：`tsc`（`tsconfig.json` 已设 `noEmit: true`，只检查不出码）
-2. **打包**：`vite build` 产出 `dist/{content,background,options,popup}.js`、`dist/chunks/*`、`dist/*.html`
-3. **搬运静态资源**：`scripts/copy-assets.js` 把 `manifest.json`、`content-loader.js`、`icons/`、`_locales/`（`en` / `zh_CN` / `ja` / `ko`）复制进 `dist/`
+2. **打包**：`vite build` 产出 `dist/{content,background,options}.js`、`dist/chunks/*`、`dist/*.html`
+3. **搬运静态资源**：`scripts/copy-assets.js` 把 `manifest.json`、`content-loader.js`、`icons/`、`_locales/`（`en` / `zh_CN`）复制进 `dist/`
 
 ### 打包发布（`pnpm run package:ext`）
 

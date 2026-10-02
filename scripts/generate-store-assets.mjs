@@ -1,6 +1,6 @@
 import { chromium } from '@playwright/test';
 import { spawn } from 'child_process';
-import { readFileSync, writeFileSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -10,6 +10,8 @@ const distDir = resolve(root, 'dist');
 const outDir = resolve(root, 'store-assets', 'output');
 const PORT = 4175;
 const BASE = `http://127.0.0.1:${PORT}`;
+
+mkdirSync(outDir, { recursive: true });
 
 // 以 dist 为 web 根目录服务（vite 产物使用绝对路径 /options.js 等）
 const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1', '--directory', distDir], {
@@ -36,79 +38,60 @@ writeFileSync(demoPath, demoHtml);
 const browser = await chromium.launch();
 await waitForServer();
 
-// 1) 设置页
+// 1) 设置页：只有一张快捷键卡片。
 {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message.slice(0, 120)));
-  await page.goto(BASE + '/options.html', { waitUntil: 'networkidle' });
-  await page.waitForTimeout(500);
-  const rendered = await page.evaluate(() => document.querySelectorAll('.vsc-options__panel').length);
-  if (rendered < 2) throw new Error('options page did not render: ' + errors.join('; '));
-  await page.screenshot({ path: resolve(outDir, 'store-options.png') });
-  await page.close();
-  console.log('store-options.png done (panels=' + rendered + ')');
-}
-
-// 2) Popup（注入假 chrome 环境）
-{
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({ viewport: { width: 900, height: 820 } });
   await context.addInitScript(() => {
-    window.chrome = {
-      i18n: { getMessage: () => '' },
-      runtime: { lastError: null, openOptionsPage: () => {}, onMessage: { addListener: () => {}, removeListener: () => {} } },
-      tabs: {
-        query: async () => [{ id: 1 }],
-        sendMessage: (_id, _msg, cb) => cb({ speed: 1.75, playing: true, hostname: 'www.bilibili.com', hasVideo: true }),
-      },
-      storage: {
-        local: { get: (_k, cb) => cb({}), set: (_o, cb) => cb?.() },
-      },
-    };
+    window.chrome = { i18n: { getMessage: () => '' }, runtime: { lastError: null }, storage: {
+      sync: { get: (_k, cb) => cb({}), set: (_o, cb) => cb?.(), remove: (_k, cb) => cb?.() },
+      onChanged: { addListener: () => {}, removeListener: () => {} },
+    } };
   });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message.slice(0, 120)));
-  await page.goto(BASE + '/popup.html', { waitUntil: 'networkidle' });
-  await page.waitForTimeout(500);
-  const rate = await page.evaluate(() => document.getElementById('rate-value')?.textContent);
-  if (rate !== '1.75') throw new Error('popup did not render expected state: rate=' + rate + ' errors=' + errors.join('; '));
-  await page.evaluate(() => {
-    document.body.style.margin = '150px auto';
-  });
-  await page.screenshot({ path: resolve(outDir, 'store-popup.png') });
+  await page.goto(BASE + '/options.html', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  const rows = await page.evaluate(() => document.querySelectorAll('.vsc__row').length);
+  if (rows < 7) throw new Error('options page did not render 7 rows: ' + errors.join('; '));
+  await page.screenshot({ path: resolve(outDir, 'store-options.png') });
   await context.close();
-  console.log('store-popup.png done (rate=' + rate + ')');
+  console.log('store-options.png done (rows=' + rows + ')');
 }
 
-// 3) HUD 演示（真实 content script + 数字键 2）
+// 2) 极简调速提示（全屏外按 =）。
 {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page.goto(BASE + '/demo.html', { waitUntil: 'networkidle' });
   await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
   await page.locator('#demo-video').click();
-  await page.keyboard.press('2');
-  await page.waitForTimeout(300);
-  const hudVisible = await page.evaluate(() => document.getElementById('vsc-speed-hud')?.classList.contains('vsc-visible'));
-  if (!hudVisible) throw new Error('HUD not visible at capture time');
-  await page.screenshot({ path: resolve(outDir, 'store-speed-hud.png') });
+  await page.keyboard.press('=');
+  await page.waitForTimeout(200);
+  const visible = await page.evaluate(() => document.getElementById('vsc-speed-toast')?.classList.contains('vsc-visible'));
+  if (!visible) throw new Error('speed toast not visible at capture time');
+  await page.screenshot({ path: resolve(outDir, 'store-speed-toast.png') });
   await page.close();
-  console.log('store-speed-hud.png done (hud=' + hudVisible + ')');
+  console.log('store-speed-toast.png done');
 }
 
-// 4) 网页全屏演示
+// 3) 网页全屏 + 控制条（按 f，移动鼠标让控制条浮现）。
 {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page.goto(BASE + '/demo.html', { waitUntil: 'networkidle' });
   await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
   await page.locator('#demo-video').click();
   await page.keyboard.press('f');
-  await page.waitForTimeout(450);
+  await page.waitForTimeout(300);
   const active = await page.evaluate(() => document.getElementById('vsc-page-fullscreen-overlay')?.classList.contains('vsc-active'));
   if (!active) throw new Error('fullscreen overlay not active');
+  // 移动鼠标确保控制条处于可见状态（3 秒无操作会淡出）。
+  await page.mouse.move(640, 700);
+  await page.waitForTimeout(200);
+  const ctlVisible = await page.evaluate(() => document.getElementById('vsc-controls')?.classList.contains('vsc-ctl--visible'));
+  if (!ctlVisible) throw new Error('fullscreen controls not visible');
   await page.screenshot({ path: resolve(outDir, 'store-fullscreen.png') });
   await page.close();
-  console.log('store-fullscreen.png done (active=' + active + ')');
+  console.log('store-fullscreen.png done (controls=' + ctlVisible + ')');
 }
 
 await browser.close();

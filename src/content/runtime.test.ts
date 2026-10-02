@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContentRuntime } from './runtime';
-import { GET_STATE_MESSAGE, RESET_SPEED_MESSAGE, SITE_SPEEDS_KEY, STORAGE_KEY } from '../shared/types';
+import { SITE_SPEEDS_KEY, TOGGLE_FULLSCREEN_MESSAGE } from '../shared/types';
 
 type ChromeStorageStub = {
   runtime: { lastError: unknown };
@@ -96,7 +96,6 @@ describe('ContentRuntime integration', () => {
     store.set(SITE_SPEEDS_KEY, { localhost: 1.75 });
 
     const instance = new ContentRuntime();
-    instance.stop();
     await instance.start();
     await vi.advanceTimersByTimeAsync(0);
 
@@ -126,38 +125,61 @@ describe('ContentRuntime integration', () => {
     expect(store.get(SITE_SPEEDS_KEY)).toEqual({ localhost: 1.5 });
   });
 
-  it('answers popup state queries', async () => {
-    video.playbackRate = 2;
-    let response: unknown = null;
-    const sendResponse = (value: unknown) => {
-      response = value;
-    };
+  it('ignores rate changes coming from a video the user is not watching', async () => {
+    const other = createVideo();
+    other.id = 'other-video';
+    document.body.appendChild(other);
 
-    const listener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    listener({ type: GET_STATE_MESSAGE }, {}, sendResponse);
+    // 让 registry 把 video 记成最后交互的视频，稳定成为 getCurrentVideo()。
+    video.dispatchEvent(new Event('play'));
+    other.playbackRate = 2;
 
-    expect(response).toEqual({
-      speed: 2,
-      playing: false,
-      hostname: 'localhost',
-      hasVideo: true,
-    });
+    other.dispatchEvent(new Event('ratechange'));
+    await vi.advanceTimersByTimeAsync(900);
+
+    // 广告位、悬停预览的速度不该写进站点记忆。
+    expect(store.get(SITE_SPEEDS_KEY)).toBeUndefined();
   });
 
-  it('resets the current video speed on request', async () => {
-    video.playbackRate = 2.5;
+  it('enters page fullscreen on request from the toolbar icon', async () => {
     let response: unknown = null;
 
-    const listener = (chrome.runtime.onMessage.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    listener({ type: RESET_SPEED_MESSAGE }, {}, (value: unknown) => {
+    lastMessageListener()(
+      { type: TOGGLE_FULLSCREEN_MESSAGE },
+      {},
+      (value: unknown) => {
+        response = value;
+      },
+    );
+
+    expect(response).toEqual({ ok: true, active: true });
+    expect(document.getElementById('vsc-page-fullscreen-overlay')?.classList.contains('vsc-active')).toBe(true);
+    expect(document.getElementById('vsc-controls')).not.toBeNull();
+
+    // 再点一次退出，控制条要一并拆除。
+    lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, (value: unknown) => {
       response = value;
     });
-
-    expect(response).toEqual({ ok: true });
-    expect(video.playbackRate).toBe(1);
+    expect(response).toEqual({ ok: true, active: false });
+    expect(document.getElementById('vsc-controls')).toBeNull();
   });
 
-  it('keeps every site memory when the memory failed to load before a reset', async () => {
+  it('ignores unrelated messages', () => {
+    const listener = lastMessageListener();
+    const sendResponse = vi.fn();
+
+    listener({ type: 'something-else' }, {}, sendResponse);
+    listener(null, {}, sendResponse);
+
+    expect(sendResponse).not.toHaveBeenCalled();
+  });
+
+  it('keeps every site memory when the memory failed to load', async () => {
+    // 停掉 beforeEach 的 runtime：它加载成功、记忆表为空，会和下面这个
+    // 加载失败的 instance 同时监听 document 的 ratechange，把 localhost 写进
+    // 空表并覆盖 'a.com'，污染断言。
+    runtime.stop();
+
     store.set(SITE_SPEEDS_KEY, { 'a.com': 2 });
     // 只让 storage.local.get 失败（设置走 sync），制造"读失败但写可用"的局部故障窗口。
     chromeStub().storage.local.get = (key, callback) => {
@@ -175,51 +197,28 @@ describe('ContentRuntime integration', () => {
       expect.any(Error),
     );
 
-    lastMessageListener()({ type: RESET_SPEED_MESSAGE }, {}, () => {});
+    video.playbackRate = 1.5;
+    video.dispatchEvent(new Event('ratechange'));
     await vi.advanceTimersByTimeAsync(900);
 
-    // 改动前：speeds 恒为空 Map，remember(1) 走 delete 分支并把整张表覆盖写成 {}。
+    // 改动前：speeds 恒为空 Map，remember 会把整张表覆盖写成 {}，抹掉其他站点。
     expect(store.get(SITE_SPEEDS_KEY)).toEqual({ 'a.com': 2 });
     instance.stop();
   });
 
-  it('writes no site memory on reset when the feature is turned off', async () => {
-    store.set(STORAGE_KEY, { siteSpeedMemory: false });
-    store.set(SITE_SPEEDS_KEY, { 'a.com': 2 });
-    const localSet = vi.fn((obj: Record<string, unknown>, callback?: () => void) => {
-      Object.entries(obj).forEach(([key, value]) => store.set(key, value));
-      callback?.();
-    });
-    chromeStub().storage.local.set = localSet;
-
-    const instance = new ContentRuntime();
-    await instance.start();
+  it('shows the speed toast outside fullscreen but suppresses it inside', async () => {
+    // 键盘控制器挂在 window 捕获阶段（无桥接时的回落路径），所以派发在 window 上。
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
     await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById('vsc-speed-toast')).not.toBeNull();
 
-    lastMessageListener()({ type: RESET_SPEED_MESSAGE }, {}, () => {});
-    await vi.advanceTimersByTimeAsync(900);
-
-    expect(localSet).not.toHaveBeenCalled();
-    expect(store.get(SITE_SPEEDS_KEY)).toEqual({ 'a.com': 2 });
-    instance.stop();
-  });
-
-  it('ignores rate changes coming from a video the user is not watching', async () => {
-    const other = createVideo();
-    other.id = 'other-video';
-    document.body.appendChild(other);
-
-    // 让 registry 把 video 记成最后交互的视频，稳定成为 getCurrentVideo()。
-    video.dispatchEvent(new Event('play'));
-    other.playbackRate = 2;
-    (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
-
-    other.dispatchEvent(new Event('ratechange'));
-    await vi.advanceTimersByTimeAsync(900);
-
-    // 改动前：other 的 ratechange 也会上报徽章。
-    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
-    expect(store.get(SITE_SPEEDS_KEY)).toBeUndefined();
+    // 进入全屏后：控制条自己显示速度，toast 不再叠加。
+    lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+    document.getElementById('vsc-speed-toast')?.remove();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById('vsc-speed-toast')).toBeNull();
+    expect(document.getElementById('vsc-controls')).not.toBeNull();
   });
 
   it('restores the remembered site speed when play fires before startup finishes', async () => {
@@ -245,7 +244,7 @@ describe('ContentRuntime integration', () => {
       pending.splice(0, pending.length).forEach((flush) => flush());
       await vi.advanceTimersByTimeAsync(0);
     }
-    expect(deferredCalls).toBeGreaterThanOrEqual(2);
+    expect(deferredCalls).toBeGreaterThanOrEqual(1);
     await startPromise;
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);

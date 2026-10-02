@@ -25,7 +25,6 @@
       border-radius: 14px;
       overflow: hidden;
       background: #000;
-      position: relative;
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
     }
     video {
@@ -34,46 +33,29 @@
       display: block;
       background: linear-gradient(135deg, #14532d 0%, #052e16 45%, #0f172a 100%);
     }
-    .bar {
-      background: #020617;
-      padding: 10px 14px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #cbd5e1;
-      font-size: 12px;
-    }
-    .progress {
-      flex: 1;
-      height: 4px;
-      border-radius: 999px;
-      background: #1e293b;
-      position: relative;
-    }
-    .progress::after {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 42%;
-      border-radius: 999px;
-      background: #22c55e;
-    }
   </style>
 </head>
 <body>
   <p class="page-title">示例页面 · 在线课程视频</p>
   <div class="player">
-    <video id="demo-video"></video>
-    <div class="bar">
-      <span>▶</span>
-      <div class="progress"></div>
-      <span>18:24 / 43:50</span>
-      <span>1.5x</span>
-      <span>🔊</span>
-    </div>
+    <!-- poster 用内联 SVG 渐变模拟"视频画面"：全屏时 background 被强制为黑，
+         只有 poster 能撑住画面内容，让商店截图不至于全黑。 -->
+    <video id="demo-video" poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%2314532d'/><stop offset='0.45' stop-color='%23052e16'/><stop offset='1' stop-color='%230f172a'/></linearGradient></defs><rect width='960' height='540' fill='url(%23g)'/><text x='480' y='270' fill='%2394a3b8' font-family='sans-serif' font-size='28' text-anchor='middle'>在线课程 · 第 12 讲</text></svg>"></video>
   </div>
+  <!-- 模拟一个播放中的视频：让全屏控制条能显示真实进度/时间。 -->
+  <script>
+    const v = document.getElementById('demo-video');
+    let t = 1104; // 18:24
+    Object.defineProperty(v, 'duration', { get: () => 2630, configurable: true }); // 43:50
+    Object.defineProperty(v, 'currentTime', {
+      get: () => t,
+      set: (x) => { t = x; },
+      configurable: true,
+    });
+    Object.defineProperty(v, 'paused', { get: () => false, configurable: true });
+    Object.defineProperty(v, 'readyState', { get: () => 4, configurable: true });
+    Object.defineProperty(v, 'play', { value: () => Promise.resolve(), configurable: true });
+  </script>
   <script type="module" src="../../dist/content.js"></script>
 </body>
 </html>

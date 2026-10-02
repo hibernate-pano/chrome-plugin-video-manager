@@ -1,12 +1,11 @@
 import {
-  applyPresetSpeed,
   resetPlaybackRate,
   seekBy,
   stepPlaybackRate,
   togglePlayback,
 } from './playback';
 import { matchesShortcut } from '../shared/shortcuts';
-import type { PersistedSettings } from '../shared/types';
+import { SEEK_STEP_SECONDS, type PersistedSettings } from '../shared/types';
 
 interface KeyboardControllerOptions {
   getSettings: () => PersistedSettings;
@@ -14,8 +13,7 @@ interface KeyboardControllerOptions {
   isFullscreenActive: () => boolean;
   toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   exitFullscreen: () => void;
-  showSpeedHud: (rate: number, video: HTMLVideoElement) => void;
-  showPlaybackState: (playing: boolean, video: HTMLVideoElement) => void;
+  showSpeedFeedback: (rate: number, video: HTMLVideoElement) => void;
 }
 
 const isEditableTarget = (target: EventTarget | null) => {
@@ -29,29 +27,20 @@ const isEditableTarget = (target: EventTarget | null) => {
     || target.isContentEditable;
 };
 
-// 「没按修饰键」的唯一定义：空格/数字档位这些无参数手势必须让带修饰键的组合
-// 原样放行（Shift+空格是播放器/页面的向上滚动等既有手势），所以 shift 也要算进来。
-const isPlainKey = (event: KeyboardEvent) =>
-  !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
-
 /**
- * YouTube 站点例外：它的播放器对空格有完整原生处理，且自身监听器先于我们注册，
- * 双方同时切换会导致“暂停一下又继续”。普通模式和 overlay 全屏模式都不接管空格，
- * 直接放行给 YouTube（我们不拦截时事件会正常到达 YouTube 的处理器）。
+ * 键盘控制器：只认用户在设置页里绑定的键。没有内置的"顺手按键"，
+ * 每个动作都必须先有一条绑定才会生效（留空 = 该动作禁用）。
  */
-const isYouTube = () => /(^|\.)youtube\.com$/.test(window.location.hostname);
-
 export class KeyboardController {
   private readonly options: KeyboardControllerOptions;
   private repeatDelayTimer: ReturnType<typeof setTimeout> | null = null;
   private repeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
-  private repeatingShortcut: keyof PersistedSettings['shortcuts'] | null = null;
+  private repeatingShortcut: 'increaseSpeed' | 'decreaseSpeed' | null = null;
   private readonly boundHandleKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
   private readonly boundHandleKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event);
   /**
    * 窗口失焦（切走标签页/应用）或页面转入后台时，keyup 不会到达本窗口，
    * 长按加速留下的重复定时器必须在这里被终止，否则会一直跑到页面销毁。
-   * 这两条不走桥接（桥接只转发 keydown/keyup），直接注册即可。
    */
   private readonly boundHandleFocusLoss = () => this.clearRepeat();
 
@@ -85,42 +74,14 @@ export class KeyboardController {
       return;
     }
 
-    const maxSpeed = this.options.getSettings().maxSpeed;
     const rate = delta === 0
       ? resetPlaybackRate(video)
-      : stepPlaybackRate(video, delta, maxSpeed);
+      : stepPlaybackRate(video, delta);
 
-    this.options.showSpeedHud(rate, video);
+    this.options.showSpeedFeedback(rate, video);
   }
 
-  private runPreset(index: number) {
-    const video = this.options.getCurrentVideo();
-    if (!video) {
-      return;
-    }
-
-    const settings = this.options.getSettings();
-    const preset = settings.presetSpeeds[index];
-    if (typeof preset !== 'number' || !Number.isFinite(preset)) {
-      return;
-    }
-
-    const rate = applyPresetSpeed(video, preset, settings.maxSpeed);
-    this.options.showSpeedHud(rate, video);
-  }
-
-  private runTogglePlayback() {
-    const video = this.options.getCurrentVideo();
-    if (!video) {
-      return false;
-    }
-
-    const playing = togglePlayback(video);
-    this.options.showPlaybackState(playing, video);
-    return true;
-  }
-
-  private startRepeat(shortcutId: keyof PersistedSettings['shortcuts'], delta: number) {
+  private startRepeat(shortcutId: 'increaseSpeed' | 'decreaseSpeed', delta: number) {
     this.clearRepeat();
     this.repeatingShortcut = shortcutId;
     this.repeatDelayTimer = setTimeout(() => {
@@ -143,48 +104,39 @@ export class KeyboardController {
       return false;
     }
 
-    const settings = this.options.getSettings();
-    const shortcuts = settings.shortcuts;
-    const activeVideo = this.options.getCurrentVideo();
-    const fullscreenActive = this.options.isFullscreenActive();
+    const shortcuts = this.options.getSettings().shortcuts;
 
-    if (fullscreenActive && event.key === 'Escape') {
+    // 退出全屏不需要有视频：全屏状态本身已隐含一个受控对象。
+    if (this.options.isFullscreenActive() && event.key === 'Escape') {
       this.intercept(event);
+      this.clearRepeat();
       this.options.exitFullscreen();
       return true;
     }
 
-    if (!activeVideo) {
+    const video = this.options.getCurrentVideo();
+    if (!video) {
       return false;
     }
 
-    if (fullscreenActive && event.key === 'ArrowLeft') {
+    if (matchesShortcut(event, shortcuts.seekBack)) {
       this.intercept(event);
       this.clearRepeat();
-      seekBy(activeVideo, -5);
+      seekBy(video, -SEEK_STEP_SECONDS);
       return true;
     }
 
-    if (fullscreenActive && event.key === 'ArrowRight') {
+    if (matchesShortcut(event, shortcuts.seekForward)) {
       this.intercept(event);
       this.clearRepeat();
-      seekBy(activeVideo, 5);
+      seekBy(video, SEEK_STEP_SECONDS);
       return true;
     }
 
-    // 空格是否已被用户绑定：只要有绑定，全屏的空格逻辑就不该抢占它，
-    // 与非全屏路径（下方 spaceTogglePlay 分支）遵守同一份用户设置。
-    const spaceBound = [
-      shortcuts.increaseSpeed,
-      shortcuts.decreaseSpeed,
-      shortcuts.resetSpeed,
-      shortcuts.fullscreen,
-    ].some((shortcut) => matchesShortcut(event, shortcut));
-
-    if (fullscreenActive && !isYouTube() && (event.key === ' ' || event.key === 'Spacebar') && !spaceBound && isPlainKey(event) && settings.spaceTogglePlay) {
+    if (matchesShortcut(event, shortcuts.togglePlay)) {
       this.intercept(event);
       this.clearRepeat();
-      this.runTogglePlayback();
+      togglePlayback(video);
       return true;
     }
 
@@ -220,26 +172,8 @@ export class KeyboardController {
     if (matchesShortcut(event, shortcuts.fullscreen)) {
       this.intercept(event);
       this.clearRepeat();
-      this.options.toggleFullscreen(activeVideo);
+      this.options.toggleFullscreen(video);
       return true;
-    }
-
-    if (!fullscreenActive && settings.spaceTogglePlay && !isYouTube() && (event.key === ' ' || event.key === 'Spacebar') && !event.repeat && isPlainKey(event)) {
-      this.intercept(event);
-      this.clearRepeat();
-      this.runTogglePlayback();
-      return true;
-    }
-
-    if (isPlainKey(event) && !event.repeat && /^[1-9]$/.test(event.key)) {
-      const index = Number(event.key) - 1;
-      const preset = settings.presetSpeeds[index];
-      if (typeof preset === 'number' && Number.isFinite(preset)) {
-        this.intercept(event);
-        this.clearRepeat();
-        this.runPreset(index);
-        return true;
-      }
     }
 
     return false;
@@ -263,7 +197,7 @@ export class KeyboardController {
   start() {
     // 优先挂到 content-loader 在 document_start 同步注册的桥接监听器上：
     // 那是 window 捕获阶段的第一个监听器，先于所有页面脚本，
-    // 保证我们的拦截（ESC 退全屏、空格、f 等）不会被页面脚本抢跑或吞掉。
+    // 保证我们的拦截不会被页面脚本抢跑或吞掉。
     const bridgeWindow = window as typeof window & {
       __vscRegisterKeyboard?: (type: 'keydown' | 'keyup', handler: ((event: KeyboardEvent) => void) | null) => void;
     };

@@ -26,7 +26,9 @@ describe('FullscreenController', () => {
     expect(document.getElementById('vsc-page-fullscreen-overlay')).not.toBeNull();
     expect(video.classList.contains('vsc-page-fullscreen-video')).toBe(true);
     expect(video.style.position).toBe('fixed');
-    expect(video.controls).toBe(true);
+    // 用我们自己的控制条，浏览器原生控件必须关掉，否则两套 UI 叠在一起。
+    expect(video.controls).toBe(false);
+    expect(document.getElementById('vsc-controls')).not.toBeNull();
 
     controller.exit();
 
@@ -34,6 +36,7 @@ describe('FullscreenController', () => {
     expect(parent.contains(video)).toBe(true);
     expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
     expect(video.controls).toBe(false);
+    expect(document.getElementById('vsc-controls')).toBeNull();
     expect(video.classList.contains('vsc-page-fullscreen-video--css-cover')).toBe(false);
   });
 
@@ -198,5 +201,32 @@ describe('FullscreenController', () => {
     expect(overlay).not.toBeNull();
     // 背板必须撤掉：css-cover 跨不过页面祖先的层叠上下文，留着只会盖住视频。
     expect(overlay?.classList.contains('vsc-active')).toBe(false);
+  });
+
+  it('exits cleanly when only the original next sibling was discarded', () => {
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    const sibling = document.createElement('span');
+    parent.append(video, sibling);
+    document.body.appendChild(parent);
+
+    Object.defineProperty(video, 'paused', { value: true, configurable: true });
+    Object.defineProperty(video, 'play', {
+      value: vi.fn(() => Promise.resolve()),
+      configurable: true,
+    });
+
+    expect(controller.enter(video)).toBe(true);
+    // 全屏期间页面重排 DOM：只移走 originalNextSibling，video 自己还在文档里。
+    sibling.remove();
+
+    // 改动前：insertBefore(video, 已脱离的 sibling) 抛 NotFoundError，
+    // 视频卡死在 overlay、body 滚动锁死，全屏退不干净。
+    expect(() => controller.exit()).not.toThrow();
+    expect(controller.isActive()).toBe(false);
+    expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    // video 回到了原父节点（sibling 没了就 append 到末尾）。
+    expect(parent.contains(video)).toBe(true);
   });
 });

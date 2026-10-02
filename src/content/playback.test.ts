@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { applyPresetSpeed, resetPlaybackRate, seekBy, stepPlaybackRate } from './playback';
+import { resetPlaybackRate, seekBy, stepPlaybackRate, togglePlayback } from './playback';
 
 describe('playback helpers', () => {
-  it('clamps stepped playback rate', () => {
+  it('clamps stepped playback rate to the media bounds', () => {
     const video = document.createElement('video');
     video.playbackRate = 15.95;
 
     expect(stepPlaybackRate(video, 0.1)).toBe(16);
     expect(stepPlaybackRate(video, -20)).toBe(0.1);
+  });
+
+  it('rounds stepped rates to two decimals', () => {
+    const video = document.createElement('video');
+    video.playbackRate = 1;
+
+    expect(stepPlaybackRate(video, 0.1)).toBe(1.1);
+    expect(stepPlaybackRate(video, 0.1)).toBe(1.2);
   });
 
   it('resets playback rate to 1.0', () => {
@@ -16,34 +24,6 @@ describe('playback helpers', () => {
 
     expect(resetPlaybackRate(video)).toBe(1);
     expect(video.playbackRate).toBe(1);
-  });
-
-  it('applies a preset speed rounded to two decimals', () => {
-    const video = document.createElement('video');
-    video.playbackRate = 1;
-
-    expect(applyPresetSpeed(video, 1.5)).toBe(1.5);
-    expect(video.playbackRate).toBe(1.5);
-
-    expect(applyPresetSpeed(video, 1.234)).toBe(1.23);
-  });
-
-  it('clamps preset speeds to the media rate bounds', () => {
-    const video = document.createElement('video');
-    video.playbackRate = 1;
-
-    expect(applyPresetSpeed(video, 0.01)).toBe(0.1);
-    expect(applyPresetSpeed(video, 99)).toBe(16);
-  });
-
-  it('respects a custom max when stepping and applying presets', () => {
-    const video = document.createElement('video');
-    video.playbackRate = 3.9;
-
-    expect(stepPlaybackRate(video, 0.1, 4)).toBe(4);
-    expect(stepPlaybackRate(video, 0.1, 4)).toBe(4);
-
-    expect(applyPresetSpeed(video, 8, 4)).toBe(4);
   });
 
   it('seeks within media bounds', () => {
@@ -60,5 +40,44 @@ describe('playback helpers', () => {
 
     expect(seekBy(video, 5)).toBe(12);
     expect(seekBy(video, -20)).toBe(0);
+  });
+
+  it('seeks forward on a live stream without a known duration', () => {
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'currentTime', {
+      value: 30,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(video, 'duration', {
+      value: Number.NaN,
+      configurable: true,
+    });
+
+    expect(seekBy(video, 5)).toBe(35);
+  });
+
+  it('toggles play and pause and reports the new state', () => {
+    const video = document.createElement('video');
+    let paused = true;
+    Object.defineProperty(video, 'paused', { get: () => paused, configurable: true });
+    Object.defineProperty(video, 'play', {
+      value: () => {
+        paused = false;
+        return Promise.resolve();
+      },
+      configurable: true,
+    });
+    Object.defineProperty(video, 'pause', {
+      value: () => {
+        paused = true;
+      },
+      configurable: true,
+    });
+
+    expect(togglePlayback(video)).toBe(true);
+    expect(video.paused).toBe(false);
+    expect(togglePlayback(video)).toBe(false);
+    expect(video.paused).toBe(true);
   });
 });

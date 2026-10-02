@@ -8,7 +8,6 @@ export default defineConfig({
       'src/content/**/*.test.ts',
       'src/shared/**/*.test.ts',
       'src/options/**/*.test.ts',
-      'src/popup/**/*.test.ts',
       'src/background/**/*.test.ts',
       'scripts/**/*.test.ts',
     ],

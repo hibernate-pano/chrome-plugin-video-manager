@@ -1,15 +1,7 @@
 import {
-  DEFAULT_MAX_SPEED,
-  DEFAULT_PRESET_SPEEDS,
   DEFAULT_SHORTCUTS,
-  DEFAULT_SITE_SPEED_MEMORY,
-  DEFAULT_SPACE_TOGGLE_PLAY,
   LEGACY_SHORTCUTS_KEY,
-  MAX_SPEED_MAX,
-  MAX_SPEED_MIN,
   PersistedSettings,
-  PRESET_SPEED_MAX,
-  PRESET_SPEED_MIN,
   STORAGE_KEY,
   ShortcutSettings,
 } from './types';
@@ -120,28 +112,32 @@ const migrateLegacyShortcuts = (legacyValue: unknown): Partial<ShortcutSettings>
   return mapped;
 };
 
-const roundToTwo = (value: number) => Math.round(value * 100) / 100;
-
-/** 归一化预设速度：非法值回退默认，逐项限制在 [PRESET_SPEED_MIN, PRESET_SPEED_MAX]。 */
-export const normalizePresetSpeeds = (value: unknown): number[] => {
-  if (!Array.isArray(value)) {
-    return [...DEFAULT_PRESET_SPEEDS];
+/**
+ * v5 用 `spaceTogglePlay: false` 关闭空格播放/暂停；v6 把播放/暂停变成一个
+ * 普通的可绑定动作。不迁移的话，用户明明关掉的行为会在升级后自己回来，
+ * 所以这里把它翻译成"该动作没有绑定"。
+ *
+ * 两个参数分别来自不同层级：`spaceTogglePlay` 存在 v5 记录的顶层，
+ * 而新的 `togglePlay` 绑定在嵌套的 shortcuts 对象里。
+ */
+const migrateSpaceToggle = (
+  legacyRecord: Record<string, unknown> | null,
+  shortcuts: Partial<ShortcutSettings> | null,
+): Partial<ShortcutSettings> => {
+  if (!legacyRecord) {
+    return {};
   }
 
-  const speeds = value
-    .filter((item): item is number => typeof item === 'number' && Number.isFinite(item))
-    .map((item) => roundToTwo(Math.min(PRESET_SPEED_MAX, Math.max(PRESET_SPEED_MIN, item))));
-
-  return speeds.length > 0 ? speeds : [...DEFAULT_PRESET_SPEEDS];
-};
-
-/** 归一化最大速度：非法值回退默认，限制在 [MAX_SPEED_MIN, MAX_SPEED_MAX]。 */
-export const normalizeMaxSpeed = (value: unknown): number => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return DEFAULT_MAX_SPEED;
+  // 已经写过显式绑定（v6 记录）时，v5 的开关不再有发言权。
+  if (typeof shortcuts?.togglePlay === 'string') {
+    return {};
   }
 
-  return roundToTwo(Math.min(MAX_SPEED_MAX, Math.max(MAX_SPEED_MIN, value)));
+  if (legacyRecord.spaceTogglePlay !== false) {
+    return {};
+  }
+
+  return { togglePlay: '' };
 };
 
 export const normalizePersistedSettings = (
@@ -163,15 +159,8 @@ export const normalizePersistedSettings = (
       ...DEFAULT_SHORTCUTS,
       ...(shortcutsCandidate as Partial<ShortcutSettings> | null ?? {}),
       ...legacyShortcuts,
+      ...migrateSpaceToggle(currentRecord, shortcutsCandidate as Partial<ShortcutSettings> | null),
     }),
-    presetSpeeds: normalizePresetSpeeds(currentRecord?.presetSpeeds),
-    spaceTogglePlay: typeof currentRecord?.spaceTogglePlay === 'boolean'
-      ? currentRecord.spaceTogglePlay
-      : DEFAULT_SPACE_TOGGLE_PLAY,
-    maxSpeed: normalizeMaxSpeed(currentRecord?.maxSpeed),
-    siteSpeedMemory: typeof currentRecord?.siteSpeedMemory === 'boolean'
-      ? currentRecord.siteSpeedMemory
-      : DEFAULT_SITE_SPEED_MEMORY,
   };
 };
 

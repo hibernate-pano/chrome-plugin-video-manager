@@ -6,6 +6,7 @@ import {
   normalizeShortcut,
   normalizeShortcutSettings,
 } from './shortcuts';
+import { DEFAULT_SHORTCUTS } from './types';
 
 describe('normalizeShortcut', () => {
   it('normalizes plain and modified keys', () => {
@@ -41,12 +42,9 @@ describe('normalizeShortcut', () => {
 
 describe('normalizeShortcutSettings', () => {
   it('fills defaults for missing values', () => {
-    expect(normalizeShortcutSettings({})).toEqual({
-      increaseSpeed: '=',
-      decreaseSpeed: '-',
-      resetSpeed: '0',
-      fullscreen: 'f',
-    });
+    // 基于 DEFAULT_SHORTCUTS 断言：新增动作时这条不会脆断，
+    // 真正的默认值变化由 types.ts 里的单一来源负责。
+    expect(normalizeShortcutSettings({})).toEqual(DEFAULT_SHORTCUTS);
   });
 
   it('normalizes a space shortcut set from the options page', () => {
@@ -70,6 +68,7 @@ describe('normalizeShortcutSettings', () => {
     });
 
     expect(settings).toEqual({
+      ...DEFAULT_SHORTCUTS,
       increaseSpeed: '=',
       decreaseSpeed: '-',
       resetSpeed: 'r',

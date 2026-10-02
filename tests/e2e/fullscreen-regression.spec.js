@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Page Fullscreen Regression', () => {
-  test('applies digit presets and global space toggle outside fullscreen', async ({ page }) => {
+  test('steps speed, seeks and toggles play/pause with default keys', async ({ page }) => {
     await page.goto('/tests/e2e/test-page.html', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
 
@@ -15,6 +15,8 @@ test.describe('Page Fullscreen Regression', () => {
       }
 
       target.playbackRate = 1;
+      Object.defineProperty(target, 'duration', { value: 120, configurable: true });
+      target.currentTime = 30;
       window.__pauseCalls = 0;
       Object.defineProperty(target, 'paused', {
         value: false,
@@ -29,15 +31,23 @@ test.describe('Page Fullscreen Regression', () => {
       });
     });
 
-    await page.keyboard.press('2');
-    await expect(video.evaluate((node) => node.playbackRate)).resolves.toBe(1.5);
+    // Speed step up / down / reset.
+    await page.keyboard.press('=');
+    await expect(video.evaluate((node) => node.playbackRate)).resolves.toBeCloseTo(1.1, 2);
+    await page.keyboard.press('-');
+    await expect(video.evaluate((node) => node.playbackRate)).resolves.toBeCloseTo(1, 2);
 
-    await page.keyboard.press('3');
-    await expect(video.evaluate((node) => node.playbackRate)).resolves.toBe(1.75);
-
+    await page.keyboard.press('=');
     await page.keyboard.press('0');
     await expect(video.evaluate((node) => node.playbackRate)).resolves.toBe(1);
 
+    // Seek forward / backward by 5s.
+    await page.keyboard.press('ArrowRight');
+    await expect(video.evaluate((node) => node.currentTime)).resolves.toBe(35);
+    await page.keyboard.press('ArrowLeft');
+    await expect(video.evaluate((node) => node.currentTime)).resolves.toBe(30);
+
+    // Space toggles play/pause.
     await page.keyboard.press(' ');
     await expect(page.evaluate(() => window.__pauseCalls)).resolves.toBe(1);
   });

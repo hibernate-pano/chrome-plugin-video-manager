@@ -1,14 +1,16 @@
 const STYLE_ID = 'vsc-runtime-styles';
 
+const FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+
 const styles = `
+/* --- Page fullscreen overlay --- */
+
 #vsc-page-fullscreen-overlay {
   position: fixed;
   inset: 0;
   z-index: 2147483645;
   display: none;
-  background:
-    radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 34%),
-    rgba(2, 6, 23, 0.98);
+  background: #000;
 }
 
 #vsc-page-fullscreen-overlay.vsc-active {
@@ -44,165 +46,172 @@ const styles = `
 }
 
 .vsc-page-fullscreen-video--css-cover {
-  /* isolation 只能在本元素自己身上新建层叠上下文，帮不了「跨过页面祖先的层叠上下文」。
-     祖先带 transform/filter/opacity/contain/position+z-index 时，fixed 视频依然被关在里面。
-     所以这一模式下不得再画不透明背板（见 fullscreenController.fallbackToCssCover）。 */
+  /* 页面祖先带 transform/filter/opacity/contain 时会新建层叠上下文，
+     把 fixed 视频关在里面；这一模式下 overlay 背板反而会盖住视频，
+     所以只靠视频自身的黑底 + object-fit:contain 撑满视口。 */
   isolation: isolate;
 }
 
-/* --- Target indicator (hover) --- */
+/* --- Fullscreen controls --- */
 
-/* 不画全框描边：全框在所有页面场景里都过于抢眼，信息由左上角胶囊承担。 */
-#vsc-target-indicator {
+#vsc-controls {
   position: fixed;
-  z-index: 2147483646;
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 120ms ease, visibility 120ms ease;
-}
-
-#vsc-target-indicator.vsc-visible {
-  opacity: 1;
-  visibility: visible;
-}
-
-.vsc-target-indicator__pill {
-  position: absolute;
-  top: 8px;
-  left: 8px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2147483647;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(2, 6, 23, 0.78);
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  color: #e0f2fe;
-  font-size: 12px;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 22px 20px 14px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.86), rgba(0, 0, 0, 0));
+  color: #f1f5f9;
+  font-family: ${FONT_STACK};
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+#vsc-controls.vsc-ctl--visible {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.vsc-ctl__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.vsc-ctl__button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.vsc-ctl__button:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 2px;
+}
+
+.vsc-ctl__button svg {
+  width: 22px;
+  height: 22px;
+}
+
+.vsc-ctl__time,
+.vsc-ctl__speed {
+  flex: none;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 1.5;
-  font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: rgba(241, 245, 249, 0.92);
   white-space: nowrap;
 }
 
-#vsc-target-indicator[data-current='false'] .vsc-target-indicator__pill {
-  border-color: rgba(100, 116, 139, 0.5);
-  color: #cbd5e1;
+.vsc-ctl__speed {
+  min-width: 34px;
+  text-align: center;
 }
 
-.vsc-target-indicator__dot {
-  width: 6px;
-  height: 6px;
+.vsc-ctl__range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.vsc-ctl__range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #67e8f9 0%,
+    #67e8f9 var(--vsc-progress, 0%),
+    rgba(255, 255, 255, 0.24) var(--vsc-progress, 0%),
+    rgba(255, 255, 255, 0.24) 100%
+  );
+}
+
+.vsc-ctl__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
   border-radius: 50%;
-  background: #38bdf8;
+  background: #f8fafc;
+  border: none;
+}
+
+.vsc-ctl__range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.vsc-ctl__range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: #67e8f9;
+}
+
+.vsc-ctl__range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: #f8fafc;
+}
+
+.vsc-ctl__range:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 2px;
+}
+
+.vsc-ctl__progress {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vsc-ctl__volume {
   flex: none;
+  width: 84px;
 }
 
-#vsc-target-indicator[data-current='false'] .vsc-target-indicator__dot {
-  background: #64748b;
-}
+/* --- Speed toast (minimal) --- */
 
-/* --- Speed HUD (minimal) --- */
-
-#vsc-speed-hud {
+#vsc-speed-toast {
   position: fixed;
-  top: 20px;
-  left: 20px;
   z-index: 2147483647;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.66);
+  color: #f8fafc;
+  font-family: ${FONT_STACK};
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
   pointer-events: none;
   opacity: 0;
-  transform: translate3d(0, -6px, 0) scale(0.94);
-  transform-origin: top left;
+  transition: opacity 160ms ease;
 }
 
-#vsc-speed-hud.vsc-visible {
-  animation: vsc-hud-in 1400ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-}
-
-#vsc-speed-hud[data-mode='playback'].vsc-visible {
-  animation-duration: 800ms;
-}
-
-.vsc-hud__inner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: rgba(2, 6, 23, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(10px);
-  font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
-}
-
-.vsc-hud__value {
-  display: flex;
-  align-items: baseline;
-  font-size: 26px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  color: #f8fafc;
-  font-variant-numeric: tabular-nums;
-}
-
-.vsc-hud__unit {
-  margin-left: 2px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #94a3b8;
-}
-
-.vsc-hud__glyph {
-  display: none;
-  font-size: 18px;
-  line-height: 1;
-  color: #e2e8f0;
-}
-
-#vsc-speed-hud[data-mode='playback'] .vsc-hud__glyph {
-  display: inline;
-}
-
-#vsc-speed-hud[data-mode='playback'] .vsc-hud__trend {
-  display: none;
-}
-
-.vsc-hud__trend {
-  font-size: 13px;
-  line-height: 1;
-}
-
-#vsc-speed-hud[data-trend='up'] .vsc-hud__trend {
-  color: #7dd3fc;
-}
-
-#vsc-speed-hud[data-trend='down'] .vsc-hud__trend {
-  color: #f9a8d4;
-}
-
-@keyframes vsc-hud-in {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, -6px, 0) scale(0.94);
-  }
-
-  14% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-
-  86% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(0, -4px, 0) scale(0.97);
-  }
+#vsc-speed-toast.vsc-visible {
+  opacity: 1;
 }
 `;
 

@@ -1,28 +1,16 @@
-import { SPEED_CHANGED_MESSAGE } from '../shared/types';
+import { TOGGLE_FULLSCREEN_MESSAGE } from '../shared/types';
 
-const BADGE_COLOR = '#0ea5e9';
-
-const formatBadge = (speed: number) =>
-  speed.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-
-const applyBadgeColor = () => {
-  void chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
-};
-
-chrome.runtime.onInstalled.addListener(applyBadgeColor);
-applyBadgeColor();
-
-chrome.runtime.onMessage.addListener((message: unknown, sender) => {
-  if (typeof message !== 'object' || message === null) {
+/**
+ * 工具栏图标没有弹窗：点击即切换当前标签页的网页全屏。
+ * 这是唯一一条 background 职责——把"点扩展图标"翻译成"全屏这个视频"。
+ */
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id == null) {
     return;
   }
 
-  const { type, speed } = message as { type?: unknown; speed?: unknown };
-  if (type !== SPEED_CHANGED_MESSAGE || sender.tab?.id == null) {
-    return;
-  }
-
-  const rate = typeof speed === 'number' && Number.isFinite(speed) ? speed : 1;
-  const text = Math.abs(rate - 1) < 1e-6 ? '' : formatBadge(rate);
-  void chrome.action.setBadgeText({ tabId: sender.tab.id, text });
+  chrome.tabs.sendMessage(tab.id, { type: TOGGLE_FULLSCREEN_MESSAGE }, () => {
+    // 页面没有内容脚本（chrome://、扩展页等）时连接会失败，静默忽略即可。
+    void chrome.runtime.lastError;
+  });
 });

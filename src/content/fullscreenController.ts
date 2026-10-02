@@ -1,4 +1,5 @@
 import { getSiteAdapter } from './siteAdapters';
+import { FullscreenControls } from './fullscreenControls';
 
 type FullscreenMode = 'reparent' | 'css-cover';
 
@@ -42,6 +43,7 @@ export class FullscreenController {
   };
 
   private healthTimer: number | null = null;
+  private controls: FullscreenControls | null = null;
 
   isActive() {
     return this.state.video !== null;
@@ -205,7 +207,12 @@ export class FullscreenController {
 
     overlay.classList.add('vsc-active');
     document.body.style.overflow = 'hidden';
-    video.controls = true;
+    // 用我们自己的控制条取代浏览器原生控件：原生控件样式不可控，
+    // 且在 reparent 后位置会跳（视频搬进了 overlay，原生 UI 不会跟过来）。
+    video.controls = false;
+
+    this.controls = new FullscreenControls(video, { onExit: () => this.exit() });
+    this.controls.mount();
 
     if (mode === 'reparent') {
       const playbackSnapshot = this.capturePlaybackSnapshot(video);
@@ -242,6 +249,9 @@ export class FullscreenController {
     if (!video) {
       return;
     }
+
+    this.controls?.unmount();
+    this.controls = null;
 
     video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--css-cover');
     video.controls = this.state.originalControls;
@@ -280,7 +290,13 @@ export class FullscreenController {
     // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。
     if (this.state.mode === 'reparent' && this.state.originalParent && video.isConnected) {
       const playbackSnapshot = this.capturePlaybackSnapshot(video);
-      this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
+      // sibling 守卫：全屏期间页面可能把 originalNextSibling 移走了（重排 DOM），
+      // 此时 insertBefore(video, 已脱离的节点) 会抛 NotFoundError 打断退出，
+      // 让视频卡死在 overlay、body 滚动锁死。sibling 不再是原父节点的孩子时改用 append。
+      const parent = this.state.originalParent;
+      const sibling = this.state.originalNextSibling;
+      const siblingStillValid = sibling !== null && sibling.parentNode === parent;
+      parent.insertBefore(video, siblingStillValid ? sibling : null);
       this.applySnapshot(video, playbackSnapshot);
     }
 

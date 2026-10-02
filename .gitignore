@@ -59,3 +59,6 @@ release/
 
 # Stale local diagnosis notes (no longer part of the build)
 REACT_ERROR_185_DIAGNOSIS.md
+
+# Generated store screenshots (regenerable via scripts/generate-store-assets.mjs)
+store-assets/output/

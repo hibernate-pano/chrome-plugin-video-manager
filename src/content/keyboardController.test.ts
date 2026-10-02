@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { KeyboardController } from './keyboardController';
-import { DEFAULT_PRESET_SPEEDS, PersistedSettings } from '../shared/types';
+import { DEFAULT_SHORTCUTS, PersistedSettings, ShortcutSettings } from '../shared/types';
 
 const createVideo = () => {
   const video = document.createElement('video');
@@ -42,32 +42,37 @@ const createVideo = () => {
   return video;
 };
 
-const createSettings = (overrides: Partial<PersistedSettings> = {}): PersistedSettings => ({
-  shortcuts: {
-    increaseSpeed: '=',
-    decreaseSpeed: '-',
-    resetSpeed: '0',
-    fullscreen: 'f',
-  },
-  presetSpeeds: [...DEFAULT_PRESET_SPEEDS],
-  spaceTogglePlay: true,
-  maxSpeed: 4,
-  siteSpeedMemory: true,
-  ...overrides,
+const createSettings = (
+  shortcuts: Partial<ShortcutSettings> = {},
+): PersistedSettings => ({
+  shortcuts: { ...DEFAULT_SHORTCUTS, ...shortcuts },
 });
 
 const keyEvent = (key: string, init: KeyboardEventInit = {}) =>
   new KeyboardEvent('keydown', { key, ...init });
+
+const keyUpEvent = (key: string, init: KeyboardEventInit = {}) =>
+  new KeyboardEvent('keyup', { key, ...init });
 
 describe('KeyboardController', () => {
   let settings: PersistedSettings;
   let video: HTMLVideoElement | null;
   let toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   let exitFullscreen: ReturnType<typeof vi.fn>;
-  let showSpeedHud: ReturnType<typeof vi.fn>;
-  let showPlaybackState: ReturnType<typeof vi.fn>;
+  let showSpeedFeedback: ReturnType<typeof vi.fn>;
   let lastToggledVideo: HTMLVideoElement | null | undefined;
   let controller: KeyboardController;
+
+  const createController = (fullscreenActive = false) => {
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getCurrentVideo: () => video,
+      isFullscreenActive: () => fullscreenActive,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedFeedback,
+    });
+  };
 
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -79,18 +84,8 @@ describe('KeyboardController', () => {
       return true;
     };
     exitFullscreen = vi.fn();
-    showSpeedHud = vi.fn();
-    showPlaybackState = vi.fn();
-
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => false,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
+    showSpeedFeedback = vi.fn();
+    createController();
   });
 
   it('ignores editable targets', () => {
@@ -101,307 +96,132 @@ describe('KeyboardController', () => {
     expect(controller.handleKeyDown(event)).toBe(false);
   });
 
-  it('uses updated shortcut mappings immediately', () => {
-    settings = createSettings({ shortcuts: { ...settings.shortcuts, increaseSpeed: 'k' } });
-    const event = keyEvent('k');
+  it('steps speed up and down with feedback', () => {
+    expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+    expect(video?.playbackRate).toBe(1.1);
+    expect(showSpeedFeedback).toHaveBeenLastCalledWith(1.1, video);
 
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(showSpeedHud).toHaveBeenCalledTimes(1);
+    expect(controller.handleKeyDown(keyEvent('-'))).toBe(true);
+    expect(video?.playbackRate).toBe(1);
   });
 
-  it('resets playback speed without using hidden double-press behavior', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
+  it('uses updated shortcut mappings immediately', () => {
+    settings = createSettings({ increaseSpeed: 'k' });
+
+    expect(controller.handleKeyDown(keyEvent('k'))).toBe(true);
+    expect(showSpeedFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets playback speed to 1x', () => {
+    if (!video) throw new Error('video missing');
 
     video.playbackRate = 2.3;
-    const event = keyEvent('0');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(controller.handleKeyDown(keyEvent('0'))).toBe(true);
     expect(video.playbackRate).toBe(1);
   });
 
   it('toggles fullscreen with the configured shortcut', () => {
-    const event = keyEvent('f');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(controller.handleKeyDown(keyEvent('f'))).toBe(true);
     expect(lastToggledVideo).toBe(video);
   });
 
-  it('exits fullscreen on escape', () => {
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
+  it('exits fullscreen on escape without needing a video', () => {
+    createController(true);
+    video = null;
 
-    const event = keyEvent('Escape');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(controller.handleKeyDown(keyEvent('Escape'))).toBe(true);
     expect(exitFullscreen).toHaveBeenCalledTimes(1);
   });
 
-  it('seeks backward and forward with arrow keys in fullscreen', () => {
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
+  it('toggles playback with the bound key', () => {
+    expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+    expect(video?.pause).toHaveBeenCalledTimes(1);
+    expect(video?.paused).toBe(true);
 
-    const backwardEvent = keyEvent('ArrowLeft');
-    const forwardEvent = keyEvent('ArrowRight');
+    expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+    expect(video?.play).toHaveBeenCalledTimes(1);
+    expect(video?.paused).toBe(false);
+  });
 
-    expect(controller.handleKeyDown(backwardEvent)).toBe(true);
+  it('seeks backward and forward by 5 seconds', () => {
+    expect(controller.handleKeyDown(keyEvent('ArrowLeft'))).toBe(true);
     expect(video?.currentTime).toBe(7);
-    expect(controller.handleKeyDown(forwardEvent)).toBe(true);
+
+    expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(true);
     expect(video?.currentTime).toBe(12);
   });
 
-  it('toggles playback with space in fullscreen', () => {
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
+  it('clamps seeks to the video bounds', () => {
+    if (!video) throw new Error('video missing');
 
-    const pauseEvent = keyEvent(' ');
-    const playEvent = keyEvent(' ');
+    video.currentTime = 2;
+    controller.handleKeyDown(keyEvent('ArrowLeft'));
+    expect(video.currentTime).toBe(0);
 
-    expect(controller.handleKeyDown(pauseEvent)).toBe(true);
-    expect(video?.pause).toHaveBeenCalledTimes(1);
-    expect(video?.paused).toBe(true);
-    expect(showPlaybackState).toHaveBeenLastCalledWith(false, video);
-
-    expect(controller.handleKeyDown(playEvent)).toBe(true);
-    expect(video?.play).toHaveBeenCalledTimes(1);
-    expect(video?.paused).toBe(false);
-    expect(showPlaybackState).toHaveBeenLastCalledWith(true, video);
+    video.currentTime = 98;
+    controller.handleKeyDown(keyEvent('ArrowRight'));
+    expect(video.currentTime).toBe(100);
   });
 
-  it('toggles playback with space outside fullscreen when enabled', () => {
-    const pauseEvent = keyEvent(' ');
-
-    expect(controller.handleKeyDown(pauseEvent)).toBe(true);
-    expect(video?.pause).toHaveBeenCalledTimes(1);
-    expect(video?.paused).toBe(true);
-    expect(showPlaybackState).toHaveBeenCalledWith(false, video);
-  });
-
-  it('ignores space outside fullscreen when disabled', () => {
-    settings = createSettings({ spaceTogglePlay: false });
-
-    const event = keyEvent(' ');
-
-    expect(controller.handleKeyDown(event)).toBe(false);
+  it('ignores modifier combinations', () => {
+    expect(controller.handleKeyDown(keyEvent(' ', { shiftKey: true }))).toBe(false);
+    expect(controller.handleKeyDown(keyEvent('=', { ctrlKey: true }))).toBe(false);
     expect(video?.pause).not.toHaveBeenCalled();
   });
 
-  it('ignores repeated space keydowns', () => {
-    const event = keyEvent(' ', { repeat: true });
+  it('does nothing when the action is unbound', () => {
+    settings = createSettings({ togglePlay: '', seekBack: '' });
 
-    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+    expect(controller.handleKeyDown(keyEvent('ArrowLeft'))).toBe(false);
     expect(video?.pause).not.toHaveBeenCalled();
+    expect(video?.currentTime).toBe(12);
   });
 
-  it('applies a preset speed with the matching digit key', () => {
-    const event = keyEvent('2');
+  it('does nothing when there is no video on the page', () => {
+    video = null;
 
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video?.playbackRate).toBe(1.5);
-    expect(showSpeedHud).toHaveBeenCalledWith(1.5, video);
+    expect(controller.handleKeyDown(keyEvent('='))).toBe(false);
+    expect(showSpeedFeedback).not.toHaveBeenCalled();
   });
 
-  it('does nothing for digits without a configured preset', () => {
-    const event = keyEvent('9');
+  it('keeps repeating while a speed key is held, and stops on keyup', () => {
+    vi.useFakeTimers();
+    try {
+      controller.start();
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
 
-    expect(controller.handleKeyDown(event)).toBe(false);
-    expect(showSpeedHud).not.toHaveBeenCalled();
-  });
+      vi.advanceTimersByTime(1000);
+      const callsBefore = showSpeedFeedback.mock.calls.length;
+      expect(callsBefore).toBeGreaterThan(1);
 
-  it('does not treat modified digit keys as presets', () => {
-    const event = keyEvent('2', { ctrlKey: true });
-
-    expect(controller.handleKeyDown(event)).toBe(false);
-    expect(video?.playbackRate).toBe(1);
-  });
-
-  it('applies presets in fullscreen mode too', () => {
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
-
-    const event = keyEvent('4');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video?.playbackRate).toBe(2);
-  });
-
-  it('gives a custom Space shortcut priority over global play/pause', () => {
-    if (!video) {
-      throw new Error('video missing');
+      expect(controller.handleKeyUp(keyUpEvent('='))).toBe(true);
+      vi.advanceTimersByTime(1000);
+      expect(showSpeedFeedback).toHaveBeenCalledTimes(callsBefore);
+    } finally {
+      controller.stop();
+      vi.useRealTimers();
     }
-
-    settings = createSettings({ shortcuts: { ...settings.shortcuts, resetSpeed: 'Space' } });
-
-    const event = keyEvent(' ');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video?.playbackRate).toBe(1);
-    expect(video?.pause).not.toHaveBeenCalled();
-    expect(showPlaybackState).not.toHaveBeenCalled();
-  });
-
-  it('clamps stepped speed at the configured maxSpeed', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
-
-    settings = createSettings({ maxSpeed: 2 });
-    video.playbackRate = 1.9;
-    const event = keyEvent('=');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video.playbackRate).toBe(2);
-
-    const again = keyEvent('=');
-    expect(controller.handleKeyDown(again)).toBe(true);
-    expect(video.playbackRate).toBe(2);
-  });
-
-  it('clamps preset speeds at the configured maxSpeed', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
-
-    settings = createSettings({ maxSpeed: 2 });
-    video.playbackRate = 1;
-
-    const event = keyEvent('4'); // preset 2.0 == max, fine
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video.playbackRate).toBe(2);
-
-    settings = createSettings({ maxSpeed: 1.5, presetSpeeds: [1.25, 1.5, 1.75, 2] });
-    const event2 = keyEvent('3'); // preset 1.75 > max 1.5
-    expect(controller.handleKeyDown(event2)).toBe(true);
-    expect(video.playbackRate).toBe(1.5);
-  });
-
-  it('gives custom shortcuts priority over digit presets', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
-
-    settings = createSettings({ shortcuts: { ...settings.shortcuts, resetSpeed: '2' } });
-    video.playbackRate = 2.5;
-
-    const event = keyEvent('2');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video.playbackRate).toBe(1);
-    expect(showSpeedHud).toHaveBeenCalledWith(1, video);
-  });
-
-  it('gives a custom Space shortcut priority over fullscreen play/pause', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
-
-    settings = createSettings({ shortcuts: { ...settings.shortcuts, resetSpeed: 'Space' } });
-    video.playbackRate = 2.5;
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
-
-    const event = keyEvent(' ');
-
-    expect(controller.handleKeyDown(event)).toBe(true);
-    expect(video.playbackRate).toBe(1);
-    expect(video.pause).not.toHaveBeenCalled();
-    expect(showPlaybackState).not.toHaveBeenCalled();
-  });
-
-  it('ignores space in fullscreen when spaceTogglePlay is disabled', () => {
-    settings = createSettings({ spaceTogglePlay: false });
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
-
-    const event = keyEvent(' ');
-
-    expect(controller.handleKeyDown(event)).toBe(false);
-    expect(video?.pause).not.toHaveBeenCalled();
-    expect(showPlaybackState).not.toHaveBeenCalled();
-  });
-
-  it('does not treat modified space as play/pause in fullscreen', () => {
-    controller = new KeyboardController({
-      getSettings: () => settings,
-      getCurrentVideo: () => video,
-      isFullscreenActive: () => true,
-      toggleFullscreen,
-      exitFullscreen,
-      showSpeedHud,
-      showPlaybackState,
-    });
-
-    const event = keyEvent(' ', { shiftKey: true });
-
-    expect(controller.handleKeyDown(event)).toBe(false);
-    expect(video?.pause).not.toHaveBeenCalled();
-    expect(showPlaybackState).not.toHaveBeenCalled();
   });
 
   it('stops the speed repeat when the window loses focus', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
+    if (!video) throw new Error('video missing');
 
     vi.useFakeTimers();
     try {
       controller.start();
       expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
 
-      // 越过 280ms 首次延迟与随后的 120ms 间隔，让长按真正跑起来。
       vi.advanceTimersByTime(1000);
-      const hudCallsBeforeBlur = showSpeedHud.mock.calls.length;
+      const callsBeforeBlur = showSpeedFeedback.mock.calls.length;
       const rateBeforeBlur = video.playbackRate;
-      expect(hudCallsBeforeBlur).toBeGreaterThan(1);
+      expect(callsBeforeBlur).toBeGreaterThan(1);
 
       // 切走窗口后 keyup 永远不会再到达，只能靠 blur 兜底。
       window.dispatchEvent(new Event('blur'));
       vi.advanceTimersByTime(1000);
 
-      expect(showSpeedHud).toHaveBeenCalledTimes(hudCallsBeforeBlur);
+      expect(showSpeedFeedback).toHaveBeenCalledTimes(callsBeforeBlur);
       expect(video.playbackRate).toBe(rateBeforeBlur);
     } finally {
       controller.stop();
@@ -410,43 +230,32 @@ describe('KeyboardController', () => {
   });
 
   it('stops the speed repeat when the page is hidden', () => {
-    if (!video) {
-      throw new Error('video missing');
-    }
-
     vi.useFakeTimers();
     try {
       controller.start();
       controller.handleKeyDown(keyEvent('='));
       vi.advanceTimersByTime(1000);
-      const hudCallsBeforeHide = showSpeedHud.mock.calls.length;
-      const rateBeforeHide = video.playbackRate;
+      const callsBefore = showSpeedFeedback.mock.calls.length;
 
       document.dispatchEvent(new Event('visibilitychange'));
       vi.advanceTimersByTime(1000);
 
-      expect(showSpeedHud).toHaveBeenCalledTimes(hudCallsBeforeHide);
-      expect(video.playbackRate).toBe(rateBeforeHide);
+      expect(showSpeedFeedback).toHaveBeenCalledTimes(callsBefore);
     } finally {
       controller.stop();
       vi.useRealTimers();
     }
   });
 
-  it('ignores a keyup that arrives after focus loss', () => {
-    vi.useFakeTimers();
-    try {
-      controller.start();
-      controller.handleKeyDown(keyEvent('='));
-      window.dispatchEvent(new Event('blur'));
+  it('ignores synthesized repeat events for speed keys', () => {
+    controller.start();
+    expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+    const calls = showSpeedFeedback.mock.calls.length;
 
-      const keyUp = new KeyboardEvent('keyup', { key: '=' });
-
-      expect(() => controller.handleKeyUp(keyUp)).not.toThrow();
-      expect(controller.handleKeyUp(keyUp)).toBe(false);
-    } finally {
-      controller.stop();
-      vi.useRealTimers();
-    }
+    // 浏览器在长按时会自己发 repeat=true 的 keydown；重复计数交给我们的定时器，
+    // 不能让它再叠加一次。
+    expect(controller.handleKeyDown(keyEvent('=', { repeat: true }))).toBe(true);
+    expect(showSpeedFeedback).toHaveBeenCalledTimes(calls);
+    controller.stop();
   });
 });

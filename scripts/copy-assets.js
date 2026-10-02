@@ -41,7 +41,7 @@ if (existsSync(resolve(rootDir, 'icons', 'icon128.png'))) {
 }
 
 // 复制 _locales
-for (const locale of ['en', 'zh_CN', 'ja', 'ko']) {
+for (const locale of ['en', 'zh_CN']) {
   const source = resolve(rootDir, '_locales', locale, 'messages.json');
   if (existsSync(source)) {
     const targetDir = resolve(distDir, '_locales', locale);

@@ -56,12 +56,20 @@ const normalizeBinding = (value: string | undefined, fallback: string) => {
 
 export const normalizeShortcutSettings = (
   value?: Partial<ShortcutSettings> | null,
-): ShortcutSettings => ({
-  increaseSpeed: normalizeBinding(value?.increaseSpeed, DEFAULT_SHORTCUTS.increaseSpeed),
-  decreaseSpeed: normalizeBinding(value?.decreaseSpeed, DEFAULT_SHORTCUTS.decreaseSpeed),
-  resetSpeed: normalizeBinding(value?.resetSpeed, DEFAULT_SHORTCUTS.resetSpeed),
-  fullscreen: normalizeBinding(value?.fullscreen, DEFAULT_SHORTCUTS.fullscreen),
-});
+): ShortcutSettings => {
+  const normalize = (id: keyof ShortcutSettings) =>
+    normalizeBinding(value?.[id], DEFAULT_SHORTCUTS[id]);
+
+  return {
+    increaseSpeed: normalize('increaseSpeed'),
+    decreaseSpeed: normalize('decreaseSpeed'),
+    resetSpeed: normalize('resetSpeed'),
+    togglePlay: normalize('togglePlay'),
+    seekBack: normalize('seekBack'),
+    seekForward: normalize('seekForward'),
+    fullscreen: normalize('fullscreen'),
+  };
+};
 
 export const keyboardEventToShortcut = (event: KeyboardEvent) => {
   const parts: string[] = [];

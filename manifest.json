@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "Video Speed Controller",
-  "version": "5.3.0",
-  "description": "Minimal video speed shortcuts, presets and page fullscreen for HTML5 video",
+  "version": "6.0.0",
+  "description": "Minimal keyboard shortcuts and a clean page-fullscreen player for any HTML5 video",
   "permissions": [
     "storage"
   ],
@@ -36,8 +36,7 @@
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png"
-    },
-    "default_popup": "popup.html"
+    }
   },
   "content_scripts": [
     {

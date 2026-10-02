@@ -25,7 +25,6 @@ pnpm test:e2e:ext  # 只跑真实扩展那套（会先 pnpm build）
 - `src/content/**/*.test.ts`
 - `src/shared/**/*.test.ts`
 - `src/options/**/*.test.ts`
-- `src/popup/**/*.test.ts`
 - `src/background/**/*.test.ts`
 - `scripts/**/*.test.ts`
 
@@ -36,11 +35,12 @@ pnpm test:e2e:ext  # 只跑真实扩展那套（会先 pnpm build）
 - 网页全屏进入 / 退出
 - 视频选择逻辑（含 Shadow DOM / 同源 iframe 跨 realm）
 - 设置归一化与 storage 失败路径
-- Popup / 设置页渲染、快捷键提示与无障碍属性
+- 设置页渲染、快捷键绑定校验与无障碍属性
+- 全屏控制条与极简调速提示
 - CI 工作流配置契约（见下）
 
 > 新增 `*.test.ts` 时注意：`vitest.config.ts` 的 `include` 是逐条枚举的，
-> 放进一个没被列到的目录（例如 `src/popup/`）不会被收集，测试会静默地永不执行。
+> 放进一个没被列到的目录不会被收集，测试会静默地永不执行。
 
 ### CI 契约测试
 
@@ -72,7 +72,7 @@ pnpm test:e2e:ext  # 只跑真实扩展那套（会先 pnpm build）
 `real-extension.spec.js` 覆盖的正是 jsdom 测不到的那一层：
 
 - 内容脚本在 `document_start` 注入样式
-- 数字键预设改速
+- 速度快捷键步进改速
 - 页面脚本用 `stopImmediatePropagation` 抢键也抢不过内容脚本（v5.2.1 的修复点）
 - 内容脚本不打断页面自身的输入框打字
 - 站点速度记忆跨刷新恢复（真实走一遍 `storage.local` 往返）

@@ -19,6 +19,8 @@ export interface ChromeMock {
   localRemoves: string[];
   /** storage.local 的当前内容。 */
   local: Record<string, unknown>;
+  /** storage.sync 的当前内容。 */
+  sync: Record<string, unknown>;
   /** 重置模块缓存、挂载 #root 并加载设置页，返回根节点。 */
   render: () => Promise<HTMLElement>;
 }
@@ -73,5 +75,5 @@ export const createChromeMock = (options: ChromeMockOptions = {}): ChromeMock =>
     return document.getElementById('root') as HTMLElement;
   };
 
-  return { localSets, localRemoves, local, render };
+  return { localSets, localRemoves, local, sync, render };
 };
