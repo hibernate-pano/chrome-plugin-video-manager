@@ -100,6 +100,24 @@ describe('KeyboardController', () => {
     expect(controller.handleKeyDown(event)).toBe(false);
   });
 
+  it('still runs shortcuts when focus is on a range slider (our progress bar)', () => {
+    // 回归：点击全屏进度条后焦点落在 <input type="range"> 上；旧逻辑把所有
+    // <input> 当编辑态，导致方向键/Esc/f 全部失灵。
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    const target = (key: string) => {
+      const e = keyEvent(key);
+      Object.defineProperty(e, 'target', { value: slider });
+      return e;
+    };
+
+    expect(controller.handleKeyDown(target('ArrowRight'))).toBe(true); // 交给播放器跳转，而非滑块 0.1s 微调
+    expect(controller.handleKeyDown(target('f'))).toBe(true);           // 仍能切换全屏
+    // Escape 仅在「全屏激活」时才被拦截（用于退出全屏）。
+    createController(true);
+    expect(controller.handleKeyDown(target('Escape'))).toBe(true);      // 仍能退出全屏
+  });
+
   it('steps speed up and down with feedback', () => {
     expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
     expect(video?.playbackRate).toBe(1.1);

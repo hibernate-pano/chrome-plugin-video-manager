@@ -51,6 +51,7 @@ export class FullscreenControls {
   private elements: ControlsElements | null = null;
   private idleTimer: number | null = null;
   private draggingProgress = false;
+  private pendingSeek: number | null = null;
   private readonly boundPointerMove = () => this.show();
   private readonly boundScheduleHide = () => this.scheduleHide();
   private readonly boundKeepVisible = () => this.cancelHide();
@@ -111,12 +112,24 @@ export class FullscreenControls {
       this.onExit();
     });
 
+    // 拖动/点击进度条：input 只移动滑块并预览目标时间，绝不逐帧 seek。
+    // 一次拖动会触发几十个 input，每个都写 currentTime 会让流媒体播放器
+    // （YouTube/B 站这类 MSE）反复中断并重新缓冲——表现就是「快进快退不干脆、
+    // 进度条点了跳不过去」。真正的跳转放到 change（松手/点定/键盘确定）提交一次。
     elements.progress.addEventListener('input', () => {
       this.draggingProgress = true;
+      this.previewScrub();
+      this.show();
+    });
+    elements.progress.addEventListener('change', () => {
       const time = Number(elements.progress.value);
       if (Number.isFinite(time)) {
+        // 记住提交的目标：跳转落地前 timeupdate 仍报旧 currentTime，
+        // 用它同步会把滑块拉回去（回弹）。pendingSeek 让滑块钉在目标位。
+        this.pendingSeek = time;
         this.video.currentTime = time;
       }
+      this.draggingProgress = false;
       this.show();
     });
     elements.volume.addEventListener('input', () => {
@@ -139,6 +152,7 @@ export class FullscreenControls {
     this.video.addEventListener('timeupdate', this.syncProgress);
     this.video.addEventListener('durationchange', this.syncProgress);
     this.video.addEventListener('loadedmetadata', this.syncProgress);
+    this.video.addEventListener('seeked', this.handleSeeked);
     this.video.addEventListener('play', this.syncPlayState);
     this.video.addEventListener('pause', this.syncPlayState);
     this.video.addEventListener('ratechange', this.syncSpeed);
@@ -168,12 +182,38 @@ export class FullscreenControls {
     elements.progress.max = hasDuration ? String(duration) : '0';
     elements.progress.disabled = !hasDuration;
 
-    if (!this.draggingProgress) {
-      elements.progress.value = hasDuration ? String(Math.min(current, duration)) : '0';
-      elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(current / duration) * 100}%` : '0%');
+    // 松手兜底：正常路径由 change 清 draggingProgress；个别情况下 change 未到达
+    // （如拖到控件外释放）时，pointerup 保证滑块不会被永久卡在拖动态。
+    if (this.draggingProgress) {
+      return; // 拖动中由 previewScrub 渲染，不用真实 currentTime 覆盖。
     }
 
-    elements.time.textContent = `${formatTime(current)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
+    // 跳转已提交但尚未落地：滑块钉在目标位，避免被旧 currentTime 拉回（回弹）。
+    const shown = this.pendingSeek !== null && hasDuration ? this.pendingSeek : Math.min(current, duration);
+    elements.progress.value = hasDuration ? String(shown) : '0';
+    elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(shown / duration) * 100}%` : '0%');
+    elements.time.textContent = `${formatTime(hasDuration ? shown : current)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
+  };
+
+  /** 跳转落地：清除 pendingSeek 并回到真实位置渲染。 */
+  private readonly handleSeeked = () => {
+    this.pendingSeek = null;
+    this.syncProgress();
+  };
+
+  /** 拖动时把时间标签与填充同步到滑块目标位置，让 scrub 立刻有反馈（不触发 seek）。 */
+  private previewScrub() {
+    const elements = this.elements;
+    if (!elements) {
+      return;
+    }
+
+    const duration = this.video.duration;
+    const hasDuration = Number.isFinite(duration) && duration > 0;
+    const target = Number(elements.progress.value);
+    const clamped = hasDuration ? Math.min(Math.max(target, 0), duration) : 0;
+    elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(clamped / duration) * 100}%` : '0%');
+    elements.time.textContent = `${formatTime(clamped)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
   };
 
   private readonly syncPlayState = () => {
@@ -244,6 +284,7 @@ export class FullscreenControls {
     this.video.removeEventListener('timeupdate', this.syncProgress);
     this.video.removeEventListener('durationchange', this.syncProgress);
     this.video.removeEventListener('loadedmetadata', this.syncProgress);
+    this.video.removeEventListener('seeked', this.handleSeeked);
     this.video.removeEventListener('play', this.syncPlayState);
     this.video.removeEventListener('pause', this.syncPlayState);
     this.video.removeEventListener('ratechange', this.syncSpeed);

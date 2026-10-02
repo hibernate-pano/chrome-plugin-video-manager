@@ -11,11 +11,19 @@ const createMockVideo = () => {
   let paused = false;
   let volume = 1;
   let muted = false;
+  let seeking = false;
 
   Object.defineProperty(video, 'currentTime', {
     get: () => currentTime,
     set: (value: number) => {
       currentTime = value;
+    },
+    configurable: true,
+  });
+  Object.defineProperty(video, 'seeking', {
+    get: () => seeking,
+    set: (value: boolean) => {
+      seeking = value;
     },
     configurable: true,
   });
@@ -118,13 +126,35 @@ describe('FullscreenControls', () => {
     expect($('play').innerHTML).toContain('M8 5.5v13');
   });
 
-  it('seeks the video when the progress bar is dragged', () => {
+  it('scrubs live on input (no seek) and commits exactly once on change', () => {
+    mount();
+    const progress = $<HTMLInputElement>('progress');
+    // 拖动预览：input 只移动滑块并更新时间标签，绝不 seek（避免流媒体反复缓冲）。
+    progress.value = '75';
+    progress.dispatchEvent(new Event('input'));
+    expect(video.currentTime).toBe(30); // input 不 seek，currentTime 不变
+    expect(progress.style.getPropertyValue('--vsc-progress')).toBe('62.5%'); // 75/120
+    expect($('time').textContent).toBe('1:15 / 2:00');
+    // 松手/点定：change 提交一次跳转。
+    progress.dispatchEvent(new Event('change'));
+    expect(video.currentTime).toBe(75);
+  });
+
+  it('keeps the scrubbed thumb steady while a committed seek is still pending', () => {
     mount();
     const progress = $<HTMLInputElement>('progress');
     progress.value = '75';
     progress.dispatchEvent(new Event('input'));
-
+    progress.dispatchEvent(new Event('change'));
     expect(video.currentTime).toBe(75);
+    // 跳转已提交但尚未落地：真实播放器会把 currentTime 暂时报回旧值。
+    // 模拟这一瞬间——一次 timeupdate 不得把滑块拉回旧位置（防回弹）。
+    video.currentTime = 0;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(progress.value).toBe('75');
+    // 跳转落地：seeked 清除 pendingSeek，滑块回到真实位置。
+    video.dispatchEvent(new Event('seeked'));
+    expect(progress.value).toBe('0');
   });
 
   it('changes volume and unmutes when the volume slider moves up', () => {

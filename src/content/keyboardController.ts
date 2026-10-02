@@ -21,15 +21,35 @@ interface KeyboardControllerOptions {
   deferSpaceToSite?: () => boolean;
 }
 
+/** 真正接收文本输入的 <input> 类型；其余（range/checkbox/button/color…）不算编辑态。 */
+const TEXT_INPUT_TYPES = new Set(['text', 'search', 'password', 'email', 'tel', 'url', 'number']);
+
+/**
+ * 只有「文本编辑态」才让位给站点：文本框、文本域、下拉、可编辑区。
+ * 关键：不能把所有 <input> 都当编辑态——我们自己的全屏进度条/音量条是
+ * <input type="range">，点击后焦点会停在它上面；若在此拦下所有快捷键，
+ * 方向键就只剩浏览器对 range 的 0.1s 微调、Esc/f/空格也全部失灵
+ * （表现为「全屏里快进快退不干脆、点了进度条就再也控制不动」）。
+ */
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
 
-  return target instanceof HTMLInputElement
-    || target instanceof HTMLTextAreaElement
-    || target instanceof HTMLSelectElement
-    || target.isContentEditable;
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
+    return true;
+  }
+
+  if (target instanceof HTMLInputElement) {
+    // 无 type 属性时浏览器按 text 处理。
+    return TEXT_INPUT_TYPES.has((target.type || 'text').toLowerCase());
+  }
+
+  return false;
 };
 
 /**
