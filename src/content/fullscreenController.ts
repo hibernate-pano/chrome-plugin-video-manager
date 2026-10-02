@@ -92,17 +92,33 @@ export class FullscreenController {
     };
   }
 
-  private applySnapshot(video: HTMLVideoElement, snapshot: PlaybackSnapshot) {
-    try {
-      video.currentTime = snapshot.currentTime;
-    } catch {
-      // Best effort.
+  /**
+   * 同文档内移动一个正在播放的 video 不会丢失任何播放状态（隔离实验验证过），
+   * 所以搬运后绝不能无条件写回播放位置：写 currentTime（哪怕同值）会触发 seek，
+   * 浏览器重新加载媒体分段 -> 可见卡顿；seek 元数据不全的媒体还会回落到 0 ->
+   * 进度条跳零。因此只在状态真的丢失时补偿（例如个别站点在 reparent 时
+   * 用自己的 observer 重载了媒体元素）。
+   */
+  private restoreIfLost(video: HTMLVideoElement, snapshot: PlaybackSnapshot) {
+    // 容忍漂移：capture 到 restore 之间视频一直在播，正常漂移是几十毫秒级；
+    // 超过 0.5s 才视为真的丢了播放位置。
+    if (Math.abs(video.currentTime - snapshot.currentTime) > 0.5) {
+      try {
+        video.currentTime = snapshot.currentTime;
+      } catch {
+        // Best effort.
+      }
     }
 
-    video.playbackRate = snapshot.playbackRate;
-    video.muted = snapshot.muted;
+    if (video.playbackRate !== snapshot.playbackRate) {
+      video.playbackRate = snapshot.playbackRate;
+    }
 
-    if (!snapshot.paused) {
+    if (video.muted !== snapshot.muted) {
+      video.muted = snapshot.muted;
+    }
+
+    if (!snapshot.paused && video.paused) {
       void video.play().catch(() => {
         // Best effort.
       });
@@ -147,7 +163,7 @@ export class FullscreenController {
     // 98% 不透明的深色背板，把可能被页面祖先压住的视频整个盖住。
     document.getElementById(OVERLAY_ID)?.classList.remove('vsc-active');
     this.applyCssCover(video);
-    this.applySnapshot(video, playbackSnapshot);
+    this.restoreIfLost(video, playbackSnapshot);
   }
 
   private startHealthCheck() {
@@ -218,7 +234,7 @@ export class FullscreenController {
       const playbackSnapshot = this.capturePlaybackSnapshot(video);
       this.applyFullscreenLayout(video, 'reparent');
       stage.appendChild(video);
-      this.applySnapshot(video, playbackSnapshot);
+      this.restoreIfLost(video, playbackSnapshot);
 
       window.setTimeout(() => {
         if (!this.state.video || this.state.video !== video || this.state.mode !== 'reparent') {
@@ -297,7 +313,7 @@ export class FullscreenController {
       const sibling = this.state.originalNextSibling;
       const siblingStillValid = sibling !== null && sibling.parentNode === parent;
       parent.insertBefore(video, siblingStillValid ? sibling : null);
-      this.applySnapshot(video, playbackSnapshot);
+      this.restoreIfLost(video, playbackSnapshot);
     }
 
     this.release();

@@ -229,4 +229,59 @@ describe('FullscreenController', () => {
     // video 回到了原父节点（sibling 没了就 append 到末尾）。
     expect(parent.contains(video)).toBe(true);
   });
+
+  it('does not write back the playback position on enter (no seek, no stutter)', () => {
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+
+    // 记录对 currentTime 的每一次写入：写 currentTime（哪怕同值）会触发 seek，
+    // 正是用户看到的卡顿与进度条跳零的根因。正常搬运不该写一次。
+    let writes = 0;
+    let currentTime = 42;
+    Object.defineProperty(video, 'currentTime', {
+      get: () => currentTime,
+      set: (value: number) => {
+        writes += 1;
+        currentTime = value;
+      },
+      configurable: true,
+    });
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    Object.defineProperty(video, 'play', { value: vi.fn(() => Promise.resolve()), configurable: true });
+
+    expect(controller.enter(video)).toBe(true);
+
+    expect(writes).toBe(0);
+    expect(currentTime).toBe(42);
+    controller.exit();
+  });
+
+  it('compensates when the site actually lost the playback position during enter', () => {
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+
+    // 模拟"搬运后站点把播放位置弄丢了"：一旦视频被搬进 overlay，
+    // getter 就返回 0（丢失态）。restoreIfLost 必须检测到并补回 42。
+    let writes: number[] = [];
+    Object.defineProperty(video, 'currentTime', {
+      get: () => (video.parentElement?.id === 'vsc-page-fullscreen-stage' ? 0 : 42),
+      set: (value: number) => {
+        writes.push(value);
+      },
+      configurable: true,
+    });
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    Object.defineProperty(video, 'play', { value: vi.fn(() => Promise.resolve()), configurable: true });
+
+    expect(controller.enter(video)).toBe(true);
+
+    expect(writes).toEqual([42]);
+    controller.exit();
+  });
 });
