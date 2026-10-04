@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   loadSettings,
+  markFirstRunHintShown,
   normalizePersistedSettings,
   saveSettings,
   subscribeToSettings,
+  wasFirstRunHintShown,
 } from './settings';
-import { DEFAULT_SHORTCUTS, LEGACY_SHORTCUTS_KEY, STORAGE_KEY } from './types';
+import {
+  DEFAULT_SHORTCUTS,
+  FIRST_RUN_HINT_KEY,
+  LEGACY_SHORTCUTS_KEY,
+  STORAGE_KEY,
+} from './types';
 
 /**
  * 有真实行为的 fake sync：记录 set/remove 的调用次数，而不是空 mock——
@@ -234,5 +241,60 @@ describe('normalizePersistedSettings', () => {
 
     unsubscribe();
     expect(listeners).toHaveLength(0);
+  });
+});
+
+/**
+ * 首次使用引导的状态存在 storage.local（设备级），而不是 sync。
+ * 这里的 fake 只实现 local，用来证明这两个函数确实落在 local 上。
+ */
+const installFakeLocal = () => {
+  const store = new Map<string, unknown>();
+  const writes: Array<Record<string, unknown>> = [];
+
+  vi.stubGlobal('chrome', {
+    runtime: { lastError: null },
+    storage: {
+      local: {
+        get: (key: string, callback: (result: Record<string, unknown>) => void) => {
+          callback(store.has(key) ? { [key]: store.get(key) } : {});
+        },
+        set: (obj: Record<string, unknown>, callback?: () => void) => {
+          writes.push(obj);
+          Object.entries(obj).forEach(([key, value]) => store.set(key, value));
+          callback?.();
+        },
+      },
+    },
+  });
+
+  return { store, writes };
+};
+
+describe('first-run hint flag', () => {
+  it('reports "not shown yet" on a fresh install', async () => {
+    installFakeLocal();
+
+    await expect(wasFirstRunHintShown()).resolves.toBe(false);
+  });
+
+  it('round-trips through storage.local', async () => {
+    const { store, writes } = installFakeLocal();
+
+    await markFirstRunHintShown();
+
+    await expect(wasFirstRunHintShown()).resolves.toBe(true);
+    expect(store.get(FIRST_RUN_HINT_KEY)).toBe(true);
+    // 只写这一个键：内容脚本的状态不该顺手碰别的键。
+    expect(writes).toEqual([{ [FIRST_RUN_HINT_KEY]: true }]);
+  });
+
+  it('only treats a literal true as shown', async () => {
+    const { store } = installFakeLocal();
+    // 存成字符串 "true" 之类的脏数据不该被当成「已经提示过」，
+    // 否则一次异常写入会让引导永久消失。
+    store.set(FIRST_RUN_HINT_KEY, 'true');
+
+    await expect(wasFirstRunHintShown()).resolves.toBe(false);
   });
 });

@@ -303,3 +303,89 @@ test.describe('真实扩展运行时', () => {
     }
   });
 });
+
+/**
+ * 反馈套件：扩展「什么都没发生」的时候，用户必须知道为什么。
+ *
+ * 这两条守的都是静默失败——按键被放行、页面毫无变化，用户眼里就是扩展坏了。
+ * 注意：内容脚本跑在隔离世界，**页面主世界对 video 的改写（paused / duration /
+ * play）它一概看不到**（实测：页面把 paused 覆盖成 false，扩展仍走 play 分支）。
+ * 所以这里只断言「DOM 上出现了什么」，不去伪造媒体状态。
+ */
+test.describe('反馈：不让用户面对静默失败', () => {
+  test('首次使用引导：播放一会儿后出现一次，之后不再打扰', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await serveHtml(page, testHtml);
+      await page.goto('https://vsc-hint-test.example/');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+      await page.locator('#v1').click();
+
+      // 提示必须晚于播放出现：自动播放的广告位、悬停预览都会派发 play，
+      // 只按 play 就弹提示等于打扰。
+      await page.evaluate(() => document.getElementById('v1').dispatchEvent(new Event('play')));
+      await page.waitForTimeout(1000);
+      await expect(page.locator('#vsc-first-run-hint.vsc-visible')).toHaveCount(0);
+
+      await expect(page.locator('#vsc-first-run-hint.vsc-visible')).toHaveCount(1, { timeout: 6000 });
+      // 文案必须用用户当前真实的绑定（默认 f 与 = / -），并且不教播放/暂停——
+      // 用户刚刚才按过播放，那个键不需要被教。
+      const text = await page.locator('#vsc-first-run-hint').textContent();
+      expect(text).toContain('F');
+      expect(text).toContain('= / -');
+      expect(text).not.toContain('Space');
+
+      // 已经展示过 -> 落盘；重新加载后不该再出现。
+      await page.reload();
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+      await page.evaluate(() => document.getElementById('v1').dispatchEvent(new Event('play')));
+      await page.waitForTimeout(3500);
+      await expect(page.locator('#vsc-first-run-hint.vsc-visible')).toHaveCount(0);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  test('同源 iframe 里的视频按 f：给出「接管不了」的提示，而不是静默', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      // 夹具见 iframe-outer.html：iframe 里的 video 属于另一个 document，
+      // reparent 搬不动它，canEnter() 必然为 false。
+      await page.goto('/tests/e2e/iframe-outer.html');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+      await page.waitForTimeout(500);
+
+      // 点击必须落在顶层文档：点进 iframe 会把焦点移进去，之后的按键只派发给
+      // iframe，顶层内容脚本收不到，「按 f 没反应」会被误判成扩展的 bug。
+      // 夹具顶部那 400px 留白就是为这一下留的。
+      await page.mouse.click(200, 100);
+      await page.waitForTimeout(200);
+
+      // 前置条件：iframe 里那个视频确实被扩展认成了受控对象。
+      // 少了这条断言，整条用例可能什么都没测到就「通过」。
+      await page.keyboard.press('=');
+      await expect
+        .poll(() => page.evaluate(
+          () => document.getElementById('f1').contentDocument.getElementById('inner').playbackRate,
+        ))
+        .toBeCloseTo(1.1, 2);
+
+      await page.keyboard.press('f');
+
+      await expect(page.locator('#vsc-takeover-notice.vsc-visible')).toHaveCount(1);
+      await expect(page.locator('#vsc-takeover-notice')).toHaveText('这个视频暂时接管不了');
+      // 提示要贴住视频（坐标换算到 iframe 真实位置），不能掉到屏幕角落。
+      const box = await page.locator('#vsc-takeover-notice').boundingBox();
+      expect(box.x).toBeGreaterThan(50);
+      expect(box.y).toBeGreaterThan(400);
+      expect(box.y).toBeLessThan(700);
+
+      // 不能提示了「接管不了」却又真的接管了。
+      await expect(page.locator('#vsc-page-fullscreen-overlay.vsc-active')).toHaveCount(0);
+    } finally {
+      await ext.close();
+    }
+  });
+});

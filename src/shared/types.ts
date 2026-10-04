@@ -22,6 +22,9 @@ export const LEGACY_SHORTCUTS_KEY = 'shortcuts';
 /** 站点速度记忆表（storage.local）：hostname -> 播放速度。 */
 export const SITE_SPEEDS_KEY = 'vsc-site-speeds';
 
+/** 首次使用引导是否已展示（storage.local，设备级状态）。 */
+export const FIRST_RUN_HINT_KEY = 'vsc-first-run-hint-shown';
+
 export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   increaseSpeed: '=',
   decreaseSpeed: '-',

@@ -213,6 +213,59 @@ const styles = `
 #vsc-speed-toast.vsc-visible {
   opacity: 1;
 }
+
+/* --- First-run hint (one time only) --- */
+
+#vsc-first-run-hint {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  max-width: min(560px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #f8fafc;
+  font-family: ${FONT_STACK};
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.7;
+  text-align: center;
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+#vsc-first-run-hint.vsc-visible {
+  opacity: 1;
+}
+
+/* --- Takeover notice (reuses the speed toast's shape and corner) --- */
+
+#vsc-takeover-notice {
+  position: fixed;
+  z-index: 2147483647;
+  max-width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.66);
+  color: #f8fafc;
+  font-family: ${FONT_STACK};
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+#vsc-takeover-notice.vsc-visible {
+  opacity: 1;
+}
 `;
 
 // 缓存已注入的节点：仅靠 document.getElementById 只能确认「现在在文档里」，

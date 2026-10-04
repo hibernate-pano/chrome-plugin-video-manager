@@ -1,5 +1,6 @@
 import {
   DEFAULT_SHORTCUTS,
+  FIRST_RUN_HINT_KEY,
   LEGACY_SHORTCUTS_KEY,
   PersistedSettings,
   STORAGE_KEY,
@@ -210,6 +211,20 @@ export const saveSettings = async (settings: PersistedSettings): Promise<void> =
   const normalized = normalizePersistedSettings(settings);
   await setValue('sync', STORAGE_KEY, normalized);
   await removeValue('sync', LEGACY_SHORTCUTS_KEY);
+};
+
+/**
+ * 首次使用引导是否已经展示过。
+ *
+ * 存在 storage.local 而不是 sync：这是「这台设备上打扰过没有」的设备级状态。
+ * 放 sync 会让它在用户所有设备间同步，等于在新设备上少提示一次；
+ * 而且它是纯内容脚本状态，没必要占用 sync 配额。
+ */
+export const wasFirstRunHintShown = async (): Promise<boolean> =>
+  (await getValue<unknown>('local', FIRST_RUN_HINT_KEY)) === true;
+
+export const markFirstRunHintShown = async (): Promise<void> => {
+  await setValue('local', FIRST_RUN_HINT_KEY, true);
 };
 
 export const subscribeToSettings = (

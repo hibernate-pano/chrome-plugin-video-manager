@@ -85,5 +85,17 @@
   },
   "ctlExit": {
     "message": "退出全屏"
+  },
+  "hintFullscreen": {
+    "message": "网页全屏"
+  },
+  "hintSpeed": {
+    "message": "{up} / {down} 调速"
+  },
+  "hintMore": {
+    "message": "全部快捷键可在扩展设置里改绑"
+  },
+  "noticeCannotTakeOver": {
+    "message": "这个视频暂时接管不了"
   }
 }

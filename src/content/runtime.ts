@@ -5,10 +5,12 @@ import {
   TOGGLE_FULLSCREEN_MESSAGE,
 } from '../shared/types';
 import { FullscreenController } from './fullscreenController';
+import { createFirstRunHint, FirstRunHint } from './firstRunHint';
 import { KeyboardController } from './keyboardController';
 import { installRuntimeStyles } from './runtimeStyles';
 import { SiteSpeedMemory } from './siteSpeedMemory';
 import { SpeedToast } from './speedToast';
+import { TakeoverNotice } from './takeoverNotice';
 import { VideoRegistry } from './videoRegistry';
 
 const createDefaultSettings = (): PersistedSettings => ({
@@ -23,7 +25,9 @@ export class ContentRuntime {
   private readonly registry = new VideoRegistry();
   private readonly fullscreenController = new FullscreenController();
   private readonly speedToast = new SpeedToast();
+  private readonly takeoverNotice = new TakeoverNotice();
   private readonly siteSpeedMemory = new SiteSpeedMemory();
+  private readonly firstRunHint: FirstRunHint = createFirstRunHint(() => this.settings.shortcuts);
   private readonly keyboardController = new KeyboardController({
     getSettings: () => this.settings,
     getCurrentVideo: () => this.getCurrentVideo(),
@@ -41,6 +45,7 @@ export class ContentRuntime {
     // 全屏内外都给一次性提示：控制条鼠标静止 3 秒就隐藏，键盘调速时它
     // 往往不在屏幕上，不能指望它承担反馈。toast 约 1 秒后自行消失。
     showSpeedFeedback: (rate, video) => this.speedToast.show(rate, video),
+    notifyTakeoverUnavailable: (video) => this.takeoverNotice.show(video),
   });
   private settings: PersistedSettings = createDefaultSettings();
   private unsubscribeSettings: (() => void) | null = null;
@@ -93,6 +98,9 @@ export class ContentRuntime {
     });
     this.registry.start();
     this.keyboardController.start();
+    // 引导的触发完全靠 media 事件，与键盘控制器无关；放在这里是因为它必须
+    // 等 settings 落地，否则会照着默认绑定渲染出一条错误的提示。
+    this.firstRunHint.start();
 
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener(this.boundHandleMessage);
@@ -110,9 +118,11 @@ export class ContentRuntime {
     }
 
     this.keyboardController.stop();
+    this.firstRunHint.destroy();
     this.fullscreenController.destroy();
     this.registry.stop();
     this.speedToast.destroy();
+    this.takeoverNotice.destroy();
     this.siteSpeedMemory.destroy();
   }
 

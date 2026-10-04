@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VSC same-origin iframe fixture</title>
+  <style>
+    body { margin: 0; height: 1400px; }
+    /* 顶部留白与 boundary.spec.js 的 OUTER 保持一致，不是为了排版好看：
+       iframe 若贴着 y=0，顶层文档就没有「既在页面内、又不在 iframe 上」的地方可点，
+       而点击一旦落进 iframe，焦点就留在 iframe 里，之后的按键只会派发给它，
+       顶层内容脚本收不到 —— 用例会以「按 f 没反应」的形式假失败（真踩过）。 */
+    #spacer { height: 400px; background: #eee; }
+    iframe { width: 400px; height: 300px; border: 0; display: block; margin-left: 50px; }
+  </style>
+</head>
+<body>
+  <div id="spacer">top</div>
+  <!--
+    takeover-notice E2E 用：iframe 里的 video 属于另一个 document，
+    网页全屏的 reparent 搬不动它，fullscreenController.canEnter() 必然为 false。
+    这条路径以前是静默的——按键被放行、页面毫无变化，用户眼里就是扩展坏了。
+
+    另外必须走真实 HTTP 文件，不能用 data: URL：data: 是 opaque origin，
+    它里面的 video 不会被扩展认成受控对象，用例同样会假通过。
+  -->
+  <iframe id="f1" src="iframe-inner.html"></iframe>
+</body>
+</html>

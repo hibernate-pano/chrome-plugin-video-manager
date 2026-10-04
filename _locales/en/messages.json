@@ -114,5 +114,21 @@
   "ctlExit": {
     "message": "Exit fullscreen",
     "description": "Fullscreen control exit button"
+  },
+  "hintFullscreen": {
+    "message": "Fullscreen",
+    "description": "First-run hint: fullscreen action label"
+  },
+  "hintSpeed": {
+    "message": "{up} / {down} speed",
+    "description": "First-run hint: speed step actions"
+  },
+  "hintMore": {
+    "message": "All shortcuts can be rebound in the extension settings",
+    "description": "First-run hint: footer line"
+  },
+  "noticeCannotTakeOver": {
+    "message": "This video cannot be taken over here",
+    "description": "Shown when the page fullscreen player cannot take over a video"
   }
 }
