@@ -102,6 +102,44 @@ describe('FullscreenController', () => {
     expect(controller.enter(video)).toBe(false);
   });
 
+  it('refuses to enter for a video found inside a same-origin iframe without throwing', () => {
+    const controller = new FullscreenController();
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const innerDocument = iframe.contentDocument;
+    if (!innerDocument) throw new Error('iframe contentDocument missing');
+    const video = innerDocument.createElement('video');
+    innerDocument.body.appendChild(video);
+
+    // 同源 iframe 里的 video 是真实 HTMLVideoElement，registry 能认到它，
+    // 但 ownerDocument 不是顶层 document：必须干净地返回 false 而非抛异常，
+    // 这样键盘层才能据此不吞键。
+    expect(video.ownerDocument).not.toBe(document);
+    expect(controller.canEnter(video)).toBe(false);
+    expect(() => controller.enter(video)).not.toThrow();
+    expect(controller.enter(video)).toBe(false);
+    expect(controller.isActive()).toBe(false);
+  });
+
+  it('returns false without throwing when the document has no body', () => {
+    const controller = new FullscreenController();
+    const video = document.createElement('video');
+    // 先造好 video 再伪造 body：SVG + foreignObject 文档里 body 为 null，
+    // 但 querySelectorAll('video') 仍能找到元素，所以 enter() 会被调到。
+    // body 是 Document.prototype 上的 getter，这里用 configurable 的 own
+    // 属性遮蔽它，测完 delete 掉即可恢复原型链上的原值。
+    try {
+      Object.defineProperty(document, 'body', { value: null, configurable: true });
+
+      expect(document.body).toBeNull();
+      expect(() => controller.enter(video)).not.toThrow();
+      expect(controller.enter(video)).toBe(false);
+      expect(controller.isActive()).toBe(false);
+    } finally {
+      delete (document as unknown as { body?: unknown }).body;
+    }
+  });
+
   it('does not reinsert a video the page already discarded when exiting', () => {
     const controller = new FullscreenController();
     const parent = document.createElement('div');

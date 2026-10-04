@@ -28,6 +28,7 @@ export class ContentRuntime {
     getSettings: () => this.settings,
     getCurrentVideo: () => this.getCurrentVideo(),
     isFullscreenActive: () => this.fullscreenController.isActive(),
+    canToggleFullscreen: (video) => this.fullscreenController.canEnter(video),
     toggleFullscreen: (video) => {
       const next = this.fullscreenController.toggle(video);
       this.registry.setFullscreenVideo(this.fullscreenController.getActiveVideo());

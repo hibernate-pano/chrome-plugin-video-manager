@@ -1,5 +1,6 @@
 import { t } from '../shared/i18n';
 import { togglePlayback } from './playback';
+import { installRuntimeStyles } from './runtimeStyles';
 import { formatRate } from './speedToast';
 
 const CONTROLS_ID = 'vsc-controls';
@@ -67,6 +68,10 @@ export class FullscreenControls {
       return;
     }
 
+    // 控制条 / overlay 依赖 runtimeStyles 里的定位与配色；进入全屏这条路径必须
+    // 确保样式在场。页面若在全屏期间把样式节点摘走，这里也能顺带补回。
+    installRuntimeStyles();
+
     const root = document.createElement('div');
     root.id = CONTROLS_ID;
     root.className = 'vsc-ctl';
@@ -79,6 +84,13 @@ export class FullscreenControls {
       <span class="vsc-ctl__speed" data-role="speed">1x</span>
       <button type="button" class="vsc-ctl__button" data-role="exit" aria-label="${t('ctlExit', '退出全屏')}">${ICONS.exit}</button>
     `;
+
+    // 与 overlay 同样：非 HTML 文档（SVG/foreignObject）里没有可挂载的宿主。
+    // enter() 已会提前拒绝这类文档，这里是直接调用 mount() 时的防御。
+    if (!document.body) {
+      return;
+    }
+
     document.body.appendChild(root);
 
     const query = <T extends HTMLElement>(role: string) =>

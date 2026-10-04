@@ -58,14 +58,25 @@ const frameDocumentOf = (node: Element): Document | null => {
   }
 };
 
-const isVisible = (video: HTMLVideoElement, rect: VideoRect) => {
-  const style = video.ownerDocument.defaultView?.getComputedStyle(video);
+const isVisible = (style: CSSStyleDeclaration | null | undefined, rect: VideoRect) =>
+  rect.width > 0
+  && rect.height > 0
+  && style?.display !== 'none'
+  && style?.visibility !== 'hidden';
 
-  return rect.width > 0
-    && rect.height > 0
-    && style?.display !== 'none'
-    && style?.visibility !== 'hidden';
-};
+/**
+ * 被 CSS 明确隐藏（display/visibility）——不依赖布局引擎，任何环境都可判定。
+ */
+const isCssHidden = (style: CSSStyleDeclaration | null | undefined) =>
+  style?.display === 'none' || style?.visibility === 'hidden';
+
+/**
+ * 是否有可信的布局几何。无布局引擎的环境（如单测用的 jsdom）里 getComputedStyle
+ * 返回空 display，且所有元素的 rect 恒为 0；此时不能凭 rect 判定「不可见」，
+ * 否则会把页面里所有候选一并误杀。
+ */
+const hasReliableLayout = (style: CSSStyleDeclaration | null | undefined) =>
+  style != null && style.display !== '';
 
 const isInViewport = (video: HTMLVideoElement, rect: VideoRect) => {
   // iframe 内 video 的 rect 相对 iframe 自己的视口，拿顶层窗口的尺寸去比会判错。
@@ -201,7 +212,27 @@ export class VideoRegistry {
     const preferred = selectPreferredVideos(videos, getSiteAdapter(window.location.hostname).selectors);
 
     const sorted = videos
+      // 一个 video 只读一次 rect、一次 computed style，可见性/视口/面积判定复用；
+      // getComputedStyle 读不到样式就判不了 display/visibility，不能从 rect 推。
       .map((video) => {
+        const rect = video.getBoundingClientRect();
+        const style = video.ownerDocument.defaultView?.getComputedStyle(video);
+        return { video, rect, style };
+      })
+      // 完全不可见的候选不是有效受控对象：单候选时它会以最高分胜出，速度被改在
+      // 看不见的视频上、toast 还会因为 rect 全 0 而钳到屏幕角落。唯一豁免用户
+      // 显式交互过的那条——那是用户亲自选中的目标，即使站点把它藏起来也应尊重。
+      .filter(({ video, rect, style }) => {
+        if (video === this.lastInteractedVideo) {
+          return true;
+        }
+        if (isCssHidden(style)) {
+          return false;
+        }
+        // rect 为 0 只作参考：无布局引擎时所有 rect 恒为 0，此时不能据此过滤。
+        return !hasReliableLayout(style) || (rect.width > 0 && rect.height > 0);
+      })
+      .map(({ video, rect, style }) => {
         let score = 0;
 
         // 1600 = 1 + 可见300 + 在视口200 + 面积上限1000：
@@ -216,10 +247,7 @@ export class VideoRegistry {
           score += 600;
         }
 
-        // 一个 video 只读一次 rect，三项判定复用；getComputedStyle 读不到样式就
-        // 判不了 display/visibility，不能从 rect 推。
-        const rect = video.getBoundingClientRect();
-        if (isVisible(video, rect)) {
+        if (isVisible(style, rect)) {
           score += 300;
         }
         if (isInViewport(video, rect)) {

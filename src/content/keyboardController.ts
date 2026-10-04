@@ -11,6 +11,8 @@ interface KeyboardControllerOptions {
   getSettings: () => PersistedSettings;
   getCurrentVideo: () => HTMLVideoElement | null;
   isFullscreenActive: () => boolean;
+  /** 吞键前的可行性判断：跨 document 的视频进入全屏必然失败，不能吞掉按键。 */
+  canToggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   exitFullscreen: () => void;
   showSpeedFeedback: (rate: number, video: HTMLVideoElement) => void;
@@ -45,6 +47,19 @@ const isEditableTarget = (target: EventTarget | null) => {
   }
 
   return false;
+};
+
+/**
+ * 判断事件是否发生在文本编辑态里。
+ *
+ * 必须看 composedPath() 而不是 event.target：键盘事件跨 shadow 边界时，
+ * target 会被重定向为宿主元素（实测：在 shadow 里的 <input> 打字，
+ * window 捕获阶段看到的 target 是 DIV#host，而 composedPath()[0] 才是那个 INPUT）。
+ * 只认 target 会让 shadow DOM 里的输入框不被当成编辑态，用户打字被吞。
+ */
+const isEditableEvent = (event: KeyboardEvent) => {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  return isEditableTarget(path[0] ?? event.target);
 };
 
 /**
@@ -129,7 +144,7 @@ export class KeyboardController {
   }
 
   handleKeyDown(event: KeyboardEvent): boolean {
-    if (event.isComposing || isEditableTarget(event.target)) {
+    if (event.isComposing || isEditableEvent(event)) {
       return false;
     }
 
@@ -204,6 +219,21 @@ export class KeyboardController {
     }
 
     if (matchesShortcut(event, shortcuts.fullscreen)) {
+      // 已激活时按 f 是「退出」：canEnter 只描述「能否进入」，这里必须
+      // 独立成一支，否则全屏里按 f 会因为 canEnter=false 而退不出去。
+      if (this.options.isFullscreenActive()) {
+        this.intercept(event);
+        this.clearRepeat();
+        this.options.exitFullscreen();
+        return true;
+      }
+
+      // 未激活：先问 canEnter，进不去（跨 document 的视频）就不吞键，
+      // 让页面自己处理，避免静默丢键。
+      if (!this.options.canToggleFullscreen(video)) {
+        return false;
+      }
+
       this.intercept(event);
       this.clearRepeat();
       this.options.toggleFullscreen(video);

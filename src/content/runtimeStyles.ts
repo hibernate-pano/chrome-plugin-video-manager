@@ -215,13 +215,37 @@ const styles = `
 }
 `;
 
-export const installRuntimeStyles = () => {
-  if (document.getElementById(STYLE_ID)) {
-    return;
-  }
+// 缓存已注入的节点：仅靠 document.getElementById 只能确认「现在在文档里」，
+// 但被移除后还想知道要不要重建，所以持引用 + isConnected 判定（与 speedToast 同思路）。
+let styleElement: HTMLStyleElement | null = null;
+let styleWatcher: MutationObserver | null = null;
 
+const injectStyles = () => {
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = styles;
   document.documentElement.appendChild(style);
+  styleElement = style;
+};
+
+export const installRuntimeStyles = () => {
+  // 自愈：SPA 重建、站点清理外来节点都可能把 style 摘掉；脱离文档就重建，
+  // 否则 overlay/controls 会退化成无定位样式（position 从 fixed 变 static）。
+  if (styleElement && styleElement.isConnected) {
+    return;
+  }
+
+  injectStyles();
+
+  // 被移除后不一定再有人调用本函数（全屏期间用户可能不再操作），
+  // 只靠调用时检查不够；挂一个轻量观察者盯 html 的直接子节点，
+  // 发现样式脱离文档立刻重注入。只 observe childList、不递归，开销可忽略。
+  if (!styleWatcher) {
+    styleWatcher = new MutationObserver(() => {
+      if (styleElement && !styleElement.isConnected) {
+        injectStyles();
+      }
+    });
+    styleWatcher.observe(document.documentElement, { childList: true });
+  }
 };

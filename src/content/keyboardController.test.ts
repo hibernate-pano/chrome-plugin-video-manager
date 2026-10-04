@@ -69,6 +69,7 @@ describe('KeyboardController', () => {
   let settings: PersistedSettings;
   let video: HTMLVideoElement | null;
   let toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
+  let canToggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   let exitFullscreen: ReturnType<typeof vi.fn>;
   let showSpeedFeedback: ReturnType<typeof vi.fn>;
   let lastToggledVideo: HTMLVideoElement | null | undefined;
@@ -79,6 +80,7 @@ describe('KeyboardController', () => {
       getSettings: () => settings,
       getCurrentVideo: () => video,
       isFullscreenActive: () => fullscreenActive,
+      canToggleFullscreen,
       toggleFullscreen,
       exitFullscreen,
       showSpeedFeedback,
@@ -97,6 +99,7 @@ describe('KeyboardController', () => {
       lastToggledVideo = target;
       return true;
     };
+    canToggleFullscreen = () => true;
     exitFullscreen = vi.fn();
     showSpeedFeedback = vi.fn();
     createController();
@@ -108,6 +111,36 @@ describe('KeyboardController', () => {
     Object.defineProperty(event, 'target', { value: input });
 
     expect(controller.handleKeyDown(event)).toBe(false);
+  });
+
+  it('ignores an input nested in a shadow root whose event target was retargeted', () => {
+    // 回归：键盘事件跳 shadow 边界时，event.target 会被重定向为宿主元素，
+    // 所以只认 target 会把这个 <input> 误判为非编辑态，用户在里面打字被吞。
+    // 真实事件里 composedPath()[0] 才是那个 input。
+    const host = document.createElement('div');
+    const input = document.createElement('input');
+    host.append(input);
+    document.body.append(host);
+
+    const event = keyEvent(' ');
+    Object.defineProperty(event, 'target', { value: host });
+    Object.defineProperty(event, 'composedPath', { value: () => [input, host, document, window] });
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+  });
+
+  it('still runs shortcuts when the composed path starts on a range slider', () => {
+    // 与上一条镜像：composedPath 优先级提高后，进度条的既有行为不能回退。
+    const host = document.createElement('div');
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    host.append(slider);
+
+    const event = keyEvent('ArrowRight');
+    Object.defineProperty(event, 'target', { value: host });
+    Object.defineProperty(event, 'composedPath', { value: () => [slider, host, document, window] });
+
+    expect(controller.handleKeyDown(event)).toBe(true);
   });
 
   it('still runs shortcuts when focus is on a range slider (our progress bar)', () => {
@@ -155,6 +188,38 @@ describe('KeyboardController', () => {
   it('toggles fullscreen with the configured shortcut', () => {
     expect(controller.handleKeyDown(keyEvent('f'))).toBe(true);
     expect(lastToggledVideo).toBe(video);
+  });
+
+  it('does not swallow the fullscreen key when the action cannot succeed', () => {
+    // 回归：视频在同源 iframe 里时 enter() 必然失败；若仍先吞键再失败，
+    // 用户既失去按键又没有任何反馈。canToggleFullscreen 为 false 时必须放行。
+    canToggleFullscreen = () => false;
+    const toggleSpy = vi.fn(toggleFullscreen);
+    toggleFullscreen = toggleSpy;
+    createController();
+
+    const event = keyEvent('f');
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    const stopPropagation = vi.spyOn(event, 'stopPropagation');
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(stopPropagation).not.toHaveBeenCalled();
+  });
+
+  it('still swallows and exits fullscreen with f when canEnter is false', () => {
+    // 防回归：全屏已激活时按 f 是「退出」，此时 canEnter 必然为 false，
+    // 但按键必须仍被吞掉并调 exitFullscreen，否则全屏里按 f 退不出去。
+    canToggleFullscreen = () => false;
+    createController(true);
+
+    const event = keyEvent('f');
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(exitFullscreen).toHaveBeenCalledTimes(1);
   });
 
   it('exits fullscreen on escape without needing a video', () => {

@@ -236,4 +236,31 @@ describe('VideoRegistry', () => {
 
     registry.stop();
   });
+
+  it('returns null when the only video on the page is invisible', () => {
+    const registry = new VideoRegistry();
+    const hidden = appendVideo('hidden');
+    hidden.style.display = 'none';
+    mockRect(hidden, 160, 90, 0, 0);
+
+    // 改动前单候选不可见视频会以最高分胜出，速度被改在看不见的视频上。
+    expect(registry.getCurrentVideo()).toBeNull();
+  });
+
+  it('still returns an invisible video the user explicitly interacted with', () => {
+    // 防回归：过滤不可见候选时必须豁免 lastInteractedVideo——
+    // 用户明确点过它，即使站点把它藏起来也仍是他的选择。
+    const registry = new VideoRegistry();
+    registry.start();
+
+    const hidden = appendVideo('hidden');
+    hidden.style.display = 'none';
+    mockRect(hidden, 160, 90, 5000, 0);
+
+    hidden.dispatchEvent(new Event('play', { bubbles: true }));
+
+    expect(registry.getCurrentVideo()).toBe(hidden);
+
+    registry.stop();
+  });
 });

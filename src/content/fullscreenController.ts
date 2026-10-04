@@ -52,6 +52,15 @@ export class FullscreenController {
     return this.state.video;
   }
 
+  /**
+   * 能否进入全屏。keyboardController 在吞键之前必须先问这里：跨 document
+   * （同源 iframe）的视频 enter() 会失败，若先吞键再失败，用户既失去按键
+   * 又得不到任何反馈。enter() 复用同一判断，避免两处守卫漂移。
+   */
+  canEnter(video: HTMLVideoElement | null): boolean {
+    return video !== null && video.ownerDocument === document;
+  }
+
   toggle(video: HTMLVideoElement | null) {
     if (this.isActive()) {
       this.exit();
@@ -66,6 +75,13 @@ export class FullscreenController {
   }
 
   private ensureOverlay() {
+    // SVG/foreignObject 等文档里 document.body === null，没有可挂载的宿主。
+    // 此时无法提供 overlay 与控制条，只能返回 null 让 enter() 干净地放弃，
+    // 绝不能裸调 document.body.appendChild 抛 TypeError。
+    if (!document.body) {
+      return null;
+    }
+
     let overlay = document.getElementById(OVERLAY_ID);
     if (!overlay) {
       overlay = document.createElement('div');
@@ -182,7 +198,7 @@ export class FullscreenController {
   }
 
   enter(video: HTMLVideoElement) {
-    if (video.ownerDocument !== document) {
+    if (!this.canEnter(video)) {
       return false;
     }
 
@@ -194,7 +210,12 @@ export class FullscreenController {
       this.exit();
     }
 
-    const { overlay, stage } = this.ensureOverlay();
+    const overlayState = this.ensureOverlay();
+    if (!overlayState) {
+      return false;
+    }
+
+    const { overlay, stage } = overlayState;
     // 若页面正处于系统原生全屏（如之前点了站点自己的全屏按钮），先退出：
     // 否则后续按 ESC 会被浏览器拿去退系统全屏，keydown 不再派发给页面，
     // 我们的 overlay 盖在最上层，看起来就像“按 ESC 没反应”。
@@ -203,7 +224,7 @@ export class FullscreenController {
         // Best effort.
       });
     }
-    // 进入本方法前已用 video.ownerDocument !== document 提前 return，而所有适配器的
+    // 进入本方法前已用 canEnter() 提前 return，而所有适配器的
     // shouldTryReparent 都是同一个判断，因此这里恒为 reparent；css-cover 只在
     // fallbackToCssCover() 的回退路径上赋值。
     const mode: FullscreenMode = 'reparent';
@@ -275,7 +296,11 @@ export class FullscreenController {
     video.setAttribute('style', this.state.originalStyle);
 
     document.getElementById(OVERLAY_ID)?.remove();
-    document.body.style.overflow = this.state.originalBodyOverflow;
+    // 正常情况下 body 必然存在（enter 已用 ensureOverlay 守过）；这里额外
+    // 判空只为兜住「全屏中途文档把 body 移除」的极端情况，不让退出流程中断。
+    if (document.body) {
+      document.body.style.overflow = this.state.originalBodyOverflow;
+    }
 
     if (this.healthTimer !== null) {
       window.clearInterval(this.healthTimer);
