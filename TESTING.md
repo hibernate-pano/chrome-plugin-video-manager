@@ -103,9 +103,13 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 
 ## 测试资源
 
-- [tests/e2e/test-page.html](./tests/e2e/test-page.html): 注入式用例使用的本地测试页面
-- [tests/e2e/real-extension.spec.js](./tests/e2e/real-extension.spec.js): 真加载扩展的用例，页面由路由拦截现造
+- [tests/e2e/test-page.html](./tests/e2e/test-page.html): 注入式用例使用的本地测试页面。
+  里面的 `<video>` **故意没有 `<source>`**：那套用例把 `duration` 伪造成 120 秒并
+  断言 `currentTime` 精确往返，一旦真实媒体加载成功，浏览器会把 `currentTime`
+  钳到真实可寻址范围，断言就挂。加回外部媒体会让它变成「本地过、CI 挂」——
+  实际上它曾经就是这样（CDN 对本机 403、对 runner 放行）。
 - [tests/e2e/boundary.spec.js](./tests/e2e/boundary.spec.js): 影响边界回归守卫
+- [tests/e2e/real-extension.spec.js](./tests/e2e/real-extension.spec.js): 真加载扩展的用例，页面由路由拦截现造
 
 ## 变异验证
 

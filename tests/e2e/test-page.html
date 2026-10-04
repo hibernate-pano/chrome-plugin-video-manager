@@ -22,16 +22,21 @@
   <h1>Video Speed Controller Test Page</h1>
   
   <div class="video-container">
-    <video id="test-video" width="640" height="360" controls>
-      <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4">
-      Your browser does not support the video tag.
-    </video>
+    <!--
+      故意不给 <source>。fullscreen-regression.spec.js 把 duration 伪造成 120 秒，
+      并断言 currentTime 能精确往返（30→35→30），这只有在「媒体未加载」时才成立：
+      一旦真实媒体加载成功，浏览器会把 currentTime 钳到真实可寻址范围，断言就挂。
+
+      此前这里指向第三方 CDN，而该 CDN 对本机返回 403、对 CI runner 放行，
+      于是同一条用例变成「本地过、CI 挂」—— 本地过不是因为逻辑对，
+      而是因为媒体恰好没加载成功。去掉外部媒体后，「未加载」是结构上的保证，
+      不依赖网络策略或 hostname 白名单。需要真实播放时请单独建 fixture。
+    -->
+    <video id="test-video" width="640" height="360" controls></video>
   </div>
-  
+
   <div class="video-container">
-    <video id="test-video-2" width="320" height="240" controls>
-      <source src="https://www.w3schools.com/html/movie.mp4" type="video/mp4">
-    </video>
+    <video id="test-video-2" width="320" height="240" controls></video>
   </div>
   
   <div>
