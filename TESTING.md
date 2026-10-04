@@ -77,6 +77,10 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 | `real-extension.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 隔离世界、document_start 桥接、真实 `chrome.storage` |
 | `boundary.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 非正常文档与元素上的失败模式（见下） |
 
+`fullscreen-regression.spec.js` 覆盖的还包括**点击语义的所有权**：网页全屏内
+左键点击视频画面要能切换播放/暂停（v6.0.4 的修复点）、右键不触发、退出全屏后
+一次点击只切换一次（残留监听器会和站点自己的处理器双重切换）。
+
 `real-extension.spec.js` 覆盖的正是 jsdom 测不到的那一层：
 
 - 内容脚本在 `document_start` 注入样式
@@ -121,6 +125,13 @@ cp -r dist /tmp/mutant-ext
 # 编辑 /tmp/mutant-ext/...
 VSC_EXTENSION_DIR=/tmp/mutant-ext npx playwright test real-extension.spec.js
 ```
+
+> ⚠️ **`VSC_EXTENSION_DIR` 对 `fullscreen-regression.spec.js` 无效**：那套用例走
+> `test-page.html` 里的 `<script src="../../dist/content.js">`，路径是仓库相对路径、
+> 硬指向 `dist/`，压根不读这个环境变量。对它做变异验证会**空跑并「通过」**，
+> 看起来像守卫有效，实际什么都没验证到（这个坑真踩过一次）。
+> 变异这一套时只能直接改 `dist/content.js`，验证完再 `pnpm build` 从源码重建
+> —— 先备份原文件，别用 `git checkout` 之类的破坏性命令去还原。
 
 ## 说明
 

@@ -89,6 +89,28 @@ Shared
   （全屏期间页面重排 DOM 移走 sibling 时，避免 NotFoundError 卡死全屏）
 - 节点被页面丢弃时只清理、不重插（health check 每 500ms）
 - 控制条：播放/暂停、进度、时间、音量、速度、退出；鼠标静止 3 秒隐藏
+- reparent 模式下由控制条接管视频表面的左键点击（单击 = 切换播放/暂停）
+
+### 点击语义的所有权
+
+reparent 把 `<video>` 搬进我们自己的 overlay，视频就脱离了站点播放器的祖先链
+（YouTube 的 `#movie_player`、B 站的播放器容器）。站点那些「点击视频切换播放」的
+监听器挂在祖先上、靠冒泡收事件，祖先链一断它们就再也收不到点击——实测 YouTube
+网页全屏里左键点击毫无反应，而空格正常，因为键盘走的是我们自己的
+`document_start` 捕获通道。
+
+所以**接管表面就要接管点击语义**：`FullscreenControls` 在 reparent 模式下给视频
+自己挂 `click`，只认左键、且 `defaultPrevented` 时让位给站点。
+
+css-cover 模式必须相反：视频留在站点 DOM 原位，站点监听器照常工作，我们再切一次
+就是双重切换（点一下 = 暂停又播放 = 看起来仍然没反应）。因此所有权判定是
+`ownsVideoSurface()` 这个**函数**而不是常量——180ms 探测可能把模式从 reparent
+动态降级到 css-cover，`unmount()` 也必须摘掉监听器，否则退出全屏后残留监听器
+会和站点自己的处理器双重切换。
+
+双击不需要去抖：浏览器在一次双击里派发两个 `click`（`detail=1` 与 `detail=2`），
+两次切换互相抵消、播放状态净变化为零，与 YouTube 原生双击的表现一致（实测原生
+双击后 `paused` 不变、只进全屏）。
 
 ### `SpeedToast`
 

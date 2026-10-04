@@ -249,7 +249,12 @@ export class FullscreenController {
     // 且在 reparent 后位置会跳（视频搬进了 overlay，原生 UI 不会跟过来）。
     video.controls = false;
 
-    this.controls = new FullscreenControls(video, { onExit: () => this.exit() });
+    this.controls = new FullscreenControls(video, {
+      onExit: () => this.exit(),
+      // 传函数而不是快照值：180ms 探测可能把模式从 reparent 降级到 css-cover，
+      // 降级后视频回到站点 DOM，点击必须交还给站点，否则一次点击被切换两次。
+      ownsVideoSurface: () => this.state.mode === 'reparent' && this.state.video === video,
+    });
     this.controls.mount();
 
     if (mode === 'reparent') {

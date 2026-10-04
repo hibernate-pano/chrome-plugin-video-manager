@@ -103,6 +103,16 @@ describe('FullscreenControls', () => {
     return controls;
   };
 
+  const mountWithSurface = (ownsVideoSurface: () => boolean) => {
+    const controls = new FullscreenControls(video, { onExit, ownsVideoSurface });
+    controls.mount();
+    return controls;
+  };
+
+  const clickVideo = (init: MouseEventInit = {}) => {
+    video.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
+  };
+
   it('renders the full control set and shows progress + speed', () => {
     mount();
 
@@ -124,6 +134,68 @@ describe('FullscreenControls', () => {
     expect(video.pause).toHaveBeenCalledTimes(1);
     video.dispatchEvent(new Event('pause'));
     expect($('play').innerHTML).toContain('M8 5.5v13');
+  });
+
+  it('toggles play/pause when the video surface is left-clicked', () => {
+    mount();
+
+    // 播放中 -> 单击暂停。
+    clickVideo({ button: 0 });
+    expect(video.pause).toHaveBeenCalledTimes(1);
+    expect(video.play).not.toHaveBeenCalled();
+
+    // 暂停中 -> 单击继续，图标随真实状态走（同步靠 media 事件，不是靠 play() 调用）。
+    video.dispatchEvent(new Event('pause'));
+    expect($('play').innerHTML).toContain('M8 5.5v13');
+    clickVideo({ button: 0 });
+    expect(video.play).toHaveBeenCalledTimes(1);
+    video.dispatchEvent(new Event('play'));
+    expect($('play').innerHTML).toContain('M7 5h3.5');
+  });
+
+  it('wakes the control bar when the video surface is clicked', () => {
+    vi.useFakeTimers();
+    mount();
+
+    // 先让控制条自动隐藏。
+    vi.advanceTimersByTime(3000);
+    expect($('play').closest('#vsc-controls')?.classList.contains('vsc-ctl--visible')).toBe(false);
+
+    clickVideo({ button: 0 });
+    expect(document.getElementById('vsc-controls')?.classList.contains('vsc-ctl--visible')).toBe(true);
+  });
+
+  it('does not toggle when the site still owns the video surface (css-cover)', () => {
+    mountWithSurface(() => false);
+
+    clickVideo({ button: 0 });
+
+    // css-cover 模式下视频仍留在站点 DOM 里，站点自己的点击监听器照常工作；
+    // 我们再切一次就是双重切换（点一下等于没点）。
+    expect(video.pause).not.toHaveBeenCalled();
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it('ignores non-left clicks and clicks the site already handled', () => {
+    mount();
+
+    clickVideo({ button: 2 });
+    clickVideo({ button: 1 });
+    expect(video.pause).not.toHaveBeenCalled();
+
+    // 站点在捕获阶段已经处理并 preventDefault：让位，不重复切换。
+    const handled = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    handled.preventDefault();
+    video.dispatchEvent(handled);
+    expect(video.pause).not.toHaveBeenCalled();
+  });
+
+  it('stops handling video clicks after unmount', () => {
+    const controls = mount();
+    controls.unmount();
+
+    clickVideo({ button: 0 });
+    expect(video.pause).not.toHaveBeenCalled();
   });
 
   it('scrubs live on input (no seek) and commits exactly once on change', () => {

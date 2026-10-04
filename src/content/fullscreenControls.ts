@@ -47,6 +47,20 @@ interface ControlsElements {
 export class FullscreenControls {
   private readonly video: HTMLVideoElement;
   private readonly onExit: () => void;
+  /**
+   * 视频表面此刻归不归我们管。
+   *
+   * reparent 模式下视频被搬进我们自己的 overlay，站点播放器的祖先链
+   * （YouTube 的 #movie_player、B 站的 .bpx-player-container）随之断开，
+   * 站点挂在那些祖先上的「点击切换播放」监听器再也收不到事件——实测 YouTube
+   * 网页全屏里左键点击毫无反应，而空格正常，因为键盘走的是我们自己的通道。
+   * 既然接管了表面，点击语义就得由我们补上。
+   *
+   * css-cover 模式相反：视频留在站点 DOM 原位，站点监听器照常工作，
+   * 我们再切一次就是双重切换（点一下 = 暂停又播放 = 看起来没反应）。
+   * 所以这里必须是一个函数而不是常量——模式会在 180ms 探测后动态降级。
+   */
+  private readonly ownsVideoSurface: () => boolean;
   private elements: ControlsElements | null = null;
   private idleTimer: number | null = null;
   private draggingProgress = false;
@@ -57,10 +71,44 @@ export class FullscreenControls {
   private readonly boundHandlePointerUp = () => {
     this.draggingProgress = false;
   };
+  private readonly boundHandleVideoClick = (event: MouseEvent) => this.handleVideoClick(event);
 
-  constructor(video: HTMLVideoElement, options: { onExit: () => void }) {
+  constructor(
+    video: HTMLVideoElement,
+    options: { onExit: () => void; ownsVideoSurface?: () => boolean },
+  ) {
     this.video = video;
     this.onExit = options.onExit;
+    // 直接构造（不经 FullscreenController）时默认认为表面归我们：
+    // 控制条存在本身就意味着视频已被接管。
+    this.ownsVideoSurface = options.ownsVideoSurface ?? (() => true);
+  }
+
+  /**
+   * 接管视频表面的左键点击 = 切换播放/暂停，对齐站点原生语义。
+   *
+   * 双击不做特殊处理：浏览器在一次双击里会派发两个 click（detail=1 与 detail=2），
+   * 两次切换正好互相抵消、播放状态不变——这与 YouTube 原生双击的表现一致
+   * （实测原生双击后 paused 不变、只进全屏），无需引入去抖定时器。
+   */
+  private handleVideoClick(event: MouseEvent) {
+    if (!this.ownsVideoSurface()) {
+      return;
+    }
+
+    // 只认左键；右键（菜单）与中键（新标签页）不属于播放控制。
+    if (event.button !== 0) {
+      return;
+    }
+
+    // 站点已经处理过这次点击（直接挂在 video 上的监听器抢先 preventDefault）
+    // 就让位，否则同样会双重切换。
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    togglePlayback(this.video);
+    this.show();
   }
 
   mount() {
@@ -121,6 +169,10 @@ export class FullscreenControls {
     elements.exitButton.addEventListener('click', () => {
       this.onExit();
     });
+
+    // 点击视频本身也要能暂停：控制条 3 秒就自动隐藏，藏起来之后
+    // 鼠标点击是用户唯一还在手的播放控制手段。
+    this.video.addEventListener('click', this.boundHandleVideoClick);
 
     // 拖动/点击进度条：input 只移动滑块并预览目标时间，绝不逐帧 seek。
     // 一次拖动会触发几十个 input，每个都写 currentTime 会让流媒体播放器
@@ -299,6 +351,9 @@ export class FullscreenControls {
     this.video.removeEventListener('pause', this.syncPlayState);
     this.video.removeEventListener('ratechange', this.syncSpeed);
     this.video.removeEventListener('volumechange', this.syncVolume);
+    // 摘干净：unmount 后视频要交回站点，我们的点击切换必须一起走，
+    // 否则退出全屏后站点自己的点击监听器会和这个残留监听器双重切换。
+    this.video.removeEventListener('click', this.boundHandleVideoClick);
 
     this.elements?.root.remove();
     this.elements = null;
