@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "Video Speed Controller",
-  "version": "6.0.4",
+  "version": "6.0.5",
   "description": "Minimal keyboard shortcuts and a clean page-fullscreen player for any HTML5 video",
   "permissions": [
     "storage"

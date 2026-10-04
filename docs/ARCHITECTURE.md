@@ -23,6 +23,9 @@ Content Script
       ├── FullscreenController   # 全屏生命周期
       │     └── FullscreenControls  # 全屏内极简控制条
       ├── SpeedToast             # 全屏外极简调速提示
+      ├── TakeoverNotice         # 接管不了时的诚实反馈
+      ├── FirstRunHint           # 首次使用引导（一次性）
+      ├── TransientPill          # 上面两条共用的提示骨架
       └── SiteSpeedMemory        # 站点速度记忆
 
 Background (service worker)
@@ -33,7 +36,7 @@ Options Page
 
 Shared
   ├── shortcuts   # 规范化 / 匹配 / 保留键检测
-  ├── settings    # storage.sync 读写 + 旧版迁移
+  ├── settings    # storage.sync 读写 + 旧版迁移 + 引导状态（local）
   ├── i18n        # chrome.i18n + 中文回落
   └── types       # 设置模型与默认值（单一来源）
 ```
@@ -91,6 +94,40 @@ Shared
 - 控制条：播放/暂停、进度、时间、音量、速度、退出；鼠标静止 3 秒隐藏
 - reparent 模式下由控制条接管视频表面的左键点击（单击 = 切换播放/暂停）
 
+进度条的跳转「钉住」有一个上限（`SEEK_PIN_TIMEOUT`，3 秒）。提交 seek 后播放器
+会有一小段时间继续报旧的 `currentTime`，照它渲染会把滑块拽回原位（回弹），所以
+`pendingSeek` 期间滑块钉在目标位；但 `seeked` **不一定来**——请求浏览器无法寻址的
+位置时 Chrome 会拒绝跳转且不派发该事件。只靠 `seeked` 解除钉住，滑块会永久冻结在
+一个假的进度上，比回弹更糟：用户以为跳转成功了。所以钉住必须有上限。
+
+### 接管失败时的反馈
+
+`KeyboardController` 在吞键前先问 `canEnter()`：跨 document（同源 iframe）的视频
+必然进不去。进不去就不吞键、放行给页面——但**放行必须配一句解释**，否则在用户眼里
+「不吞键」和「扩展坏了」是同一件事。所以同一分支里调
+`notifyTakeoverUnavailable()`，由 `TakeoverNotice` 弹一条 2.6 秒的提示。
+
+提示刻意**不说原因**：从扩展这一侧无法可靠区分 DRM 受保护、跨 document、无宿主
+这几种失败，猜一个具体原因比不说更糟。它只解释「不会发生什么」。
+
+### 首次使用引导
+
+`FirstRunHint` 是这个产品里唯一一处「主动出现」的界面，因此边界收得很紧：
+
+- 只在该扩展**从未展示过**时触发（`storage.local` 的
+  `vsc-first-run-hint-shown`，设备级状态，不占 sync 配额、不跨设备同步）
+- 等到 `play` 之后**再过 2.5 秒**才出现：自动播放的广告位与悬停预览都会派发
+  `play`，只按 `play` 就弹提示等于打扰
+- 「用户还在看」靠真实的 `pause` / `ended` **事件**判定，不去轮询 `video.paused`：
+  要回答的是「这段时间里有没有停下来」，事件是唯一诚实的信号
+- 文案用**用户当前真实的绑定**渲染（改过键之后不能教一个错的键），且不含
+  播放/暂停——用户刚按过它
+- 任何按键/点击立即消失；12 秒后自行淡出；展示不出来（无可挂载宿主）就不写
+  标记，用户之后仍有机会看到
+
+`TransientPill` 是 `SpeedToast`（速率胶囊）之外两处一次性提示的共用骨架
+（建节点 / 判空宿主 / 自愈 / 计时 / 清理），文案与停留时长由调用方给。
+
 ### 点击语义的所有权
 
 reparent 把 `<video>` 搬进我们自己的 overlay，视频就脱离了站点播放器的祖先链
@@ -120,6 +157,18 @@ css-cover 模式必须相反：视频留在站点 DOM 原位，站点监听器�
 
 - 全屏内外调速时都在视频角落淡入 `1.5x` 小胶囊，约 1 秒后淡出
 - 控制条 3 秒无操作即隐藏，不能指望它承担键盘调速的反馈
+- 有自己的节点与跟随滚动/缩放的定位（与 `TransientPill` 的差别在此：
+  这条提示活得更久，位置要跟着视频走）
+
+### `frameOffset`
+
+文件：`src/content/frameOffset.ts`
+
+职责：把「元素在自己文档里的视口坐标」换算到顶层文档坐标系。
+同源 iframe 内元素的 `getBoundingClientRect()` 是相对 iframe 视口的，
+而所有提示都挂在顶层文档且 `position: fixed`，不换算就会偏离整整一个 iframe 的
+偏移量（曾表现为「视频在 y≈400、提示却出现在 y=16」的屏幕角落）。
+`SpeedToast` 与 `TakeoverNotice` 共用这一处实现。
 
 ### `SiteSpeedMemory`
 
@@ -166,6 +215,7 @@ css-cover 模式必须相反：视频留在站点 DOM 原位，站点监听器�
 
 这些能力当前不在实现范围内：
 
+- 常驻 UI、设置入口以外的界面、引导以外的主动打扰
 - `audio` 控制、音量全局快捷键、书签、历史、云同步
 - 工具栏 Popup、图标 badge、常驻角标
 - React UI、Zustand 状态层

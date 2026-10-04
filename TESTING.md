@@ -100,10 +100,44 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 - iframe 内视频的调速提示坐标换算到顶层坐标系
 - 跨 document 的视频按 `f` 不被静默吞掉
 - 页面摘掉 `#vsc-runtime-styles` 后能自愈
+- 网页全屏接管不了时给出提示，而不是静默失败（v6.0.5 的修复点）
+- 首次使用引导只在播放一会儿后出现一次，之后不再打扰
 
 > 写这类用例时注意：`waitForSelector('#vsc-runtime-styles')` 会在页面 `<body>`
 > 内联脚本执行之前就返回。把辅助函数定义在 `<body>` 里会和这个等待形成竞态，
 > 要放在 `<head>` 并惰性取节点。
+
+## 写真实扩展用例时踩过的坑
+
+下面四条都是「目标行为其实是对的，用例却假通过 / 假失败」。改断言之前先看这里。
+
+> ⚠️ **内容脚本跑在隔离世界，页面主世界改不动它的输入。**
+> 在页面里 `Object.defineProperty(video, 'paused' | 'duration' | 'play', ...)`，
+> 内容脚本一概看不到——它拿到的是自己那个 realm 的包装对象（实测：页面把
+> `paused` 覆盖成 `false`，扩展仍然走 `play` 分支）。
+> 所以真扩展用例**不能靠伪造媒体状态**来驱动，只能断言「DOM 上出现了什么」。
+> 需要精确控制 `currentTime` / `duration` 的断言请走 jsdom 单测，或走
+> `fullscreen-regression.spec.js`（它把 `dist/content.js` 当普通脚本注入主世界）。
+
+> ⚠️ **鼠标点击必须落在顶层文档，否则按键根本到不了内容脚本。**
+> 一旦点进 iframe，焦点就留在 iframe 里，之后 `page.keyboard.press` 只派发给
+> iframe。表现是「按 f 没反应」，很容易被误判成扩展的 bug。
+> 夹具要在顶部留出可点区域（`boundary.spec.js` 与 `iframe-outer.html` 都留了
+> 400px 留白），点击坐标打在那块留白上。
+
+> ⚠️ **不要用 `data:` URL 当 iframe 夹具。** `data:` 是 opaque origin，
+> 它里面的 video 不会被扩展认成受控对象，用例会以「什么都没发生」假通过。
+> 用真实 HTTP 文件（`tests/e2e/iframe-outer.html` + `iframe-inner.html`）。
+
+> ⚠️ **同源 iframe 里的 video，在顶层文档里定位要用换算后的坐标。**
+> iframe 内元素的 `getBoundingClientRect()` 是相对 iframe 视口的。扩展侧统一
+> 走 `frameOffset.topLevelOffset()`；用例断言提示位置时也要按
+> `iframe.top + 视频在 iframe 内的 top` 来算，别拿未换算的值去比。
+
+另外：**顶层文档里没有 video、只有 iframe 里有** 时，父文档的 registry 认不到
+子框架里的视频（`frameDocumentOf` 那条下钻路径没生效）。要构造「跨 document 的
+视频」场景，夹具得让点击落在顶层、同时保证视频本身可被选中，别假设父文档一定
+选得到子框架里的元素。
 
 ## 测试资源
 
@@ -114,6 +148,9 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
   实际上它曾经就是这样（CDN 对本机 403、对 runner 放行）。
 - [tests/e2e/boundary.spec.js](./tests/e2e/boundary.spec.js): 影响边界回归守卫
 - [tests/e2e/real-extension.spec.js](./tests/e2e/real-extension.spec.js): 真加载扩展的用例，页面由路由拦截现造
+- [tests/e2e/iframe-outer.html](./tests/e2e/iframe-outer.html) + [iframe-inner.html](./tests/e2e/iframe-inner.html):
+  真实 HTTP 的同源 iframe 夹具，用于「跨 document 的视频接管不了」这条路径。
+  必须走文件而不是 `data:` URL，原因见上一节。
 
 ## 变异验证
 
