@@ -5,6 +5,42 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [6.0.1] - 2026-10-04
+
+### 修复 (Fixed)
+
+- 🐛 **站点速度记忆不再丢**：此前只有 800ms 防抖写盘，调速后 800ms 内刷新
+  或关闭标签页，最后一次调速会永久丢失（直接违背「刷新/重开自动恢复」的承诺）。
+  现在监听 `pagehide` 立即落盘；`destroy` 也改为先落盘再清理。
+- 🐛 **全屏回退不再抛错**：全屏期间页面重排 DOM 移走视频的兄弟节点时，
+  CSS cover 回退路径会因 `insertBefore` 抛 `NotFoundError` 而中断，
+  导致回退落空。现在与 `exit()` 共用同一套兄弟节点校验。
+- 🐛 **去掉设置写放大**：`loadSettings` 此前无条件写回 storage，而设置变更
+  订阅回调又调用它，导致每次内容脚本启动都白写一次 sync 配额。
+  现在拆出只读路径，仅在首次播种或需要迁移时才落盘。
+
+### 变更 (Changed)
+
+- 🧹 **仓库瘦身**：删除 10 个工具/会话残留目录与构建残留，仓库从 45M 降到 8M
+  （排除 `node_modules`）
+- 📄 **文档去重**：删除 499 行 `docs/DEVELOPMENT.md`（描述的是 MediaDetector /
+  LightboxManager / React + Zustand 等本仓库并不存在的模块）与 1499 行已废弃的
+  v4 重构方案；修正 README / PRODUCT / ARCHITECTURE 里「全屏内不显示调速提示」
+  的失实描述；修正 `CONTRIBUTING.md` 里 npm→pnpm、Jest→vitest、缩进、
+  以及「加载项目目录」应为 `dist/` 等 8 处失实内容
+- 🔧 **商店工具接线**：`store-auth` / `store-publish` / `render-icons` /
+  `generate-store-assets` 四个脚本此前无任何地方引用，现已接成
+  `pnpm icons` / `store:assets` / `store:auth` / `store:publish`
+- 🗑 **清理死代码**：删掉恒真的 `SiteAdapter.shouldTryReparent`（4 个适配器
+  实现完全相同，`css-cover` 分支本就不可达）、从未被读取的快捷键文案数据、
+  仅测试使用的注入接缝，并合并重复的 `formatRate`
+
+### 移除 (Removed)
+
+- 删除 CI 的 `release` job：它用 `v${github.sha}` 打 tag，与 `vX.Y.Z`
+  的版本约定冲突；出包改由本地 `pnpm build:ext` 完成
+- 删除必然失败的 `test:coverage` script（`@vitest/coverage-v8` 未安装）
+
 ## [6.0.0] - 2026-10-02
 
 ### 变更 (Changed)

@@ -53,6 +53,13 @@ Video Speed Controller 是一个极简的网页视频工具。它把任意网页
 - 设置与站点速度记忆保存在浏览器本地存储中
 - 扩展只在页面中查找和控制视频元素
 
+## Release Notes 6.0.1
+
+- Fixed: the last speed change is no longer lost when you refresh or close the tab within a second of changing it
+- Fixed: page fullscreen now falls back cleanly instead of erroring when the page rearranges its DOM mid-fullscreen
+- Fixed: no longer performs a pointless storage write on every page load
+- Internal: removed dead code and corrected documentation; the extension itself is unchanged
+
 ## Release Notes 6.0.0
 
 - New: a minimal on-screen control bar in page fullscreen (play/pause, seekable progress, time, volume, current speed, exit) that auto-hides after 3s of idle
