@@ -24,14 +24,14 @@ export interface FirstRunHintOptions {
  */
 export const buildGuideText = (shortcuts: ShortcutSettings): string | null => {
   const labels: string[] = [];
-  const push = (key: 'fullscreen') => {
-    const raw = shortcuts[key];
-    if (raw) {
-      labels.push(`${t(`hint_${key}`, key)} ${formatShortcut(raw)}`);
-    }
-  };
 
-  push('fullscreen');
+  // i18n 键是 camelCase（hintFullscreen），动作 id 是小写（fullscreen），
+  // 拼接时必须显式映射并给出中文回落：写错键名会静默地把**键名本身**渲染给用户
+  // （曾经就这样把 "fullscreen" 当成动作名显示了出来）。
+  if (shortcuts.fullscreen) {
+    labels.push(`${t('hintFullscreen', '网页全屏')} ${formatShortcut(shortcuts.fullscreen)}`);
+  }
+
   if (shortcuts.increaseSpeed && shortcuts.decreaseSpeed) {
     labels.push(
       t('hintSpeed', '{up} / {down} 调速')
@@ -44,7 +44,10 @@ export const buildGuideText = (shortcuts: ShortcutSettings): string | null => {
     return null;
   }
 
-  return `${labels.join('    ')}\n${t('hintMore', '全部快捷键可在扩展设置里改绑')}`;
+  // 用明确的间隔符而不是连续空格：提示是塞进 innerHTML 的，HTML 会把连续空格
+  // 折叠成一个，靠空格排版会渲染成「网页全屏 F = / - 调速」这种挤在一起的样
+  // （视觉验收时真的这样出来过）。
+  return `${labels.join('  ·  ')}\n${t('hintMore', '全部快捷键可在扩展设置里改绑')}`;
 };
 
 /**

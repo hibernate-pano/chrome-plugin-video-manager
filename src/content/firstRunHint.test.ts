@@ -15,11 +15,18 @@ const hintNode = () => document.getElementById(HINT_ID);
 const isVisible = () => hintNode()?.classList.contains('vsc-visible') ?? false;
 
 describe('buildGuideText', () => {
-  it('lists the fullscreen key and the speed step pair', () => {
+  it('lists the fullscreen key and the speed step pair, with real labels', () => {
     const text = buildGuideText(createShortcuts());
 
     expect(text).toContain('F');
     expect(text).toContain('= / -');
+    // 断言动作名本身：i18n 键名写错时会把**键名**渲染给用户（曾经就把
+    // "fullscreen" 当动作名显示了出来），只断言键位是抓不到的。
+    expect(text).toContain('网页全屏');
+    expect(text).not.toContain('fullscreen');
+    expect(text).toContain('调速');
+    // 两个动作之间要有可见间隔：HTML 会折叠连续空格，靠空格排版会挤成一团。
+    expect(text).toContain('  ·  ');
   });
 
   it('renders the user\'s own bindings instead of the defaults', () => {
