@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "pnpm build && playwright test",
-    "test:e2e:ext": "pnpm build && playwright test real-extension.spec.js boundary.spec.js",
+    "test:e2e:ext": "pnpm build && playwright test real-extension.spec.js boundary.spec.js fullscreen-regression.spec.js",
     "icons": "node scripts/render-icons.mjs",
     "store:assets": "node scripts/generate-store-assets.mjs",
     "store:auth": "node scripts/store-auth.mjs",

@@ -244,11 +244,27 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(script).toMatch(/real-extension\.spec\.js/);
   });
 
-  it('test:e2e:ext 同时跑影响边界套件，否则边界回归无人守', () => {
-    // boundary.spec.js 里的用例是「不在真实浏览器里就跑不出来」的那一类
-    // （shadow DOM 事件重定向、iframe 坐标系、无 body 文档、页面摘样式等），
-    // 不在 CI 里跑就等于没有守卫。
-    expect(pkg.scripts['test:e2e:ext']).toMatch(/boundary\.spec\.js/);
+  it('test:e2e:ext 覆盖 tests/e2e 下每一个 spec，新用例不会静默漏跑', () => {
+    // 同一条教训：新增一个 spec 文件却忘了加进 test:e2e:ext，CI 会照样全绿，
+    // 而那个文件从未被执行过。这里用文件系统做事实核查，而不是手写名单。
+    // 唯一的例外来源是 playwright.config.js 的 testIgnore。
+    const e2eDir = resolve(repoRoot, 'tests/e2e');
+    const specFiles = readdirSync(e2eDir).filter((name) => name.endsWith('.spec.js'));
+    expect(specFiles.length, 'tests/e2e 下应当有 spec 文件').toBeGreaterThan(0);
+
+    const playwrightConfig = readFileSync(resolve(repoRoot, 'playwright.config.js'), 'utf8');
+    const ignored = new Set(
+      (playwrightConfig.match(/testIgnore:\s*\[([^\]]*)\]/)?.[1] ?? '')
+        .split(',')
+        .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
+        .filter(Boolean),
+    );
+
+    const script = pkg.scripts['test:e2e:ext'] ?? '';
+    for (const file of specFiles) {
+      if (ignored.has(file)) continue;
+      expect(script, `${file} 没有被 test:e2e:ext 引用，CI 不会执行它`).toContain(file);
+    }
   });
 });
 
