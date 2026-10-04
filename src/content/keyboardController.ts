@@ -16,6 +16,13 @@ interface KeyboardControllerOptions {
   toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   exitFullscreen: () => void;
   showSpeedFeedback: (rate: number, video: HTMLVideoElement) => void;
+  /**
+   * 有视频、但进入全屏必然失败时的反馈。
+   *
+   * 这一支必须放行按键（不能让用户既丢键又没反应），可放行之后如果什么都不说，
+   * 用户看到的就是「按 f 没反应」。放行和反馈要一起做。
+   */
+  notifyTakeoverUnavailable: (video: HTMLVideoElement | null) => void;
 }
 
 /** 真正接收文本输入的 <input> 类型；其余（range/checkbox/button/color…）不算编辑态。 */
@@ -229,8 +236,10 @@ export class KeyboardController {
       }
 
       // 未激活：先问 canEnter，进不去（跨 document 的视频）就不吞键，
-      // 让页面自己处理，避免静默丢键。
+      // 让页面自己处理，避免静默丢键。但放行必须配一句解释——否则在用户
+      // 眼里「不吞键」和「扩展坏了」是同一件事。
       if (!this.options.canToggleFullscreen(video)) {
+        this.options.notifyTakeoverUnavailable(video);
         return false;
       }
 

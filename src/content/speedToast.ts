@@ -1,37 +1,11 @@
+import { topLevelOffset } from './frameOffset';
+
 const TOAST_ID = 'vsc-speed-toast';
 const HIDE_DELAY = 900;
 
 /** 1.50 -> "1.5"，1.00 -> "1"。 */
 export const formatRate = (value: number) =>
   value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-
-/**
- * video 可能住在同源 iframe 里，其 getBoundingClientRect() 返回的是相对 iframe
- * 视口的坐标；toast 挂在顶层文档、position:fixed，两者坐标系不同，直接用会让
- * toast 偏离视频整整一个 iframe 的偏移量。沿 frameElement 逐层向上累加每个
- * iframe 相对其父视口的偏移，直到 video 所在文档就是顶层 document。
- * 跨域时 frameElement 取不到（访问即抛或为 null），退回未换算的坐标——
- * 跨域本来也下钻不进内容脚本，这里不能因此抛错。
- */
-const topLevelOffset = (video: HTMLVideoElement) => {
-  let offsetX = 0;
-  let offsetY = 0;
-  let currentDocument = video.ownerDocument;
-
-  while (currentDocument !== document) {
-    const frame = currentDocument.defaultView?.frameElement;
-    if (!frame) {
-      break;
-    }
-
-    const frameRect = frame.getBoundingClientRect();
-    offsetX += frameRect.left;
-    offsetY += frameRect.top;
-    currentDocument = frame.ownerDocument;
-  }
-
-  return { offsetX, offsetY };
-};
 
 /**
  * 极简调速提示：只在用户按键调速时出现，约 1 秒后淡出。

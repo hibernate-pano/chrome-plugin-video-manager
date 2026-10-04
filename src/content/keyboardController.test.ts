@@ -72,6 +72,7 @@ describe('KeyboardController', () => {
   let canToggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   let exitFullscreen: ReturnType<typeof vi.fn>;
   let showSpeedFeedback: ReturnType<typeof vi.fn>;
+  let notifyTakeoverUnavailable: ReturnType<typeof vi.fn>;
   let lastToggledVideo: HTMLVideoElement | null | undefined;
   let controller: KeyboardController;
 
@@ -84,6 +85,7 @@ describe('KeyboardController', () => {
       toggleFullscreen,
       exitFullscreen,
       showSpeedFeedback,
+      notifyTakeoverUnavailable,
     });
   };
 
@@ -102,6 +104,7 @@ describe('KeyboardController', () => {
     canToggleFullscreen = () => true;
     exitFullscreen = vi.fn();
     showSpeedFeedback = vi.fn();
+    notifyTakeoverUnavailable = vi.fn();
     createController();
   });
 
@@ -206,6 +209,26 @@ describe('KeyboardController', () => {
     expect(toggleSpy).not.toHaveBeenCalled();
     expect(preventDefault).not.toHaveBeenCalled();
     expect(stopPropagation).not.toHaveBeenCalled();
+  });
+
+  it('explains why the fullscreen key did nothing when takeover is impossible', () => {
+    // 放行按键是必要的，但只放行不解释，在用户眼里和「扩展坏了」是同一件事。
+    canToggleFullscreen = () => false;
+    createController();
+
+    expect(controller.handleKeyDown(keyEvent('f'))).toBe(false);
+    expect(notifyTakeoverUnavailable).toHaveBeenCalledTimes(1);
+    expect(notifyTakeoverUnavailable).toHaveBeenCalledWith(video);
+  });
+
+  it('does not report an unavailable takeover when there is no video at all', () => {
+    // 页面上没有视频时按 f 是再正常不过的「这个键不属于扩展」，
+    // 报「接管不了」只会变成噪音。
+    video = null;
+    createController();
+
+    expect(controller.handleKeyDown(keyEvent('f'))).toBe(false);
+    expect(notifyTakeoverUnavailable).not.toHaveBeenCalled();
   });
 
   it('still swallows and exits fullscreen with f when canEnter is false', () => {
