@@ -65,7 +65,7 @@
 
 ### 前置要求
 
-- Node.js 20+ 和 pnpm
+- Node.js 24+（Active LTS）和 pnpm
 - Git
 - Chrome 浏览器
 - 代码编辑器（推荐 VS Code）

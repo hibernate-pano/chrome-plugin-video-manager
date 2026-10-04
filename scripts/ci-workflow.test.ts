@@ -195,6 +195,39 @@ describe('CI 工作流：job 依赖图', () => {
   });
 });
 
+describe('CI 工作流：action 版本与 Node 运行时', () => {
+  it('不再钉已 EOL 的 Node 20，跑在 Active LTS 上', () => {
+    // Node 20 已于 2026-04-30 EOL；同时 checkout v5+ / setup-node v5+ /
+    // upload-artifact v6+ 自身都跑在 node24 上，继续钉 20 只会让 job 提前进
+    // deprecation 警告，且拿不到安全更新。
+    expect(workflow).not.toMatch(/node-version:\s*['"]?20['"]?/);
+    expect(workflow).toMatch(/node-version:\s*['"]?2[24]['"]?/);
+  });
+
+  it('action 主版本不低于 node24 运行时那一代', () => {
+    // 这四行是“能用”的下限：低于它们的版本跑在 node20 上，会被 GitHub 强制
+    // 升到 node24 并打出 deprecation 警告。将来主版本再涨时改这里。
+    const minimums: Array<[string, RegExp]> = [
+      ['actions/checkout', /actions\/checkout@v(?:[5-9]|\d{2,})/],
+      ['actions/setup-node', /actions\/setup-node@v(?:[5-9]|\d{2,})/],
+      ['actions/upload-artifact', /actions\/upload-artifact@v(?:[6-9]|\d{2,})/],
+      ['pnpm/action-setup', /pnpm\/action-setup@v(?:[6-9]|\d{2,})/],
+    ];
+
+    for (const [name, pattern] of minimums) {
+      expect(workflow, `${name} 仍在用过期的运行时版本`).toMatch(pattern);
+    }
+  });
+
+  it('不再用 ubuntu-latest 之外的 runner 假设', () => {
+    // ubuntu-latest 会随 GitHub 侧迁移（如 2026-10-19 起迁往 Ubuntu 26）。
+    // 这里只确认仍是托管 runner，不把具体镜像写死成契约。
+    for (const [name, block] of Object.entries(jobs)) {
+      expect(block, `job ${name} 缺少 runs-on`).toMatch(/runs-on:\s*\S+/);
+    }
+  });
+});
+
 describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
   it('e2e job 装了 Chromium —— 缺了它这整个 job 会在启动浏览器时直接失败', () => {
     expect(jobs['e2e']).toMatch(/playwright install[^\n]*chromium/);

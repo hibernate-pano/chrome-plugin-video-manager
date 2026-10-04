@@ -53,6 +53,11 @@ Video Speed Controller 是一个极简的网页视频工具。它把任意网页
 - 设置与站点速度记忆保存在浏览器本地存储中
 - 扩展只在页面中查找和控制视频元素
 
+## Release Notes 6.0.2
+
+- Internal: CI now runs on Node 24 (Active LTS) with the current GitHub Actions majors
+- Internal: removed stale branches; the extension itself is unchanged from 6.0.1
+
 ## Release Notes 6.0.1
 
 - Fixed: the last speed change is no longer lost when you refresh or close the tab within a second of changing it

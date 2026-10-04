@@ -5,6 +5,30 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [6.0.2] - 2026-10-04
+
+### 变更 (Changed)
+
+- ⬆️ **CI 升到 Node 24（Active LTS）**：此前钉的 Node 20 已于 2026-04-30 EOL，
+  且 `checkout` / `setup-node` / `upload-artifact` 的新主版本自身就跑在 node24 上，
+  继续钉 20 只会拿到 deprecation 警告与缺失的安全更新
+- ⬆️ **GitHub Actions 升级**：`actions/checkout` v4→v7、`actions/setup-node` v4→v7、
+  `actions/upload-artifact` v4→v7、`pnpm/action-setup` v4→v6。
+  这四个主版本只换运行时（node20→node24）与打包方式（ESM），
+  本仓库用到的 `path` / `if-no-files-found` / `retention-days` / `cache` /
+  `node-version` / `version` 输入全部保留
+- 🧹 **清理分支**：删除已合入的 `codex/v1-clean-slim`、`refactor/v4`，
+  以及未合并的 `feature/react-refactor`（React Popup 方向，已被 v6 大减法废弃），
+  本地与远端均已删除，仅留 `main`
+- 📌 **新增 CI 契约测试**：把「Node 不得回退到 EOL 版本」「action 主版本不得低于
+  node24 那一代」固化成断言，避免以后再次静默漂移
+
+### 新增 (Added)
+
+- 🏷 **归档 tag** `archive/react-refactor-98fd3e1`：保留已删除分支的 5 个 commit，
+  使其保持可达、不被 gc 回收。恢复方式：
+  `git branch <name> archive/react-refactor-98fd3e1`
+
 ## [6.0.1] - 2026-10-04
 
 ### 修复 (Fixed)
