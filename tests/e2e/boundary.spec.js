@@ -6,9 +6,13 @@ import { join, resolve } from 'node:path';
 /**
  * 影响边界回归守卫。
  *
- * 这些用例记录的是「扩展在非正常网页/非正常元素上会出错」的已确认行为，
- * 全部用真实扩展 + 真实 Chromium 复现过。它们不是功能测试，而是边界契约：
- * 每条都先断言「不该发生的事」，因此当前有多条是红的 —— 那正是待修的清单。
+ * 这些用例约束的是「扩展在非正常网页 / 非正常元素上的行为」，全部用真实扩展 +
+ * 真实 Chromium 跑。它们不是功能测试，而是边界契约：每条都先断言「不该发生的事」。
+ *
+ * 因此这些用例会直接在真实浏览器里拦住以下回归：无 body 的文档里抛未捕获异常、
+ * 把不可见视频当受控对象、iframe 内 toast 坐标系错位、跨 document 按 f 静默吞键、
+ * 页面摘掉扩展样式后不自愈、shadow DOM 输入框被吞键。
+ * 这些缺陷最初都在 v6.0.2 里真实存在过。
  *
  * 与 real-extension.spec.js 的分工：那套测「正常页面上的正常功能」，
  * 这套测「异常环境下的失败模式」。
@@ -105,9 +109,7 @@ const videoPage = (extraHead = '', body = '<video id="v1" muted playsinline styl
 <style>body{margin:0}</style>${extraHead}</head><body>${body}</body></html>`;
 
 test.describe('影响边界：异常文档', () => {
-  // TODO(待修): speedToast.ts:29 / fullscreenController.ts:74 / fullscreenControls.ts:82
-  // 直接 document.body.appendChild，body 为 null 时抛 TypeError。修完把 fixme 改回 test。
-  test.fixme('无 document.body 但存在 video 的文档：不该抛未捕获异常', async () => {
+  test('无 document.body 但存在 video 的文档：不该抛未捕获异常', async () => {
     // SVG + foreignObject 是唯一实测可达的组合：document.body 为 null，
     // 而 querySelectorAll('video') 仍能找到真实 HTMLVideoElement，
     // 于是 keyboardController 的「无视频就早退」守卫失效，
@@ -175,8 +177,7 @@ test.describe('影响边界：异常文档', () => {
 });
 
 test.describe('影响边界：异常元素', () => {
-  // TODO(待修): videoRegistry.ts:59-67 的 isVisible 只给可见视频加分、不排除不可见候选。
-  test.fixme('页面上只有一条不可见视频时，不该把它当受控对象', async () => {
+  test('页面上只有一条不可见视频时，不该把它当受控对象', async () => {
     // isVisible() 只给可见视频「加分」，不排除不可见候选；单候选时
     // 不可见视频仍会以最高分胜出 → 速度被改在看不见的视频上，
     // toast 还会因为 rect 全 0 而钳到屏幕角落 (16,16) 显示。
@@ -312,9 +313,7 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
     return route.fulfill({ status: 200, contentType: 'text/html', body: url.includes('inner.html') ? INNER : OUTER });
   });
 
-  // TODO(待修): speedToast.ts:37-46 用 video.getBoundingClientRect()，iframe 内元素返回的是
-  // 相对 iframe 视口的坐标，而 toast 固定在顶层文档 —— 坐标系不匹配。
-  test.fixme('iframe 内视频的调速提示应出现在视频附近，而不是屏幕角落', async () => {
+  test('iframe 内视频的调速提示应出现在视频附近，而不是屏幕角落', async () => {
     const ext = await launchExtension();
     try {
       const page = await ext.context.newPage();
@@ -353,9 +352,7 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
     }
   });
 
-  // TODO(待修): keyboardController 先 intercept() 吞键，fullscreenController.enter() 再对
-  // 跨 document 的视频返回 false —— 按键丢了且没有任何反馈。
-  test.fixme('跨 document 的视频按 f：不该吞掉按键却什么都不做', async () => {
+  test('跨 document 的视频按 f：不该吞掉按键却什么都不做', async () => {
     // fullscreenController.enter() 对 ownerDocument !== document 的 video 直接返回 false，
     // 但 keyboardController 已经先 intercept() 吞掉了按键 —— 用户失去按键、也得不到反馈。
     const ext = await launchExtension();
@@ -398,9 +395,7 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
 });
 
 test.describe('影响边界：页面回收扩展节点', () => {
-  // TODO(待修): runtimeStyles.ts:219-226 只在 start() 注入一次样式，没有 isConnected 自愈
-  // （speedToast 有，样式没有）。
-  test.fixme('页面移除扩展样式节点后，控制条不应失去定位样式', async () => {
+  test('页面移除扩展样式节点后，控制条不应失去定位样式', async () => {
     const ext = await launchExtension();
     try {
       const page = await ext.context.newPage();

@@ -53,6 +53,14 @@ Video Speed Controller 是一个极简的网页视频工具。它把任意网页
 - 设置与站点速度记忆保存在浏览器本地存储中
 - 扩展只在页面中查找和控制视频元素
 
+## Release Notes 6.0.3
+
+- Fixed: no longer shows an error on pages without a document body (e.g. SVG documents that embed a video)
+- Fixed: typing in an input inside a web component no longer gets swallowed by the shortcuts
+- Fixed: invisible videos are no longer treated as the video you are watching
+- Fixed: the speed toast now appears next to the video even when the video is inside an embedded frame
+- Fixed: the extension recovers its own styles if the page removes them
+
 ## Release Notes 6.0.2
 
 - Internal: CI now runs on Node 24 (Active LTS) with the current GitHub Actions majors

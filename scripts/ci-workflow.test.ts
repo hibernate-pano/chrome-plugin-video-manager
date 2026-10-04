@@ -243,6 +243,13 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(script).toMatch(/build/);
     expect(script).toMatch(/real-extension\.spec\.js/);
   });
+
+  it('test:e2e:ext 同时跑影响边界套件，否则边界回归无人守', () => {
+    // boundary.spec.js 里的用例是「不在真实浏览器里就跑不出来」的那一类
+    // （shadow DOM 事件重定向、iframe 坐标系、无 body 文档、页面摘样式等），
+    // 不在 CI 里跑就等于没有守卫。
+    expect(pkg.scripts['test:e2e:ext']).toMatch(/boundary\.spec\.js/);
+  });
 });
 
 describe('类型检查覆盖面', () => {

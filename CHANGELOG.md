@@ -5,6 +5,45 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [6.0.3] - 2026-10-04
+
+### 修复 (Fixed)
+
+本版修的都是在「非正常网页 / 非正常元素」上才会触发的影响边界缺陷，
+全部在真实 Chromium + 真实扩展下先复现再修复。
+
+- 🛡 **无 document.body 的文档不再抛未捕获异常**：SVG + `foreignObject` 内嵌
+  视频时 `document.body` 为 `null`，而 `querySelectorAll('video')` 仍能找到真实
+  `HTMLVideoElement`，导致键盘控制的「无视频就早退」守卫失效，一路走到
+  `document.body.appendChild` 抛 `TypeError`，且按键已被吞掉。
+  现在 overlay / 控制条 / 调速提示三处都没有宿主就干净放弃，
+  `installRuntimeStyles` 也改用 `documentElement`，不再依赖 body。
+- ⌨️ **shadow DOM 里的输入框不再被吞键**：键盘事件跨越 shadow 边界时
+  `event.target` 会被重定向为宿主元素（实测：在 shadow 内的 `<input>` 打字，
+  window 捕获阶段看到的 target 是 `DIV#host`），于是编辑态判定失效，
+  用户在那类输入框里打空格/减号会被当成快捷键吃掉。
+  改用 `event.composedPath()[0]` 取真实目标。
+- 🔇 **不再把看不见的视频当受控对象**：`display:none` / `visibility:hidden` / 0 尺寸
+  的候选此前只是「不加分」而非排除，单候选时它仍会以最高分胜出 ——
+  速度被改在看不见的视频上，提示还会因为 `rect` 全 0 而钳到屏幕角落。
+  现在不可见候选被过滤掉，唯一豁免用户**显式交互过**的那条。
+- 🎯 **iframe 内视频的调速提示不再错位**：`getBoundingClientRect()` 在 iframe
+  内元素上返回的是相对 iframe 视口的坐标，而提示固定在顶层文档 ——
+  实测视频在 y≈400 时提示出现在 y=16。现在沿 `frameElement` 逐层累加换算到顶层坐标系。
+- 🔁 **页面摘掉扩展样式后能自愈**：站点清理外来节点（SPA 重建很常见）会把
+  `#vsc-runtime-styles` 摘走，此前不会重建，控制条 `position` 从 `fixed` 退化为 `static`。
+  现在持引用 + `isConnected` 判定，并挂一个轻量 `MutationObserver` 自动重注入。
+- 🚫 **跨 document 的视频按 f 不再静默吞键**：同源 iframe 里的视频会被识别为
+  受控对象，但 `enter()` 对跨 document 的视频必然失败 —— 此前先吞键再失败，
+  用户既失去按键又没有任何反馈。现在吞键前先问 `canEnter()`，进不去就放行。
+  注意：全屏**已激活**时按 f 仍照常退出（退出分支独立，不受 `canEnter` 影响）。
+
+### 新增 (Added)
+
+- 🧪 **影响边界回归套件** `tests/e2e/boundary.spec.js`（9 条），用真实扩展在
+  真实 Chromium 里约束上述六类失败模式；已接入 CI 的 e2e job，不再只跑本地。
+- 🔒 `scripts/ci-workflow.test.ts` 补一条断言，防止边界套件从 CI 里静默漏跑。
+
 ## [6.0.2] - 2026-10-04
 
 ### 变更 (Changed)
