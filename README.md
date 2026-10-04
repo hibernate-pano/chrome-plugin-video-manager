@@ -34,8 +34,8 @@
 
 ## 不打扰的反馈
 
-- 全屏外调速时，视频角落淡入一个 `1.5x` 小胶囊，约 1 秒后消失
-- 全屏内不叠加提示，控制条上的速度数字实时跳动
+- 调速时视频角落淡入一个 `1.5x` 小胶囊，约 1 秒后消失——全屏内外都显示
+- 控制条 3 秒无操作即隐藏，不能指望它承担键盘调速的反馈
 - 站点速度记忆默认开启（刷新/重开自动恢复），对用户完全无界面
 
 ## 本地开发
@@ -61,7 +61,7 @@ pnpm test:e2e      # 全部 Playwright（会先 build）
 pnpm test:e2e:ext  # 真加载 dist 的 E2E（会先 build，需要本机有 Chromium）
 ```
 
-CI 会在 push / PR 上跑 `test` → `e2e` → `build` → `release`，`release` 依赖前三个全绿。
+CI 会在 push / PR 上跑 `test`、`build` 和 `e2e` 三个 job（`build` 依赖 `test`，`e2e` 独立）。出包不再走 CI，改由本地 `pnpm build:ext` 完成。
 
 ## 当前边界
 

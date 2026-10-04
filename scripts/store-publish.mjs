@@ -1,3 +1,15 @@
+/**
+ * store-publish.mjs — 上传 zip 到 Chrome Web Store 并发布到 default 渠道。
+ *
+ * 环境变量来源（ENV_PATH 指向的 .env 文件）：
+ *   - CLIENT_ID      必填，Google OAuth 客户端 ID
+ *   - CLIENT_SECRET  必填，Google OAuth 客户端密钥
+ *   - REFRESH_TOKEN  必填，由 store-auth.mjs 授权后写入
+ *   - ITEM_ID        可选，扩展在商店的 item id；缺省用代码内 DEFAULT_ITEM_ID
+ * ENV_PATH 可用环境变量覆盖，默认为 /Users/panbo/Code/.env。
+ *
+ * 用法: pnpm run store:publish [zip 路径]（缺省用 release/ 下的历史包）
+ */
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';

@@ -173,54 +173,21 @@ describe('CI 工作流：构建产物', () => {
   });
 });
 
-describe('CI 工作流：release job', () => {
-  const release = jobs['release'] ?? '';
-
-  it('不再用 pull_request 专属的 payload 拼 tag（push 事件下它恒为 null）', () => {
-    expect(release).not.toMatch(/pull_request/);
-  });
-
-  it('tag 由 commit sha 派生，不会退化成字面量 "v"', () => {
-    expect(release).toMatch(/v\$\{\{\s*github\.sha\s*\}\}/);
-    // `tag_name: v${{ ... }}` 在表达式为空时会塌成 "v"，
-    // 所以必须断言 tag 前面确实有 github.sha 这段非空来源。
-    expect(release).not.toMatch(/tag_name:\s*v\$\{\{\s*github\.event\b/);
-  });
-
-  it('用官方 gh CLI 发布，不再用已 archived 的 actions/create-release', () => {
-    // 匹配 `uses:` 而非裸字符串，否则解释这个决定的注释会误伤断言。
-    expect(release).not.toMatch(/uses:\s*[\w.-]+\/create-release/);
-    expect(release).toMatch(/gh release create/);
-    expect(release).toMatch(/GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/);
-  });
-
-  it('先取回 build 产物再打包，zip 挂到 release 上', () => {
-    expect(release).toMatch(/actions\/download-artifact@v\d+/);
-    expect(release).toMatch(/name:\s*extension-build/);
-    expect(release).toMatch(/pnpm run package:ext/);
-    expect(release).toMatch(/release\/\*\.zip/);
-  });
-
-  it('仍然是草稿语义（是否自动发布是产品决定，不在本次修复范围）', () => {
-    expect(release).toMatch(/--draft/);
-  });
-});
-
 describe('CI 工作流：job 依赖图', () => {
-  it('build 依赖 test，release 依赖 build 和 e2e', () => {
+  it('build 依赖 test，且不再有 release job', () => {
     expect(jobs['build']).toMatch(/needs:\s*\[test\]/);
-    expect(jobs['release']).toMatch(/needs:\s*\[[^\]]*\bbuild\b[^\]]*\]/);
-    expect(jobs['release']).toMatch(/needs:\s*\[[^\]]*\be2e\b[^\]]*\]/);
+    // 出包改为本地 `pnpm build:ext`，CI 不再有 release job。
+    expect(jobs['release']).toBeUndefined();
   });
 
   it('build 不再依赖已删除的 lint / type-check job', () => {
     expect(jobs['build']).not.toMatch(/needs:.*\b(lint|type-check)\b/);
   });
 
-  it('job 集合就是 test / e2e / build / release 四个，没有别的残留', () => {
+  it('job 集合就是 test / e2e / build 三个，没有别的残留', () => {
     // 用集合比而不是顺序比：YAML 里 job 的先后只是书写顺序，不该成为契约。
     const actual = Object.keys(jobs).sort();
-    expect(actual).toEqual(['build', 'e2e', 'release', 'test']);
+    expect(actual).toEqual(['build', 'e2e', 'test']);
   });
 
   it('类型检查仍然被 build 门禁住 —— tsc 折在 package.json 的 build 里', () => {
@@ -242,10 +209,6 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(script, 'package.json 缺少 test:e2e:ext').toBeTruthy();
     expect(script).toMatch(/build/);
     expect(script).toMatch(/real-extension\.spec\.js/);
-  });
-
-  it('e2e 失败时 release 不会照样发出去', () => {
-    expect(jobs['release']).toMatch(/needs:\s*\[[^\]]*\be2e\b[^\]]*\]/);
   });
 });
 

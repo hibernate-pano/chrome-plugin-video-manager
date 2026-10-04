@@ -96,8 +96,8 @@ Shared
 
 职责：
 
-- 全屏外调速时在视频角落淡入 `1.5x` 小胶囊，约 1 秒后淡出
-- 全屏内不显示（控制条速度数字已承担反馈）
+- 全屏内外调速时都在视频角落淡入 `1.5x` 小胶囊，约 1 秒后淡出
+- 控制条 3 秒无操作即隐藏，不能指望它承担键盘调速的反馈
 
 ### `SiteSpeedMemory`
 
@@ -136,8 +136,9 @@ Shared
 
 文件：`src/content/siteAdapters.ts`
 
-当前只保留三类适配：`generic` / `youtube` / `bilibili`。
-适配器只负责指定优先选择器与是否适合尝试 reparent。
+当前只保留四类适配：`generic` / `youtube` / `bilibili` / `localhost`（含 `127.0.0.1`）。
+适配器只负责指定优先选择器；reparent 的可行性判断在 `FullscreenController.enter()` 内统一完成。
+适配器列表现在只剩 `selectors` 一个字段；localhost 适配器的 selectors 与 generic 相同，仅 hostname 匹配不同。
 
 ## 非目标
 

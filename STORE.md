@@ -61,3 +61,14 @@ Video Speed Controller 是一个极简的网页视频工具。它把任意网页
 - Removed: toolbar popup, icon badge, digit presets, max-speed cap, animated speed HUD and hover indicator
 - Fixed: page fullscreen no longer gets stuck when the page rearranges the DOM while fullscreen is active
 - Localization trimmed to Simplified Chinese and English
+
+## 发布流程
+
+出包全部在本地完成（CI 不再做 release）。按顺序执行：
+
+1. `pnpm icons` —— 重绘图标
+2. `pnpm store:assets` —— 生成商店截图
+3. `pnpm build:ext` —— 构建并打出 zip 到 `release/`
+4. `pnpm store:auth` / `pnpm store:publish` —— 上传到 Chrome Web Store
+
+版本号约定见 [.memory/version-bump-not-force-tag.md](./.memory/version-bump-not-force-tag.md)：bump version → commit → 打新 tag `vX.Y.Z` → push，绝不 force 移动已存在的 tag。

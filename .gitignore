@@ -52,6 +52,9 @@ test-results/
 .video_agent/
 .pi/
 .sisyphus/
+.claude/
+.kiro/
+.zcode/
 
 # Store packages (build artifacts)
 dist.zip

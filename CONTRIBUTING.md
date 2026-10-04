@@ -65,7 +65,7 @@
 
 ### 前置要求
 
-- Node.js 16+ 和 npm
+- Node.js 20+ 和 pnpm
 - Git
 - Chrome 浏览器
 - 代码编辑器（推荐 VS Code）
@@ -88,13 +88,13 @@
 3. **安装依赖**
 
    ```bash
-   npm install
+   pnpm install
    ```
 
 4. **构建项目**
 
    ```bash
-   npm run build
+   pnpm build
    ```
 
 5. **在 Chrome 中加载扩展**
@@ -102,13 +102,13 @@
    - 访问 `chrome://extensions/`
    - 启用"开发者模式"
    - 点击"加载已解压的扩展程序"
-   - 选择项目目录
+   - 选择构建产物目录 `dist/`
 
 6. **开发模式**
    ```bash
-   npm run dev
+   pnpm dev
    ```
-   这将启动文件监听，自动重新构建。
+   `pnpm dev` 只用于调试设置页（vite dev server），不会产出可加载的扩展。改完 content script 后需要重新 `pnpm build`，并在 `chrome://extensions/` 点击刷新。
 
 ### VS Code 推荐设置
 
@@ -129,28 +129,21 @@
 - ESLint
 - Prettier
 - GitLens
-- Jest Runner
+- Vitest
 
 ## 📐 代码规范
 
 ### JavaScript 风格
 
-我们使用 ESLint 来保持代码一致性：
+本仓库暂无 lint / format script。仓库提供 `.eslintrc.json` 与 `.prettierrc`，请在编辑器中自行遵守。
 
-```bash
-# 检查代码
-npm run lint
+**基本规则（来自 `.prettierrc`）：**
 
-# 自动修复
-npm run lint:fix
-```
-
-**基本规则：**
-
-- 使用 4 空格缩进
-- 使用单引号
-- 语句末尾使用分号
-- 每行最大长度 100 字符
+- 使用 2 空格缩进（`tabWidth: 2`）
+- 使用单引号（`singleQuote: true`）
+- 语句末尾使用分号（`semi: true`）
+- 尾随逗号使用 ES5 风格（`trailingComma: "es5"`）
+- 每行最大长度 100 字符（`printWidth: 100`）
 - 使用驼峰命名法
 
 ### 命名约定
@@ -197,7 +190,7 @@ function myFunction(name, age) {
 ### 测试要求
 
 - 所有新功能必须包含测试
-- 保持测试覆盖率 >80%
+- 新功能需要附带对应的单元测试（本仓库暂无覆盖率门槛）
 - 使用描述性的测试名称
 
 ```javascript
@@ -268,9 +261,11 @@ git checkout -b feature/my-new-feature
 
 - 编写代码
 - 添加测试
-- 运行测试：`npm test`
-- 运行 lint：`npm run lint`
-- 构建项目：`npm run build`
+- 运行测试：`pnpm test`（vitest 单元 + 契约测试）
+- 运行全部 Playwright：`pnpm test:e2e`
+- 运行真扩展 E2E：`pnpm test:e2e:ext`
+- 构建项目：`pnpm build`
+- 出包与商店发布：`pnpm build:ext`、`pnpm icons`、`pnpm store:assets`、`pnpm store:auth`、`pnpm store:publish`
 
 ### 3. 提交更改
 
@@ -355,9 +350,11 @@ git push origin feature/my-new-feature
 
 ## 📚 其他资源
 
+- [版本号发布约定](./.memory/version-bump-not-force-tag.md)：bump version → commit → 打新 tag `vX.Y.Z` → push，绝不 force 移动已存在的 tag
 - [Chrome Extension 文档](https://developer.chrome.com/docs/extensions/)
 - [ES6+ 语法指南](https://es6.io/)
-- [Jest 测试文档](https://jestjs.io/)
+- [Vitest 测试文档](https://vitest.dev/)
+- [Playwright 测试文档](https://playwright.dev/)
 - [ESLint 规则](https://eslint.org/docs/rules/)
 
 ## 🎉 成为贡献者

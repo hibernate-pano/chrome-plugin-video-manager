@@ -1,9 +1,20 @@
+/**
+ * store-auth.mjs — Google OAuth 一次性授权，为 Chrome Web Store 发布获取 refresh token。
+ *
+ * 环境变量来源（先读 process.env，再回退到 ENV_PATH 指向的 .env 文件）：
+ *   - CLIENT_ID      必填，Google OAuth 客户端 ID
+ *   - CLIENT_SECRET  必填，Google OAuth 客户端密钥
+ * 运行成功后会把 REFRESH_TOKEN 追加写入 ENV_PATH 指向的 .env 文件。
+ * ENV_PATH 可用环境变量覆盖，默认为 /Users/panbo/Code/.env。
+ *
+ * 用法: pnpm run store:auth
+ */
 import { createServer } from 'http';
 import { readFileSync, appendFileSync } from 'fs';
 import { spawn, execFileSync } from 'child_process';
 import { randomBytes } from 'crypto';
 
-const ENV_PATH = '/Users/panbo/Code/.env';
+const ENV_PATH = process.env.ENV_PATH || '/Users/panbo/Code/.env';
 const SCOPE = 'https://www.googleapis.com/auth/chromewebstore';
 const PORT = 8765;
 const REDIRECT_URI = `http://127.0.0.1:${PORT}`;
