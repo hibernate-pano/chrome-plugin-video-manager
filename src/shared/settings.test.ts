@@ -1,6 +1,64 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadSettings, normalizePersistedSettings, saveSettings } from './settings';
-import { DEFAULT_SHORTCUTS } from './types';
+import {
+  loadSettings,
+  normalizePersistedSettings,
+  saveSettings,
+  subscribeToSettings,
+} from './settings';
+import { DEFAULT_SHORTCUTS, LEGACY_SHORTCUTS_KEY, STORAGE_KEY } from './types';
+
+/**
+ * 有真实行为的 fake sync：记录 set/remove 的调用次数，而不是空 mock——
+ * 写放大 bug 只有看得到写调用才能测出来。
+ */
+const installFakeSync = () => {
+  const store = new Map<string, unknown>();
+  const setCalls: Array<Record<string, unknown>> = [];
+  const removeCalls: string[] = [];
+  const listeners: Array<
+    (changes: Record<string, chrome.storage.StorageChange>, namespace: string) => void
+  > = [];
+
+  vi.stubGlobal('chrome', {
+    runtime: { lastError: null },
+    storage: {
+      sync: {
+        get: (key: string, callback: (result: Record<string, unknown>) => void) => {
+          callback(store.has(key) ? { [key]: store.get(key) } : {});
+        },
+        set: (obj: Record<string, unknown>, callback?: () => void) => {
+          setCalls.push(obj);
+          Object.entries(obj).forEach(([key, value]) => store.set(key, value));
+          callback?.();
+        },
+        remove: (key: string, callback?: () => void) => {
+          removeCalls.push(key);
+          store.delete(key);
+          callback?.();
+        },
+      },
+      onChanged: {
+        addListener: (
+          listener: (changes: Record<string, chrome.storage.StorageChange>, namespace: string) => void,
+        ) => {
+          listeners.push(listener);
+        },
+        removeListener: (
+          listener: (changes: Record<string, chrome.storage.StorageChange>, namespace: string) => void,
+        ) => {
+          const index = listeners.indexOf(listener);
+          if (index >= 0) {
+            listeners.splice(index, 1);
+          }
+        },
+      },
+    },
+  });
+
+  return { store, setCalls, removeCalls, listeners };
+};
+
+const flushMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -132,5 +190,49 @@ describe('normalizePersistedSettings', () => {
     vi.stubGlobal('chrome', chromeMock);
 
     await expect(saveSettings({ shortcuts: DEFAULT_SHORTCUTS })).rejects.toThrow('write failed');
+  });
+
+  it('does not rewrite storage when the stored value is already normalized', async () => {
+    const { store, setCalls } = installFakeSync();
+
+    // 首次：空存储需要播种。
+    await loadSettings();
+    expect(setCalls).toHaveLength(1);
+    expect(store.get(STORAGE_KEY)).toEqual({ shortcuts: DEFAULT_SHORTCUTS });
+
+    // 第二次：内容脚本每次启动都会 loadSettings，已规范化的值不应再触发写。
+    await loadSettings();
+    expect(setCalls).toHaveLength(1);
+  });
+
+  it('still migrates and cleans up the legacy shortcut key exactly once', async () => {
+    const { store, setCalls, removeCalls } = installFakeSync();
+    store.set(LEGACY_SHORTCUTS_KEY, { increase: 'k' });
+
+    const settings = await loadSettings();
+
+    expect(settings.shortcuts.increaseSpeed).toBe('k');
+    expect(setCalls).toHaveLength(1);
+    expect(removeCalls).toEqual([LEGACY_SHORTCUTS_KEY]);
+    expect(store.has(LEGACY_SHORTCUTS_KEY)).toBe(false);
+  });
+
+  it('feeds changes to subscribers without writing back to storage', async () => {
+    const { setCalls, removeCalls, listeners } = installFakeSync();
+    const received: unknown[] = [];
+
+    const unsubscribe = subscribeToSettings((settings) => received.push(settings));
+    expect(listeners).toHaveLength(1);
+
+    // 模拟别处写入触发的 onChanged。回调只应只读重算，绝不能再写盘。
+    listeners[0]({ [STORAGE_KEY]: { newValue: { shortcuts: DEFAULT_SHORTCUTS } } }, 'sync');
+    await flushMicrotasks();
+
+    expect(received).toEqual([{ shortcuts: DEFAULT_SHORTCUTS }]);
+    expect(setCalls).toHaveLength(0);
+    expect(removeCalls).toHaveLength(0);
+
+    unsubscribe();
+    expect(listeners).toHaveLength(0);
   });
 });

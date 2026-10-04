@@ -1,8 +1,8 @@
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 /** 媒体速率绝对下限与上限（播放器能接受的安全范围）。 */
-export const MIN_PLAYBACK_RATE = 0.1;
-export const MAX_PLAYBACK_RATE = 16;
+const MIN_PLAYBACK_RATE = 0.1;
+const MAX_PLAYBACK_RATE = 16;
 
 export const stepPlaybackRate = (video: HTMLVideoElement, delta: number) => {
   const nextRate = clamp(video.playbackRate + delta, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE);

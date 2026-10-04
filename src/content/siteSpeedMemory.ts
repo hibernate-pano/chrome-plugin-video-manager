@@ -50,11 +50,23 @@ export class SiteSpeedMemory {
   private speeds = new Map<string, number>();
   private loaded = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 是否有改动还没落盘；没有待保存改动时 flush 保持只读，避免无谓写。 */
+  private dirty = false;
+  // 存成稳定的函数引用，destroy 时才能精确移除同一个监听器。
+  private readonly handlePageHide = () => {
+    this.flush();
+  };
 
   async load() {
     const speeds = await getLocalValue<Record<string, number>>(SITE_SPEEDS_KEY);
     this.speeds = new Map(Object.entries(speeds ?? {}));
     this.loaded = true;
+    // 刷新/关标签时浏览器不会等 800ms debounce 跑完：最后一次调速若还没落盘就
+    // 永久丢失，直接违背 README 承诺的"刷新/重开自动恢复"。pagehide 覆盖刷新、
+    // 关标签、前进后退以及 bfcache 进入，比 beforeunload 更可靠。
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', this.handlePageHide);
+    }
     return this;
   }
 
@@ -88,13 +100,31 @@ export class SiteSpeedMemory {
   }
 
   destroy() {
+    // 先落盘再清理：只清 timer 会让 pending 的最后一次调速随风而逝。
+    this.flush();
+
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('pagehide', this.handlePageHide);
+    }
+  }
+
+  /** 立即把 pending 改动落盘，并取消 debounce 定时器。 */
+  private flush() {
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+
+    if (!this.dirty) {
+      return;
+    }
+
+    void this.persist();
   }
 
   private scheduleSave() {
+    this.dirty = true;
+
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer);
     }
@@ -106,6 +136,7 @@ export class SiteSpeedMemory {
   }
 
   private async persist() {
+    this.dirty = false;
     await setLocalValue(SITE_SPEEDS_KEY, Object.fromEntries(this.speeds));
   }
 }

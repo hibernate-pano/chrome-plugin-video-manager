@@ -164,20 +164,46 @@ export const normalizePersistedSettings = (
   };
 };
 
-export const loadSettings = async (): Promise<PersistedSettings> => {
-  const [storedSettings, legacyShortcuts] = await Promise.all([
+/**
+ * 只读路径：只 getValue + normalize，绝不写盘。
+ * 写盘必须留给调用方按需决定：内容脚本每次启动都会 loadSettings，
+ * 若这里无条件 set，就会用 sync 配额做无意义的同值写，还多一次 legacy 键 remove。
+ */
+const readSettings = async (): Promise<{
+  settings: PersistedSettings;
+  rawStored: unknown;
+  legacyShortcuts: unknown;
+}> => {
+  const [rawStored, legacyShortcuts] = await Promise.all([
     getValue<unknown>('sync', STORAGE_KEY),
     getValue<unknown>('sync', LEGACY_SHORTCUTS_KEY),
   ]);
 
-  const normalized = normalizePersistedSettings(storedSettings, legacyShortcuts);
-  await setValue('sync', STORAGE_KEY, normalized);
+  return {
+    settings: normalizePersistedSettings(rawStored, legacyShortcuts),
+    rawStored,
+    legacyShortcuts,
+  };
+};
+
+export const loadSettings = async (): Promise<PersistedSettings> => {
+  const { settings, rawStored, legacyShortcuts } = await readSettings();
+
+  // 已存的原始值重新规范化后与结果一致，说明无需再写：第一次播种（rawStored 为
+  // undefined）及需要迁移/纠偏时才落盘。normalizePersistedSettings(rawStored) 不传
+  // legacy，只用来判断"存盘值本身是否已是规范形"。
+  const storedAlreadyNormalized = rawStored !== undefined
+    && JSON.stringify(normalizePersistedSettings(rawStored)) === JSON.stringify(settings);
+
+  if (!storedAlreadyNormalized) {
+    await setValue('sync', STORAGE_KEY, settings);
+  }
 
   if (legacyShortcuts !== undefined) {
     await removeValue('sync', LEGACY_SHORTCUTS_KEY);
   }
 
-  return normalized;
+  return settings;
 };
 
 export const saveSettings = async (settings: PersistedSettings): Promise<void> => {
@@ -205,7 +231,8 @@ export const subscribeToSettings = (
       return;
     }
 
-    void loadSettings().then(listener);
+    // 只读重算并喂给 listener：变更回调里再写盘会与触发本次变更的写入形成写放大。
+    void readSettings().then(({ settings }) => listener(settings));
   };
 
   chrome.storage.onChanged.addListener(handler);

@@ -14,8 +14,6 @@ export interface PersistedSettings {
 
 export interface ShortcutDefinition {
   id: keyof ShortcutSettings;
-  label: string;
-  description: string;
 }
 
 export const STORAGE_KEY = 'vsc-settings';
@@ -41,39 +39,11 @@ export const SEEK_STEP_SECONDS = 5;
 export const TOGGLE_FULLSCREEN_MESSAGE = 'vsc-toggle-fullscreen';
 
 export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
-  {
-    id: 'increaseSpeed',
-    label: '加速',
-    description: '增加视频播放速度（+0.1，长按连续）',
-  },
-  {
-    id: 'decreaseSpeed',
-    label: '减速',
-    description: '降低视频播放速度（-0.1，长按连续）',
-  },
-  {
-    id: 'resetSpeed',
-    label: '重置速度',
-    description: '恢复到 1.0x',
-  },
-  {
-    id: 'togglePlay',
-    label: '播放 / 暂停',
-    description: '切换视频播放与暂停；留空即禁用',
-  },
-  {
-    id: 'seekBack',
-    label: '快退 5 秒',
-    description: '后退 5 秒；留空即禁用',
-  },
-  {
-    id: 'seekForward',
-    label: '快进 5 秒',
-    description: '前进 5 秒；留空即禁用',
-  },
-  {
-    id: 'fullscreen',
-    label: '网页全屏',
-    description: '进入或退出网页全屏',
-  },
+  { id: 'increaseSpeed' },
+  { id: 'decreaseSpeed' },
+  { id: 'resetSpeed' },
+  { id: 'togglePlay' },
+  { id: 'seekBack' },
+  { id: 'seekForward' },
+  { id: 'fullscreen' },
 ];

@@ -1,4 +1,3 @@
-import { getSiteAdapter } from './siteAdapters';
 import { FullscreenControls } from './fullscreenControls';
 
 type FullscreenMode = 'reparent' | 'css-cover';
@@ -156,7 +155,7 @@ export class FullscreenController {
     }
 
     const playbackSnapshot = this.capturePlaybackSnapshot(video);
-    this.state.originalParent.insertBefore(video, this.state.originalNextSibling);
+    this.restoreToOriginalSlot(video);
     this.state.mode = 'css-cover';
     // 摘掉 vsc-active 即彻底 display:none（runtimeStyles.ts:4-16），一个像素都不画。
     // overlay 此刻仍在 DOM 里（只有 exit 会 remove 它），不清掉就会留下一层
@@ -204,8 +203,10 @@ export class FullscreenController {
         // Best effort.
       });
     }
-    const shouldTryReparent = getSiteAdapter(window.location.hostname).shouldTryReparent(video);
-    const mode: FullscreenMode = shouldTryReparent ? 'reparent' : 'css-cover';
+    // 进入本方法前已用 video.ownerDocument !== document 提前 return，而所有适配器的
+    // shouldTryReparent 都是同一个判断，因此这里恒为 reparent；css-cover 只在
+    // fallbackToCssCover() 的回退路径上赋值。
+    const mode: FullscreenMode = 'reparent';
 
     this.state = {
       video,
@@ -296,6 +297,20 @@ export class FullscreenController {
     };
   }
 
+  // sibling 守卫：全屏期间页面可能把 originalNextSibling 移走了（重排 DOM），
+  // 此时 insertBefore(video, 已脱离的节点) 会抛 NotFoundError 打断流程，
+  // 让视频卡死在 overlay、body 滚动锁死。sibling 不再是原父节点的孩子时改用 append。
+  private restoreToOriginalSlot(video: HTMLVideoElement) {
+    const parent = this.state.originalParent;
+    if (!parent) {
+      return;
+    }
+
+    const sibling = this.state.originalNextSibling;
+    const siblingStillValid = sibling !== null && sibling.parentNode === parent;
+    parent.insertBefore(video, siblingStillValid ? sibling : null);
+  }
+
   exit() {
     const video = this.state.video;
     if (!video) {
@@ -306,13 +321,7 @@ export class FullscreenController {
     // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。
     if (this.state.mode === 'reparent' && this.state.originalParent && video.isConnected) {
       const playbackSnapshot = this.capturePlaybackSnapshot(video);
-      // sibling 守卫：全屏期间页面可能把 originalNextSibling 移走了（重排 DOM），
-      // 此时 insertBefore(video, 已脱离的节点) 会抛 NotFoundError 打断退出，
-      // 让视频卡死在 overlay、body 滚动锁死。sibling 不再是原父节点的孩子时改用 append。
-      const parent = this.state.originalParent;
-      const sibling = this.state.originalNextSibling;
-      const siblingStillValid = sibling !== null && sibling.parentNode === parent;
-      parent.insertBefore(video, siblingStillValid ? sibling : null);
+      this.restoreToOriginalSlot(video);
       this.restoreIfLost(video, playbackSnapshot);
     }
 

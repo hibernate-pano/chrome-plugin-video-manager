@@ -54,6 +54,17 @@ const keyEvent = (key: string, init: KeyboardEventInit = {}) =>
 const keyUpEvent = (key: string, init: KeyboardEventInit = {}) =>
   new KeyboardEvent('keyup', { key, ...init });
 
+// jsdom 的 location.hostname 是 [LegacyUnforgeable]，只能在用例内整体替换
+// window.location 对象来伪造 hostname；beforeEach 恢复原始描述符。
+const originalLocationDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+const setHostname = (hostname: string) => {
+  Object.defineProperty(window, 'location', {
+    value: { hostname },
+    configurable: true,
+    writable: true,
+  });
+};
+
 describe('KeyboardController', () => {
   let settings: PersistedSettings;
   let video: HTMLVideoElement | null;
@@ -63,10 +74,7 @@ describe('KeyboardController', () => {
   let lastToggledVideo: HTMLVideoElement | null | undefined;
   let controller: KeyboardController;
 
-  const createController = (
-    fullscreenActive = false,
-    deferSpaceToSite?: () => boolean,
-  ) => {
+  const createController = (fullscreenActive = false) => {
     controller = new KeyboardController({
       getSettings: () => settings,
       getCurrentVideo: () => video,
@@ -74,12 +82,14 @@ describe('KeyboardController', () => {
       toggleFullscreen,
       exitFullscreen,
       showSpeedFeedback,
-      deferSpaceToSite,
     });
   };
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    if (originalLocationDescriptor) {
+      Object.defineProperty(window, 'location', originalLocationDescriptor);
+    }
     settings = createSettings();
     video = createVideo();
     lastToggledVideo = undefined;
@@ -210,7 +220,8 @@ describe('KeyboardController', () => {
   it('defers a bare space to the site on YouTube-style players', () => {
     // YouTube 的原生空格处理挂在 keyup 上；我们在 keydown 切换一次、它的
     // keyup 再切换一次 = 一次空格两次切换。所以裸空格必须整体放行。
-    createController(false, () => true);
+    setHostname('www.youtube.com');
+    createController();
 
     expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
     expect(video?.pause).not.toHaveBeenCalled();
@@ -220,7 +231,8 @@ describe('KeyboardController', () => {
   it('still honors a rebound play/pause key on YouTube-style players', () => {
     // 用户把播放/暂停改绑到别的键时，那个键不受站点特判影响。
     settings = createSettings({ togglePlay: 'p' });
-    createController(false, () => true);
+    setHostname('www.youtube.com');
+    createController();
 
     expect(controller.handleKeyDown(keyEvent('p'))).toBe(true);
     expect(video?.pause).toHaveBeenCalledTimes(1);

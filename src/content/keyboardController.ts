@@ -14,11 +14,6 @@ interface KeyboardControllerOptions {
   toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   exitFullscreen: () => void;
   showSpeedFeedback: (rate: number, video: HTMLVideoElement) => void;
-  /**
-   * 是否把"裸空格"让给站点原生处理（默认 YouTube）。
-   * 做成可注入是为了让单元测试在不改 hostname 的前提下覆盖这条分支。
-   */
-  deferSpaceToSite?: () => boolean;
 }
 
 /** 真正接收文本输入的 <input> 类型；其余（range/checkbox/button/color…）不算编辑态。 */
@@ -169,8 +164,7 @@ export class KeyboardController {
 
     if (matchesShortcut(event, shortcuts.togglePlay)) {
       // 裸空格 + YouTube：放行给站点原生处理，避免双重切换。
-      const defer = this.options.deferSpaceToSite ?? isYouTube;
-      if (defer() && shortcuts.togglePlay === ' ') {
+      if (isYouTube() && shortcuts.togglePlay === ' ') {
         return false;
       }
 

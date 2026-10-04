@@ -89,6 +89,34 @@ describe('SiteSpeedMemory', () => {
     expect(store.get(SITE_SPEEDS_KEY)).toBeUndefined();
   });
 
+  it('persists pending changes on pagehide so a refresh cannot drop the last speed', async () => {
+    memory = await createMemory();
+    memory.remember('example.com', 1.5);
+
+    // 还没到 800ms debounce：此刻绝不能已经写盘，否则测不出 pagehide 的作用。
+    expect(store.get(SITE_SPEEDS_KEY)).toBeUndefined();
+
+    // 刷新/关标签时浏览器派发 pagehide，必须立即落盘而不是继续等 debounce。
+    window.dispatchEvent(new Event('pagehide'));
+
+    expect(store.get(SITE_SPEEDS_KEY)).toEqual({ 'example.com': 1.5 });
+  });
+
+  it('drops the pagehide listener on destroy so a discarded instance never writes again', async () => {
+    memory = await createMemory();
+    memory.remember('example.com', 1.75);
+    memory.destroy();
+
+    // destroy 应先落盘，再摘掉监听器。
+    expect(store.get(SITE_SPEEDS_KEY)).toEqual({ 'example.com': 1.75 });
+
+    store.delete(SITE_SPEEDS_KEY);
+    window.dispatchEvent(new Event('pagehide'));
+
+    // 监听器已移除：销毁后的实例不再响应 pagehide。
+    expect(store.get(SITE_SPEEDS_KEY)).toBeUndefined();
+  });
+
   it('is inert without chrome storage', async () => {
     vi.unstubAllGlobals();
     memory = new SiteSpeedMemory();

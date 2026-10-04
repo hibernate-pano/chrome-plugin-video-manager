@@ -203,6 +203,39 @@ describe('FullscreenController', () => {
     expect(overlay?.classList.contains('vsc-active')).toBe(false);
   });
 
+  it('falls back to css-cover without throwing when the original next sibling was reordered away', () => {
+    vi.useFakeTimers();
+
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    const sibling = document.createElement('span');
+    parent.append(video, sibling);
+    document.body.appendChild(parent);
+
+    Object.defineProperty(video, 'paused', { value: true, configurable: true });
+    Object.defineProperty(video, 'play', {
+      value: vi.fn(() => Promise.resolve()),
+      configurable: true,
+    });
+
+    expect(controller.enter(video)).toBe(true);
+    // 模拟站点在 180ms 探测窗口内重排 DOM：把 originalNextSibling 移走，
+    // video 自己仍被 overlay 持有。回退路径若不做 sibling 校验，
+    // insertBefore(video, 已脱离的 sibling) 会在定时器回调里抛 NotFoundError，
+    // 其后的 applyCssCover 与 restoreIfLost 全部中断。
+    sibling.remove();
+
+    expect(() => vi.advanceTimersByTime(180)).not.toThrow();
+
+    // 视频回到原父节点（sibling 没了就 append 到末尾），模式降级为 css-cover。
+    expect(parent.contains(video)).toBe(true);
+    expect(video.classList.contains('vsc-page-fullscreen-video--css-cover')).toBe(true);
+    expect(document.getElementById('vsc-page-fullscreen-overlay')?.classList.contains('vsc-active')).toBe(false);
+
+    controller.exit();
+  });
+
   it('exits cleanly when only the original next sibling was discarded', () => {
     const controller = new FullscreenController();
     const parent = document.createElement('div');

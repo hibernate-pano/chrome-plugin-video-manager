@@ -1,5 +1,6 @@
 import { t } from '../shared/i18n';
 import { togglePlayback } from './playback';
+import { formatRate } from './speedToast';
 
 const CONTROLS_ID = 'vsc-controls';
 const IDLE_HIDE_DELAY = 3000;
@@ -26,9 +27,6 @@ export const formatTime = (seconds: number) => {
 
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
 };
-
-const formatRate = (value: number) =>
-  value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 
 interface ControlsElements {
   root: HTMLDivElement;

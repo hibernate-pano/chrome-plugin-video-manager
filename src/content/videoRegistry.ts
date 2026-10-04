@@ -169,7 +169,7 @@ export class VideoRegistry {
     this.dirty = true;
   }
 
-  getAllVideos() {
+  private getAllVideos() {
     const videos = new Set<HTMLVideoElement>();
     collectVideos(document, videos);
     return Array.from(videos);
