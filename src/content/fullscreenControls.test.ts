@@ -229,6 +229,51 @@ describe('FullscreenControls', () => {
     expect(progress.value).toBe('0');
   });
 
+  it('unfreezes the thumb when a committed seek never lands', () => {
+    mount();
+    const progress = $<HTMLInputElement>('progress');
+    progress.value = '75';
+    progress.dispatchEvent(new Event('input'));
+    progress.dispatchEvent(new Event('change'));
+    expect(video.currentTime).toBe(75);
+
+    // 播放器始终不派发 seeked：请求的位置在可寻址范围之外（流不连续、直播时移
+    // 边界），Chrome 会直接拒绝这次跳转。视频其实还在原位继续播。
+    video.currentTime = 30;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(progress.value).toBe('75'); // 钉住期内仍防回弹，这是对的
+
+    vi.advanceTimersByTime(3000);
+
+    // 到点无条件解除钉住：滑块必须跟着真实进度走，而不是永久冻结在 75。
+    expect(progress.value).toBe('30');
+    expect($('time').textContent).toBe('0:30 / 2:00');
+    video.currentTime = 40;
+    video.dispatchEvent(new Event('timeupdate'));
+    expect(progress.value).toBe('40');
+  });
+
+  it('cancels the pending-seek timer once the seek lands', () => {
+    const controls = mount();
+    const progress = $<HTMLInputElement>('progress');
+    progress.value = '75';
+    progress.dispatchEvent(new Event('input'));
+    progress.dispatchEvent(new Event('change'));
+
+    video.currentTime = 75;
+    video.dispatchEvent(new Event('seeked'));
+
+    // seeked 已解除钉住；上限计时器必须一起取消，不能在 3 秒后再动一次滑块。
+    video.currentTime = 90;
+    video.dispatchEvent(new Event('timeupdate'));
+    vi.advanceTimersByTime(3000);
+    expect(progress.value).toBe('90');
+
+    // unmount 也不能留下孤儿计时器（jsdom 会对残留定时器报错）。
+    controls.unmount();
+    expect(() => vi.advanceTimersByTime(3000)).not.toThrow();
+  });
+
   it('changes volume and unmutes when the volume slider moves up', () => {
     mount();
     // createMockVideo 已给 muted 配了 setter，直接赋值即可。

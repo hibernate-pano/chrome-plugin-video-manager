@@ -6,6 +6,20 @@ import { formatRate } from './speedToast';
 const CONTROLS_ID = 'vsc-controls';
 const IDLE_HIDE_DELAY = 3000;
 
+/**
+ * 跳转「钉住」滑块的最长时间。
+ *
+ * pendingSeek 的存在是为了防回弹：提交 seek 后播放器会有一小段时间继续报旧的
+ * currentTime（媒体还没跳过去），照它渲染会把滑块拽回原位。所以在 seeked 之前
+ * 必须让滑块钉在目标位。
+ *
+ * 但 seeked **不一定来**。请求浏览器无法寻址的位置时（流不连续、直播时移边界、
+ * 目标落在可寻址范围之外）Chrome 会拒绝这次跳转且不派发 seeked——此时若只靠
+ * seeked 解除钉住，滑块会永久冻结在目标位、拒绝跟随真实播放进度，比回弹更糟：
+ * 用户以为跳转成功了。所以钉住必须有上限，到点无条件回到真实位置。
+ */
+const SEEK_PIN_TIMEOUT = 3000;
+
 const ICONS = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>',
@@ -65,6 +79,7 @@ export class FullscreenControls {
   private idleTimer: number | null = null;
   private draggingProgress = false;
   private pendingSeek: number | null = null;
+  private pendingSeekTimer: number | null = null;
   private readonly boundPointerMove = () => this.show();
   private readonly boundScheduleHide = () => this.scheduleHide();
   private readonly boundKeepVisible = () => this.cancelHide();
@@ -188,7 +203,7 @@ export class FullscreenControls {
       if (Number.isFinite(time)) {
         // 记住提交的目标：跳转落地前 timeupdate 仍报旧 currentTime，
         // 用它同步会把滑块拉回去（回弹）。pendingSeek 让滑块钉在目标位。
-        this.pendingSeek = time;
+        this.pinSeek(time);
         this.video.currentTime = time;
       }
       this.draggingProgress = false;
@@ -259,9 +274,34 @@ export class FullscreenControls {
 
   /** 跳转落地：清除 pendingSeek 并回到真实位置渲染。 */
   private readonly handleSeeked = () => {
-    this.pendingSeek = null;
+    this.releaseSeekPin();
     this.syncProgress();
   };
+
+  /**
+   * 钉住滑块并起一个上限计时器（见 SEEK_PIN_TIMEOUT）。seeked 正常到达时由
+   * handleSeeked 提前解除，计时器一并取消。
+   */
+  private pinSeek(time: number) {
+    this.releaseSeekPin();
+    this.pendingSeek = time;
+    this.pendingSeekTimer = window.setTimeout(() => {
+      this.pendingSeekTimer = null;
+      // seeked 始终没来：这次跳转多半被播放器拒绝了。解除钉住、回到真实位置，
+      // 否则进度条会永久冻结在一个假的进度上。
+      this.pendingSeek = null;
+      this.syncProgress();
+    }, SEEK_PIN_TIMEOUT);
+  }
+
+  private releaseSeekPin() {
+    if (this.pendingSeekTimer !== null) {
+      window.clearTimeout(this.pendingSeekTimer);
+      this.pendingSeekTimer = null;
+    }
+
+    this.pendingSeek = null;
+  }
 
   /** 拖动时把时间标签与填充同步到滑块目标位置，让 scrub 立刻有反馈（不触发 seek）。 */
   private previewScrub() {
@@ -340,6 +380,7 @@ export class FullscreenControls {
 
   unmount() {
     this.cancelHide();
+    this.releaseSeekPin();
     window.removeEventListener('pointermove', this.boundPointerMove, true);
     window.removeEventListener('pointerup', this.boundHandlePointerUp, true);
 
