@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Demo Player</title>
   <style>
+    :root { color-scheme: dark; }
     body {
       margin: 0;
       background: #0b1220;
       font-family: Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
-      height: 100vh;
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -33,15 +34,143 @@
       display: block;
       background: linear-gradient(135deg, #14532d 0%, #052e16 45%, #0f172a 100%);
     }
+
+    /* --- Site speed memory scene (scene=site-speed) --- */
+    .speed-scene {
+      display: none;
+      width: 100%;
+      max-width: 1040px;
+      padding: 0 24px;
+      box-sizing: border-box;
+    }
+    .speed-scene__heading {
+      margin: 0 0 6px;
+      color: #e2e8f0;
+      font-size: 22px;
+      font-weight: 650;
+      text-align: center;
+    }
+    .speed-scene__sub {
+      margin: 0 0 34px;
+      color: #94a3b8;
+      font-size: 14px;
+      text-align: center;
+    }
+    .speed-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    .speed-card {
+      padding: 26px 28px;
+      border: 1px solid #22304d;
+      border-radius: 18px;
+      background: #111c33;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+    .speed-card__site {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      color: #cbd5e1;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .speed-card__badge {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: #1e293b;
+      color: #67e8f9;
+      font-size: 16px;
+    }
+    .speed-card__rate {
+      margin: 22px 0 4px;
+      color: #4ade80;
+      font-size: 56px;
+      font-weight: 750;
+      letter-spacing: -0.02em;
+    }
+    .speed-card__note {
+      margin: 0;
+      color: #94a3b8;
+      font-size: 13.5px;
+    }
+
+    body[data-scene="site-speed"] .page-title,
+    body[data-scene="site-speed"] .player {
+      display: none;
+    }
+    body[data-scene="site-speed"] .speed-scene {
+      display: block;
+    }
   </style>
 </head>
-<body>
-  <p class="page-title">示例页面 · 在线课程视频</p>
+<body data-scene="player">
+  <p class="page-title" id="page-title"></p>
   <div class="player">
     <!-- poster 用内联 SVG 渐变模拟"视频画面"：全屏时 background 被强制为黑，
          只有 poster 能撑住画面内容，让商店截图不至于全黑。 -->
-    <video id="demo-video" poster="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%2314532d'/><stop offset='0.45' stop-color='%23052e16'/><stop offset='1' stop-color='%230f172a'/></linearGradient></defs><rect width='960' height='540' fill='url(%23g)'/><text x='480' y='270' fill='%2394a3b8' font-family='sans-serif' font-size='28' text-anchor='middle'>在线课程 · 第 12 讲</text></svg>"></video>
+    <video id="demo-video"></video>
   </div>
+
+  <!-- 站点速度记忆示意：两个站点各自记住自己的速度。扩展本身无界面，
+       这是为商店截图造的演示场景，不参与扩展运行逻辑。 -->
+  <section class="speed-scene" aria-label="Site speed memory">
+    <h1 class="speed-scene__heading" id="speed-heading"></h1>
+    <p class="speed-scene__sub" id="speed-sub"></p>
+    <div class="speed-grid">
+      <article class="speed-card">
+        <p class="speed-card__site"><span class="speed-card__badge">&#9654;</span>youtube.com</p>
+        <p class="speed-card__rate">1.5x</p>
+        <p class="speed-card__note" id="speed-note-1"></p>
+      </article>
+      <article class="speed-card">
+        <p class="speed-card__site"><span class="speed-card__badge">&#9670;</span>course.example</p>
+        <p class="speed-card__rate">2.0x</p>
+        <p class="speed-card__note" id="speed-note-2"></p>
+      </article>
+    </div>
+  </section>
+
+  <script>
+    // lang=zh_CN / scene=site-speed 由生成脚本通过 query 传入，默认英文、默认播放器场景。
+    const params = new URLSearchParams(location.search);
+    const lang = params.get('lang') === 'zh_CN' ? 'zh_CN' : 'en';
+    const scene = params.get('scene') === 'site-speed' ? 'site-speed' : 'player';
+    document.documentElement.lang = lang;
+    document.body.dataset.scene = scene;
+
+    const COPY = {
+      en: {
+        pageTitle: 'Example page \u00b7 Online course video',
+        poster: 'Online course \u00b7 Lesson 12',
+        speedHeading: 'Two sites, two speeds',
+        speedSub: 'Set a speed once \u2014 it comes back the next time you open the site.',
+        remembered: 'Remembered automatically',
+      },
+      zh_CN: {
+        pageTitle: '\u793a\u4f8b\u9875\u9762 \u00b7 \u5728\u7ebf\u8bfe\u7a0b\u89c6\u9891',
+        poster: '\u5728\u7ebf\u8bfe\u7a0b \u00b7 \u7b2c 12 \u8bb2',
+        speedHeading: '\u4e24\u4e2a\u7ad9\u70b9\uff0c\u5404\u81ea\u7684\u901f\u5ea6',
+        speedSub: '\u8c03\u4e00\u6b21\u901f\u5ea6\uff0c\u4e0b\u6b21\u6253\u5f00\u8be5\u7ad9\u70b9\u81ea\u52a8\u6062\u590d\u3002',
+        remembered: '\u81ea\u52a8\u8bb0\u4f4f',
+      },
+    };
+    const copy = COPY[lang];
+
+    document.getElementById('page-title').textContent = copy.pageTitle;
+    document.getElementById('speed-heading').textContent = copy.speedHeading;
+    document.getElementById('speed-sub').textContent = copy.speedSub;
+    document.getElementById('speed-note-1').textContent = copy.remembered;
+    document.getElementById('speed-note-2').textContent = copy.remembered;
+
+    const posterSvg = "<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%2314532d'/><stop offset='0.45' stop-color='%23052e16'/><stop offset='1' stop-color='%230f172a'/></linearGradient></defs><rect width='960' height='540' fill='url(%23g)'/><text x='480' y='270' fill='%2394a3b8' font-family='sans-serif' font-size='28' text-anchor='middle'>" + copy.poster + '</text></svg>';
+    document.getElementById('demo-video').setAttribute('poster', 'data:image/svg+xml;utf8,' + posterSvg);
+  </script>
   <!-- 模拟一个播放中的视频：让全屏控制条能显示真实进度/时间。 -->
   <script>
     const v = document.getElementById('demo-video');

@@ -20,15 +20,17 @@ const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="SIZE" height="SIZE" 
 const TILE = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
 <defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4ade80"/><stop offset="1" stop-color="#15803d"/></linearGradient>
-<radialGradient id="glow" cx="0.5" cy="0.45" r="0.62"><stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<radialGradient id="glow" cx="0.5" cy="0.24" r="0.74"><stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
 </defs>
 <rect width="440" height="280" rx="56" fill="url(#bg)"/>
 <rect width="440" height="280" rx="56" fill="url(#glow)"/>
-<g transform="translate(220 140) scale(2.2) translate(-64 -70)">
+<g transform="translate(220 80) scale(1.02) translate(-64 -70)">
 <circle cx="64" cy="70" r="38" pathLength="360" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-dasharray="200 360" stroke-dashoffset="-170"/>
 <line x1="64" y1="70" x2="80" y2="48" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
 <circle cx="64" cy="70" r="10.5" fill="#ffffff"/>
 </g>
+<text x="220" y="192" text-anchor="middle" fill="#ffffff" font-family="-apple-system, 'Segoe UI', Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="-0.6">Video Speed Controller</text>
+<text x="220" y="222" text-anchor="middle" fill="#d9fbe7" font-family="-apple-system, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="500">Clean fullscreen for any web video</text>
 </svg>`;
 
 const browser = await chromium.launch();
