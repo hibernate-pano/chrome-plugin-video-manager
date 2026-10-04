@@ -61,7 +61,7 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 - job 依赖图、e2e job 是否真的装了浏览器、`test:e2e:ext` 是否覆盖了每一个 spec 文件
 
 > 出包不再走 CI（原 `release` job 用 `v${github.sha}` 打 tag，与 `vX.Y.Z` 约定冲突，已删）；
-> 改由本地 `pnpm build:ext` 完成，见 [STORE.md](./STORE.md) 的「发布流程」。
+> 改由本地 `pnpm build:ext` 完成，见 [CHROMEWEBSTORE.md](./CHROMEWEBSTORE.md) 的「发布流程」。
 
 改 CI 时这个测试会先于 GitHub 告诉你结果。
 
