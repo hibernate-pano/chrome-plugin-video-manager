@@ -5,6 +5,45 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [6.0.4] - 2026-10-04
+
+### 修复 (Fixed)
+
+- 🖱 **网页全屏里左键点击视频恢复可暂停**：进入网页全屏后 `reparent` 会把
+  `<video>` 从站点播放器容器搬进我们自己的 overlay，视频的祖先链随之从
+  `VIDEO → .html5-video-container → #movie_player → …` 变成
+  `VIDEO → #vsc-page-fullscreen-stage → #vsc-page-fullscreen-overlay → BODY`。
+  站点那个「点击视频切换播放」的监听器挂在 `#movie_player` 这些祖先上、靠冒泡
+  收事件，祖先链一断就再也收不到点击 —— 实测 YouTube 全屏里左键点击毫无反应，
+  而空格正常（键盘走的是我们自己在 `document_start` 抢占注册的独立通道，与 DOM
+  位置无关）。根因是**接管了视频表面却没接管它原来的点击语义**。
+  现在 `FullscreenControls` 在 reparent 模式下给视频自己挂 `click`，单击 = 切换
+  播放/暂停，对齐站点原生语义。
+
+  三处边界刻意守住，否则会把「点一下没反应」换成「点一下等于没点」：
+
+  - `css-cover` 模式**不接管**：那种模式视频留在站点 DOM 原位，站点监听器照常
+    工作，我们再切一次就是双重切换（暂停又播放）。所以所有权判定是
+    `ownsVideoSurface()` 这个**函数**而不是常量 —— 180ms 探测可能把模式从
+    reparent 动态降级到 css-cover。
+  - `unmount()` 摘掉监听器：否则退出全屏后残留监听器会和站点自己的处理器双重切换。
+  - 只认左键；`event.defaultPrevented` 时让位给站点。
+
+  双击**不需要**去抖定时器：浏览器在一次双击里派发两个 `click`（`detail=1` 与
+  `detail=2`），两次切换互相抵消、播放状态净变化为零 —— 与 YouTube 原生双击的
+  实测表现一致（双击后 `paused` 不变、只进全屏）。
+
+### 测试 (Tests)
+
+- 单测新增 5 条（左键切换、控制条被唤醒、css-cover 不接管、非左键与
+  `defaultPrevented` 让位、unmount 后不再响应），148 → 153
+- E2E 新增 1 条回归守卫「网页全屏内左键点击视频切换播放」，15 → 16
+- 变异验证：把编译产物里的 `click` 监听器禁掉，新增 E2E 用例如期失败，
+  证明守卫有效而非空跑
+- 真实 Chromium + 真实扩展 + 真实 YouTube（走代理）五项回归全过：
+  全屏内单击暂停 / 再点恢复、双击净零、**退出全屏后点击只切换一次**、
+  右键不触发、overlay 与控制条 DOM 清理干净、无控制台报错
+
 ## [6.0.3] - 2026-10-04
 
 ### 修复 (Fixed)
