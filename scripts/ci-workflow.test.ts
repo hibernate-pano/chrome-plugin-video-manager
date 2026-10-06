@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { resolve } from 'node:path';
@@ -22,6 +22,7 @@ const repoRoot = process.cwd();
 const workflow = readFileSync(resolve(repoRoot, '.github/workflows/ci.yml'), 'utf8');
 const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;
+  version?: string;
 };
 
 /** 把工作流按 job 切开，返回 job 名 → 该 job 的文本块。 */
@@ -264,6 +265,127 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     for (const file of specFiles) {
       if (ignored.has(file)) continue;
       expect(script, `${file} 没有被 test:e2e:ext 引用，CI 不会执行它`).toContain(file);
+    }
+  });
+});
+
+describe('单元测试覆盖面', () => {
+  it('vitest 的 include 覆盖 src 与 scripts 下每一个含有测试的子目录', () => {
+    // 这个仓库有同一个形状的缺口两次：tsconfig.include 曾漏掉 popup 与
+    // background（~900 行从未被 tsc 看过，10 个类型错误一路发到商店），
+    // 于是有了下面那个「类型检查覆盖面」的守护。但 vitest.config.ts 的
+    // include 同样是逐条枚举，却没人守它——
+    //
+    //   实测：在 src/popup/ 放一个 expect(1).toBe(2) 的测试，
+    //   `vitest run` 依然输出 Test Files 17 passed / Tests 185 passed，零失败。
+    //   那个测试从未被执行，CI 全绿。
+    //
+    // 也就是说：新增一个带测试的目录却忘了改 vitest.config.ts，
+    // 会得到「所有测试都通过了」的假象。
+    const vitestConfig = readFileSync(resolve(repoRoot, 'vitest.config.ts'), 'utf8');
+
+    const includeMatch = vitestConfig.match(/include:\s*\[([\s\S]*?)\]/);
+    expect(includeMatch, 'vitest.config.ts 里找不到 test.include 数组').not.toBeNull();
+    const includeEntries = (includeMatch?.[1] ?? '')
+      .split(',')
+      .map((entry) => entry.trim().replace(/^['"`]|['"`]$/g, ''))
+      .filter(Boolean);
+
+    expect(includeEntries.length, 'vitest include 解析不出任何条目，正则可能已失效').toBeGreaterThan(0);
+
+    // 收集实际存在测试文件的目录（相对仓库根，用 / 分隔）。
+    const roots = ['src', 'scripts'];
+    const dirsWithTests = new Set<string>();
+    for (const root of roots) {
+      const rootDir = resolve(repoRoot, root);
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(rootDir, { recursive: true });
+      } catch {
+        continue;
+      }
+      for (const file of entries) {
+        if (!String(file).endsWith('.test.ts')) continue;
+        // readdirSync(root, { recursive: true }) 返回的是相对 root 的路径
+        // （如 `background/action.test.ts`），前缀要自己补回去。
+        const rel = `${root}/${String(file)}`.split(path.sep).join('/');
+        const dir = path.dirname(rel);
+        if (dir && dir !== '.') {
+          dirsWithTests.add(dir);
+        }
+      }
+    }
+
+    expect(dirsWithTests.size, '一个带测试的目录都没扫到，扫描逻辑本身可能坏了').toBeGreaterThan(0);
+
+    for (const dir of [...dirsWithTests].sort()) {
+      const covered = includeEntries.some((entry) => {
+        // 把 include 条目按 glob 语义简化成「目录前缀匹配」：
+        // `src/content/**/*.test.ts` 覆盖 `src/content` 下的所有测试。
+        const prefix = entry
+          .replace(/\/?\*\*\/.*$/, '')
+          .replace(/\/?\*\.test\.ts$/, '')
+          .replace(/\/$/, '');
+        return dir === prefix || dir.startsWith(`${prefix}/`);
+      });
+
+      expect(
+        covered,
+        `${dir} 下有测试文件，但 vitest.config.ts 的 include 没覆盖它 —— ` +
+          '这些测试永远不会执行，CI 会在它们从未运行的情况下显示全绿',
+      ).toBe(true);
+    }
+  });
+});
+
+describe('版本号单一来源', () => {
+  it('package.json 与 manifest.json 的 version 一致', () => {
+    // 版本号是手工同步的第二事实源（scripts/copy-assets.js 直接 copyFileSync
+    // manifest.json，全仓没有从 package.json 同步版本的代码）。
+    // 已经实际脱节过：tag v6.0.5 打在 9d249a4，而版本 bump 发生在其父提交
+    // 508d6f5，之后 9d249a4 又改了用户可见文案 ——
+    // 结果是 v6.0.5 的 zip 从未被构建出来，而 release/ 里只有 6.0.3。
+    const manifest = JSON.parse(
+      readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8'),
+    ) as { version?: string };
+
+    expect(manifest.version, 'manifest.json 缺少 version').toBeTruthy();
+    expect(
+      manifest.version,
+      `manifest.json(${manifest.version}) 与 package.json(${pkg.version}) 版本不一致 —— ` +
+        '商店上传的是包内 manifest，两处不一致会让线上版本与仓库版本错位',
+    ).toBe(pkg.version);
+  });
+
+  it('release/ 下不应残留与当前版本无关的旧包被误当作发布候选', () => {
+    // store-publish.mjs 的 findLatestZip() 只按文件名版本号取最大、不校验包内
+    // manifest，且全脚本没有 confirm/readline/prompt —— 裸跑会直接发到生产。
+    // 这里不禁止存在旧包（归档是合理的），但要求 release/ 里的包版本号
+    // 不超过当前仓库版本，避免「选包逻辑选中一个比仓库旧的包」。
+    const releaseDir = resolve(repoRoot, 'release');
+    if (!existsSync(releaseDir)) {
+      return;
+    }
+
+    const parse = (value: string) =>
+      value
+        .split('.')
+        .map((part) => Number(part))
+        .every((part) => Number.isInteger(part) && part >= 0);
+
+    const current = String(pkg.version).split('.').map(Number);
+    for (const file of readdirSync(releaseDir)) {
+      if (!file.toLowerCase().endsWith('.zip')) continue;
+      const matched = file.match(/(\d+)\.(\d+)\.(\d+)/);
+      if (!matched) continue;
+      const version = matched.slice(1, 4).map(Number);
+      expect(
+        version.every((part, i) => part <= current[i]!),
+        `release/${file} 的版本高于 package.json(${pkg.version})，发布时会选中它`,
+      ).toBe(true);
+      if (parse(matched[0]!)) {
+        // 版本号格式合法即可继续，无需额外断言。
+      }
     }
   });
 });
