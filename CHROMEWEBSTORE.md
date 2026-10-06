@@ -199,6 +199,7 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
+| 6.0.6 | 2026-10-06 | **商店改名**为 `Video Speed Controller — Fullscreen & Keys`（原名有 3 个逐字同名扩展，几乎必然导致装错）。功能与 6.0.5 完全一致，无代码变更 | **In Review**（2026-10-06 经 v2 API 实发，PENDING_REVIEW） |
 | 6.0.5 | 2026-10-04 | 新安装时会在你开始看视频后提示一次常用快捷键（之后不再出现）；无法接管的视频会明确告知而不是毫无反应；修复全屏进度条偶尔卡住不动的问题 | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100，已自动推给全部用户） |
 | 6.0.4 | 2026-10-04 | 修复在网页全屏里点击视频画面无法暂停/播放的问题（此前只有键盘快捷键有效）；点击语义现在与站点原生一致，双击行为不变 | Draft |
 | 6.0.3 | 2026-10-04 | 修 6 个影响边界缺陷（无 body 文档抛异常、shadow DOM 输入框被吞键、不可见视频被调速、iframe 提示错位、样式不自愈、跨 document 按 f 静默吞键） | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100） |
@@ -315,3 +316,29 @@ name / description / 截图字段 —— PUT 会被静默忽略（返回 304）�
 
 **回滚**：CWS 不允许降级安装，回滚只能发一个**版本号更大但内容等于旧版**的包；
 v2 的 `setPublishedDeployPercentage` 可按比例放量，是唯一的真回滚手段。
+
+---
+
+## 6.0.6 发布记录（2026-10-06）
+
+**发布方式**：v2 API（`node scripts/store-publish.mjs release/video-speed-controller-v6.0.6.zip --api=v2`）
+上传返回 `uploadState=SUCCEEDED, crxVersion=6.0.6`，发布后进入 `PENDING_REVIEW`。
+
+**⚠️ 发布时返回的警告**：`INCONSISTENT_LOCALE_METADATA`
+> Mismatching metadata: Discrepancies in feature desc…（响应中该字段被截断）
+
+已排除的原因：`_locales/en` 与 `_locales/zh_CN` 各 33 个键、键集合完全一致，
+且**不含** `extensionName` / `extensionDescription` 之类的 name/description 键
+（商店名只来自 `manifest.json`）。因此该警告不是扩展包内 i18n 造成的，
+而是**商店 listing 的多语言描述**（Dashboard 里的 en / zh_CN 详情）之间存在差异。
+
+**动作**：不阻塞提交，但为降低人工复审风险，等 6.0.6 上线后到 Dashboard
+把中文与英文的详细描述**对齐到逐段一致**（当前两段内容结构相同、措辞略有出入）。
+
+### 6.0.6 上线后的待办（Dashboard 内操作，API 改不了）
+
+- [ ] Support URL → <https://github.com/hibernate-pano/chrome-plugin-video-manager/issues>
+- [ ] Homepage URL → <https://github.com/hibernate-pano/chrome-plugin-video-manager>
+- [ ] 核对 Extension Name 是否已显示为 `Video Speed Controller — Fullscreen & Keys`
+- [ ] 对齐中英文详细描述（消除 `INCONSISTENT_LOCALE_METADATA` 的成因）
+- [ ] 截图 5 张重新确认（标题文案里不要出现已砍掉的功能）
