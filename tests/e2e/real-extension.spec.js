@@ -1,5 +1,5 @@
 import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -8,6 +8,17 @@ import { join, resolve } from 'node:path';
 const DIST = process.env.VSC_EXTENSION_DIR
   ? resolve(process.env.VSC_EXTENSION_DIR)
   : resolve(process.cwd(), 'dist');
+
+/**
+ * 从构建产物里读接管提示的全部语言文案。chrome.i18n 的 UI 语言跟随浏览器/
+ * 系统（CI 容器是英文，本机是中文），断言如果写死一种语言就会「本地过、
+ * CI 挂」——这个坑已实锤两次。Playwright 的 locale 选项在 macOS 上改变不了
+ * 扩展的 i18n 语言，所以断言对"任意一种已翻译文案"匹配。
+ */
+const takeoverNoticeTexts = ['en', 'zh_CN'].flatMap((locale) => {
+  const messages = JSON.parse(readFileSync(resolve(DIST, '_locales', locale, 'messages.json'), 'utf8'));
+  return [messages.noticeCannotTakeOver.message];
+});
 
 /**
  * 找到本机已装的 Chrome for Testing。
@@ -69,6 +80,8 @@ const launchExtension = async () => {
   const profile = mkdtempSync(join(tmpdir(), 'vsc-profile-'));
   const executablePath = findChromium();
 
+  // locale 固定成 zh-CN：chrome.i18n 的 UI 语言跟随浏览器，而 CI 容器是英文
+  // 环境，断言文案写死中文就会「本地过、CI 挂」。这个坑已实锤过一次。
   const candidates = [
     { label: 'channel:chromium', options: { channel: 'chromium', headless: true, args: launchArgs() } },
     { label: 'executablePath', options: { executablePath, headless: true, args: launchArgs() } },
@@ -375,7 +388,8 @@ test.describe('反馈：不让用户面对静默失败', () => {
       await page.keyboard.press('f');
 
       await expect(page.locator('#vsc-takeover-notice.vsc-visible')).toHaveCount(1);
-      await expect(page.locator('#vsc-takeover-notice')).toHaveText('这个视频暂时接管不了');
+      // 文案跟随浏览器语言（CI 是英文容器），断言对任一已翻译文案匹配。
+      await expect(page.locator('#vsc-takeover-notice')).toHaveText(new RegExp(`^(${takeoverNoticeTexts.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`));
       // 提示要贴住视频（坐标换算到 iframe 真实位置），不能掉到屏幕角落。
       const box = await page.locator('#vsc-takeover-notice').boundingBox();
       expect(box.x).toBeGreaterThan(50);
