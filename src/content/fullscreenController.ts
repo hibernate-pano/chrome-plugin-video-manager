@@ -1,4 +1,5 @@
 import { FullscreenControls } from './fullscreenControls';
+import { findOverlayLayers, OverlayLayer } from './overlayLayers';
 
 type FullscreenMode = 'reparent' | 'css-cover';
 
@@ -14,6 +15,8 @@ interface FullscreenSnapshot {
   playbackRate: number;
   paused: boolean;
   muted: boolean;
+  /** 跟着视频一起搬进 overlay 的浮层，退出时按原位放回。 */
+  overlayLayers: OverlayLayer[];
 }
 
 interface PlaybackSnapshot {
@@ -39,6 +42,7 @@ export class FullscreenController {
     playbackRate: 1,
     paused: true,
     muted: false,
+    overlayLayers: [],
   };
 
   private healthTimer: number | null = null;
@@ -96,6 +100,80 @@ export class FullscreenController {
     }
 
     return { overlay, stage };
+  }
+
+  /**
+   * 选择要跟着视频一起搬进 overlay 的浮层。
+   *
+   * 字幕（`kind === 'subtitle'`）搬：它是视频内容的一部分，离开视频就失去意义。
+   * 弹幕（`kind === 'overlay'`）**不搬**：满屏弹幕比没有字幕吵得多，
+   * 而且弹幕通常自带动画与自己的定位逻辑，搬进 overlay 反而容易错位。
+   * 留在原地的弹幕会被 overlay 的不透明背板挡住——这正是我们想要的。
+   *
+   * 只在这两个分支之间做选择，不引入第三种行为：要么字幕跟着走，
+   * 要么页面在背后保持原样但字幕不可见（见 `attachOverlayers` 的调用条件）。
+   */
+  private collectLayersToAttach(video: HTMLVideoElement): OverlayLayer[] {
+    return findOverlayLayers(video).filter((layer) => layer.kind === 'subtitle');
+  }
+
+  /**
+   * 方案 3 兜底：页面上有字幕层、但**一个都搬不动**时，退回 css-cover。
+   *
+   * 这条路径解决的是"识别到了却仍然被盖住"的情况——比如字幕层在
+   * 别的插件生成、几何形态恰好落在字幕判据之外。此时与其让用户得到一个
+   * "全屏了但字幕不见了、且看起来一切正常"的结果，不如让视频留在页面原位：
+   * 全屏没那么干净，但字幕一定还在。
+   *
+   * ⚠️ 只对**字幕层**成立。弹幕被背板挡住是预期行为（满屏弹幕比没有字幕
+   * 吵得多），绝不能因此牺牲全屏——早先的版本把"有任何浮层"当成降级理由，
+   * 结果每个开着弹幕的 B站 页面都拿不到真正的全屏。
+   *
+   * @param layersToAttach 搬运前已探明的字幕层；非空说明增强方案能生效，
+   *                        此时全屏与字幕可以兼得，没有任何理由降级。
+   */
+  private shouldDegradeForOverlays(video: HTMLVideoElement, layersToAttach: OverlayLayer[]): boolean {
+    if (layersToAttach.length > 0) {
+      return false;
+    }
+
+    // 搬运列表为空，但页面上确实存在字幕层：它们搬不动。
+    return findOverlayLayers(video).some((layer) => layer.kind === 'subtitle');
+  }
+
+  /**
+   * 把字幕层搬进 stage，紧贴视频之后。
+   *
+   * 字幕原本靠 `position:absolute; bottom:2%` 相对**播放器容器**定位，
+   * 容器不动时它在原地、跟着满屏的视频错开。搬进 stage 后它的定位参照物
+   * 变成了 stage（同样铺满视口），`bottom:2%` 仍然把字幕按在画面底部——
+   * 相对关系被保留，不需要改它的任何样式。
+   *
+   * 顺序很关键：字幕必须在视频**之后**插入，否则 z-index 低的字幕会被
+   * 视频（z-index 2147483646）盖住，变成"搬进来了但看不见"。
+   */
+  private attachOverlayers(stage: HTMLElement, layers: OverlayLayer[]) {
+    for (const { element } of layers) {
+      if (element.isConnected) {
+        stage.appendChild(element);
+      }
+    }
+  }
+
+  /** 退出时把浮层放回它们原来的父节点与兄弟位置。 */
+  private restoreOverlayers(layers: OverlayLayer[]) {
+    for (const { element, originalParent, originalNextSibling } of layers) {
+      if (!originalParent) {
+        continue;
+      }
+
+      // 与视频同一个道理：全屏期间页面可能把这个节点连同它的原兄弟一起
+      // 移走或重建，insertBefore 指向已脱离的节点会抛 NotFoundError
+      // 打断整个退出流程，让视频永久卡在全屏里。sibling 失效就退回 append。
+      const siblingStillValid =
+        originalNextSibling !== null && originalNextSibling.parentNode === originalParent;
+      originalParent.insertBefore(element, siblingStillValid ? originalNextSibling : null);
+    }
   }
 
   private capturePlaybackSnapshot(video: HTMLVideoElement): PlaybackSnapshot {
@@ -171,6 +249,11 @@ export class FullscreenController {
     }
 
     const playbackSnapshot = this.capturePlaybackSnapshot(video);
+    // 浮层已经被搬进 overlay 了：回退到 css-cover 必须先把它们放回页面，
+    // 否则字幕会被永久留在 overlay 里，而视频已经回到站点 DOM ——
+    // 字幕从此再也不跟着视频走，且没有任何提示。
+    this.restoreOverlayers(this.state.overlayLayers);
+    this.state.overlayLayers = [];
     this.restoreToOriginalSlot(video);
     this.state.mode = 'css-cover';
     // 摘掉 vsc-active 即彻底 display:none（runtimeStyles.ts:4-16），一个像素都不画。
@@ -192,6 +275,11 @@ export class FullscreenController {
         // 页面已经把这个节点从文档里丢掉了：不能走 exit()，否则会把废弃节点
         // 重新插回它原来的父节点（originalNextSibling 也可能已被移除 → NotFoundError），
         // 还会对没人看的游离节点调 play()。这里只做清理。
+        //
+        // 浮层仍要放回页面：视频节点虽然没了，但字幕是站点自己的节点，
+        // 把它留在马上要删除的 overlay 里等于让字幕凭空消失。
+        this.restoreOverlayers(this.state.overlayLayers);
+        this.state.overlayLayers = [];
         this.release();
       }
     }, 500);
@@ -229,9 +317,16 @@ export class FullscreenController {
     // fallbackToCssCover() 的回退路径上赋值。
     const mode: FullscreenMode = 'reparent';
 
+    // 搬运浮层之前先把它们的位置记下来：collectLayersToAttach 依赖
+    // getBoundingClientRect，而那时视频还没被搬走，坐标才是对的。
+    const layersToAttach = this.collectLayersToAttach(video);
+    // 有浮层却一个字幕层都没识别出来：与其让字幕在满屏里消失得无声无息，
+    // 不如直接走 css-cover，让视频留在页面原位、字幕保持可见。
+    const degradeForOverlays = this.shouldDegradeForOverlays(video, layersToAttach);
+
     this.state = {
       video,
-      mode,
+      mode: degradeForOverlays ? 'css-cover' : mode,
       originalParent: video.parentNode,
       originalNextSibling: video.nextSibling,
       originalStyle: video.getAttribute('style') ?? '',
@@ -241,6 +336,7 @@ export class FullscreenController {
       playbackRate: video.playbackRate,
       paused: video.paused,
       muted: video.muted,
+      overlayLayers: degradeForOverlays ? [] : layersToAttach,
     };
 
     overlay.classList.add('vsc-active');
@@ -257,10 +353,12 @@ export class FullscreenController {
     });
     this.controls.mount();
 
-    if (mode === 'reparent') {
+    if (!degradeForOverlays) {
       const playbackSnapshot = this.capturePlaybackSnapshot(video);
       this.applyFullscreenLayout(video, 'reparent');
       stage.appendChild(video);
+      // 视频之后：字幕的 z-index 通常远低于 2147483646，插在视频前面会被盖住。
+      this.attachOverlayers(stage, layersToAttach);
       this.restoreIfLost(video, playbackSnapshot);
 
       window.setTimeout(() => {
@@ -324,6 +422,7 @@ export class FullscreenController {
       playbackRate: 1,
       paused: true,
       muted: false,
+      overlayLayers: [],
     };
   }
 
@@ -346,6 +445,16 @@ export class FullscreenController {
     if (!video) {
       return;
     }
+
+    // 还原顺序：浮层先、视频后。
+    //
+    // 字幕原本就排在视频后面（`video, subtitle, …`），所以视频记录的
+    // originalNextSibling 正是字幕本身。若先还原视频，`insertBefore(video, 字幕)`
+    // 会把字幕顶到视频**前面** —— 页面上看不出异样，但字幕从此不再跟随视频，
+    // 而且没有任何报错。先把字幕按自己的原位放回去，再还原视频，
+    // 视频的 originalNextSibling 校验就会因为字幕已归位而正确落位。
+    this.restoreOverlayers(this.state.overlayLayers);
+    this.state.overlayLayers = [];
 
     // isConnected 守卫：页面若已把视频连同 originalNextSibling 一起丢弃，
     // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。

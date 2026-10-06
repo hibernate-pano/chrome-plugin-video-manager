@@ -194,6 +194,21 @@ describe('CI 工作流：job 依赖图', () => {
   it('类型检查仍然被 build 门禁住 —— tsc 折在 package.json 的 build 里', () => {
     expect(pkg.scripts['build']).toMatch(/^\s*tsc\s*&&/);
   });
+
+  it('E2E 脚本必须先构建 —— 否则会拿上一次成功的产物跑真实的浏览器断言', () => {
+    // 这不是洁癖。做 6.0.8 的字幕兼容时真的踩到了：`noUnusedLocals` 让
+    // 变异版源码构建失败（tsc 先退出），vite 根本没跑，dist/ 留着上一次
+    // 的产物 —— 而 `pnpm test:e2e` 里的 `&&` 在 shell 层会把失败传出去，
+    // 手动分步跑时却极易以为「E2E 通过 = 改动生效」。
+    //
+    // 反过来也危险：E2E 真加载 dist/，dist 过期等于在测一个不存在的版本。
+    // 这里钉死"先 build 再 playwright"，让这条契约不能被无声改掉。
+    for (const script of ['test:e2e', 'test:e2e:ext']) {
+      expect(pkg.scripts[script], `${script} 必须先构建再跑 playwright`).toMatch(
+        /pnpm\s+build\s*&&\s*playwright\s+test/,
+      );
+    }
+  });
 });
 
 describe('CI 工作流：action 版本与 Node 运行时', () => {

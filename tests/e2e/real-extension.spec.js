@@ -417,3 +417,90 @@ test.describe('反馈：不让用户面对静默失败', () => {
     }
   });
 });
+
+/**
+ * 模拟沉浸式翻译等插件注入的字幕层：它是 video 的**兄弟节点**，
+ * 绝对定位、贴在视频底部（与 GitHub 上报的 imt-caption-container 形态一致）。
+ *
+ * 这是真实浏览器才测得出来的行为：jsdom 没有布局引擎，
+ * getBoundingClientRect 全是 0，字幕的搬运与还原无法验证。
+ */
+const playerWithSubtitleHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>vsc subtitle compat</title>
+<style>
+  body{margin:0;background:#111}
+  #player{position:relative;width:640px;height:360px}
+  video{width:640px;height:360px;background:#000}
+  #imt-caption-container{
+    position:absolute;left:15%;right:15%;bottom:8%;height:60px;
+    background:rgba(0,0,0,.6);color:#fff;font:16px/1.4 sans-serif;
+  }
+</style>
+</head><body>
+<div id="player">
+  <video id="v1" muted playsinline></video>
+  <div id="imt-caption-container">这是双语字幕</div>
+</div>
+</body></html>`;
+
+test.describe('字幕等浮层兼容性', () => {
+  test('网页全屏时字幕跟着视频一起满屏，退出后回到原位', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await serveHtml(page, playerWithSubtitleHtml);
+      await page.goto('https://vsc-subtitle-test.example/');
+      await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+      await page.locator('#v1').click();
+
+      await page.keyboard.press('f');
+      await expect
+        .poll(() => page.evaluate(() => Boolean(document.getElementById('vsc-page-fullscreen-overlay'))), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+      // 字幕必须跟着视频进入 overlay —— 留在站点播放器里就等于留在原地看不见了。
+      const inFullscreen = await page.evaluate(() => {
+        const stage = document.getElementById('vsc-page-fullscreen-stage');
+        const caption = document.getElementById('imt-caption-container');
+        const video = document.getElementById('v1');
+        if (!stage || !caption || !video) return null;
+        const kids = Array.from(stage.children);
+        return {
+          captionInStage: stage.contains(caption),
+          captionAfterVideo: kids.indexOf(caption) > kids.indexOf(video),
+          captionVisible: caption.getBoundingClientRect().height > 0,
+        };
+      });
+      expect(inFullscreen).not.toBeNull();
+      expect(inFullscreen.captionInStage, '字幕应被搬进 stage 跟随视频').toBe(true);
+      expect(inFullscreen.captionAfterVideo, '字幕必须排在视频之后，否则会被高 z-index 盖住').toBe(true);
+      expect(inFullscreen.captionVisible).toBe(true);
+
+      await page.keyboard.press('f');
+      await expect
+        .poll(() => page.evaluate(() => Boolean(document.getElementById('vsc-page-fullscreen-overlay'))), {
+          timeout: 10_000,
+        })
+        .toBe(false);
+
+      // 退出后字幕必须回到播放器容器里、且仍在视频之后。
+      const afterExit = await page.evaluate(() => {
+        const player = document.getElementById('player');
+        const caption = document.getElementById('imt-caption-container');
+        const video = document.getElementById('v1');
+        if (!player || !caption || !video) return null;
+        const kids = Array.from(player.children);
+        return {
+          captionBackInPlayer: player.contains(caption),
+          captionAfterVideo: kids.indexOf(caption) > kids.indexOf(video),
+        };
+      });
+      expect(afterExit).not.toBeNull();
+      expect(afterExit.captionBackInPlayer, '退出后字幕必须回到站点播放器').toBe(true);
+      expect(afterExit.captionAfterVideo, '退出后字幕顺序必须完全恢复').toBe(true);
+    } finally {
+      await ext.close();
+    }
+  });
+});
