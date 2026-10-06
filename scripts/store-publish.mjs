@@ -1,10 +1,11 @@
 /**
  * store-publish.mjs — 上传 zip 到 Chrome Web Store 并发布到 default 渠道。
  *
- * ⚠️ API 版本：默认走 v1.1（已知对本机凭证可用），可选 --api=v2。
- *    2026-09-26 实测：v2 端点（chromewebstore.googleapis.com/v2/...）对本凭证一律 404，
- *    而 v1.1（www.googleapis.com/chromewebstore/v1.1）确定可用，因此 v1.1 不能被删。
- *    v2 需要 CWS_PUBLISHER_ID（UUID，如 19d9e44e-...，**不是** 32 位 item id）。
+ * ⚠️ API 版本：默认走 v2。v1.1 将于 2026-10-15 停止支持（官方公告），
+ *    且 2026-10-06 已实测 v2 fetchStatus 对本凭证返回 200（此前 404 的判断过时）。
+ *    --api=v1 仍保留作回退，v1.1 停支后即不可用。
+ *    v2 需要 CWS_PUBLISHER_ID（UUID，如 19d9e44e-...，**不是** 32 位 item id），
+ *    已配置在 ~/.config/mcp/mcp.json 的 mcpServers["cws-mcp"].env。
  *
  * ⚠️ 能力边界：API 只有 upload / fetchStatus / publish / cancelSubmission，
  *    **没有 listing metadata（名称/描述/截图）接口**。想改商店文案、截图、分类等，
@@ -235,7 +236,7 @@ const cancelOnly = flags.has('--cancel');
 const zipArg = positional[0];
 
 const apiFlag = argv.find((a) => a.startsWith('--api='));
-const apiVersion = apiFlag ? apiFlag.slice('--api='.length) : 'v1';
+const apiVersion = apiFlag ? apiFlag.slice('--api='.length) : 'v2';
 if (apiVersion !== 'v1' && apiVersion !== 'v2') {
   console.error(`未知 API 版本: ${apiVersion}（可用：--api=v1 或 --api=v2）`);
   process.exit(1);
