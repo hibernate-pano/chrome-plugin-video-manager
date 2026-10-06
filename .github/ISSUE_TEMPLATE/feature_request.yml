@@ -1,0 +1,53 @@
+name: 提一个功能建议
+description: 提议一个新功能或对现有行为的改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢建议。这个项目的原则是**靠减法**，所以我更看重你的使用场景，
+        而不只是功能本身——这样我才能判断它值不值得加进来。
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 你在什么情况下会用它
+      description: 描述具体场景，而不是功能本身。例如「上四六级网课时，我想反复听某一句」。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你提议怎么做
+    validations:
+      required: true
+
+  - type: textarea
+    id: tradeoff
+    attributes:
+      label: 你觉得它会让什么变差
+      description: |
+        可选，但很有价值。这个产品明确砍掉过弹窗、徽章、预设档位等常驻界面，
+        任何新功能都要回答「它打扰了谁」。
+    validations:
+      required: false
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 你会多久用一次
+      options:
+        - 每天
+        - 每周几次
+        - 每月几次
+        - 偶尔一次
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **如果你是从 Chrome 商店装来的**：也欢迎直接在商店留下评论。
+        商店评论对我判断「到底有多少人在用、为什么用」比 GitHub issue 更重要。

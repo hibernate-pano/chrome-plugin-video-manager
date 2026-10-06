@@ -48,7 +48,7 @@
 
 1. **选择任务**
 
-   - 查看 [Issues](https://github.com/yourusername/chrome-plugin-video-manager/issues)
+   - 查看 [Issues](https://github.com/hibernate-pano/chrome-plugin-video-manager/issues)
    - 寻找标有 `good first issue` 或 `help wanted` 的问题
    - 在开始工作前评论表明您的意图
 
@@ -75,14 +75,14 @@
 1. **Fork 并克隆仓库**
 
    ```bash
-   git clone https://github.com/YOUR-USERNAME/chrome-plugin-video-manager.git
+   git clone https://github.com/hibernate-pano/chrome-plugin-video-manager.git
    cd chrome-plugin-video-manager
    ```
 
 2. **添加上游仓库**
 
    ```bash
-   git remote add upstream https://github.com/ORIGINAL-OWNER/chrome-plugin-video-manager.git
+   git remote add upstream https://github.com/hibernate-pano/chrome-plugin-video-manager.git
    ```
 
 3. **安装依赖**
@@ -365,7 +365,7 @@ git push origin feature/my-new-feature
 
 如果您有任何问题：
 
-- 查看现有的 [Issues](https://github.com/yourusername/chrome-plugin-video-manager/issues)
+- 查看现有的 [Issues](https://github.com/hibernate-pano/chrome-plugin-video-manager/issues)
 - 创建新的 Discussion
 - 联系维护者
 

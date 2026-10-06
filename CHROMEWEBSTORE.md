@@ -9,11 +9,19 @@
 **Extension Name** [REQUIRED]
 <!-- Must match manifest.json "name". Max 75 characters. -->
 
-Video Speed Controller
+Video Speed Controller — Fullscreen & Keys
 
-> ⚠️ 商店里已有 3 个**逐字同名**的扩展（其中 iglupo 那个约 300 万用户）。政策没有禁止同名，
-> 同名能上架。已决定**不改名**（改动最小、不动 manifest、不重新出包）。代价是放弃差异化，
-> 因此**不要**在图标、截图风格、文案上继续靠近竞品。
+> **2026-10-06 决策：改名。** 原名 "Video Speed Controller" 在商店里有 3 个逐字同名的扩展
+> （其中 iglupo 那个约 300 万用户）。同名能上架，但搜索结果里三个一模一样的图标和名字
+> 摆在用户面前，几乎必然装错——漏斗最上游在漏，且这种损失无法用更好的文案或截图补回来。
+>
+> 新名把**两件真实差异**写进标题：Fullscreen（网页全屏）与 Keys（可改键的键盘控制）。
+> 42 字符，在 75 上限内。
+>
+> ⚠️ 改名**必须出新包过审**（商店名来自 `manifest.json` 的 `name`）。当前线上是 6.0.5，
+> 已确认 PUBLISHED 且无待审版本，此刻是改动成本最低的窗口。
+> 改名不影响已安装用户与自动更新——扩展 ID 由公钥派生，与名称无关。
+> 详见文末「改名执行清单」。
 
 **Short Description** [REQUIRED]
 <!-- Max 132 characters. Shown in search results and tiles. Be specific about function. -->
@@ -177,17 +185,21 @@ panbo362472407@gmail.com
 
 **Support URL / Email** [RECOMMENDED]
 
-⚠️ 待补。建议用仓库 Issues 页。
+https://github.com/hibernate-pano/chrome-plugin-video-manager/issues
+
+> 仓库已于 2026-10-06 转为公开，并配好 bug / 功能建议两份 issue 模板。
+> 商店 listing 的 Support URL 是很多用户判断「作者是否还活着」的信号，
+> 而且它**不经过审核**，可以随时改。
 
 **Homepage URL** [RECOMMENDED]
 
-⚠️ 待补。
+https://github.com/hibernate-pano/chrome-plugin-video-manager
 
 ## Version History
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 6.0.5 | 2026-10-04 | 新安装时会在你开始看视频后提示一次常用快捷键（之后不再出现）；无法接管的视频会明确告知而不是毫无反应；修复全屏进度条偶尔卡住不动的问题 | In Review（2026-10-06 经 v2 API 提交，PENDING_REVIEW） |
+| 6.0.5 | 2026-10-04 | 新安装时会在你开始看视频后提示一次常用快捷键（之后不再出现）；无法接管的视频会明确告知而不是毫无反应；修复全屏进度条偶尔卡住不动的问题 | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100，已自动推给全部用户） |
 | 6.0.4 | 2026-10-04 | 修复在网页全屏里点击视频画面无法暂停/播放的问题（此前只有键盘快捷键有效）；点击语义现在与站点原生一致，双击行为不变 | Draft |
 | 6.0.3 | 2026-10-04 | 修 6 个影响边界缺陷（无 body 文档抛异常、shadow DOM 输入框被吞键、不可见视频被调速、iframe 提示错位、样式不自愈、跨 document 按 f 静默吞键） | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100） |
 | 6.0.2 | 2026-10-04 | CI 升到 Node 24 与 Actions 新主版本；清理分支 | Draft |
@@ -281,3 +293,25 @@ name / description / 截图字段 —— PUT 会被静默忽略（返回 304）�
 症状是 `invalid_grant | Token has been expired or revoked`。
 
 版本号约定见 [.memory/version-bump-not-force-tag.md](./.memory/version-bump-not-force-tag.md)：bump version → commit → 打新 tag `vX.Y.Z` → push，绝不 force 移动已存在的 tag。
+
+---
+
+## 改名执行清单（6.0.6）
+
+商店名来自 `manifest.json` 的 `name`，**改名必须出新包并重新过审**，不能只改 Dashboard。
+当前线上 6.0.5 已 PUBLISHED 且无待审版本，是执行成本最低的窗口。
+
+- [ ] 1. `manifest.json` 的 `name` 与 `default_locale` 下的 `_locales/en/messages.json`
+      （`extensionName`）改为 `Video Speed Controller — Fullscreen & Keys`，
+      两个文件必须一致（商店只认 manifest，但设置页标题走 i18n）
+- [ ] 2. `package.json` 与 `manifest.json` 版本号同步升到 `6.0.6`
+- [ ] 3. `pnpm test && pnpm build` 全绿
+- [ ] 4. `pnpm build:ext` 出包，人工确认 zip 顶层是 `manifest.json`、内部版本号是 6.0.6
+- [ ] 5. `node scripts/store-publish.mjs release/video-speed-controller-v6.0.6.zip --dry-run --api=v2`
+      看一遍再实发；**永远显式传 zip 路径**（`findLatestZip` 不校验包内版本）
+- [ ] 6. 发布前把本文件的 Name / Short Description / 详细描述 / 截图，
+      逐字段粘贴到 Developer Dashboard（API 改不了 metadata）
+- [ ] 7. 过审上线后，回本文件把 6.0.6 状态改为 Published
+
+**回滚**：CWS 不允许降级安装，回滚只能发一个**版本号更大但内容等于旧版**的包；
+v2 的 `setPublishedDeployPercentage` 可按比例放量，是唯一的真回滚手段。

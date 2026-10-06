@@ -1,0 +1,87 @@
+name: 报告一个 Bug
+description: 某个功能没有按预期工作
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量具体地描述你看到的现象。
+
+        **请勿在此粘贴任何个人数据、账号信息或订阅内容。**
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 你做了什么操作，期望看到什么，实际看到了什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 如何复现
+      description: 一步步写下来，理想情况下是别人也能照着复现的步骤。
+      placeholder: |
+        1. 打开 https://example.com/watch
+        2. 按 f 进入网页全屏
+        3. 点击控制条中间的进度条
+        4. 进度条没有动
+    validations:
+      required: true
+
+  - type: input
+    id: extension-version
+    attributes:
+      label: 扩展版本
+      description: 在 chrome://extensions 页面的「版本」一栏可以看到。
+      placeholder: "6.0.5"
+    validations:
+      required: true
+
+  - type: input
+    id: site
+    attributes:
+      label: 出问题的网站
+      description: 域名即可，不需要完整链接。
+      placeholder: "youtube.com"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: page-type
+    attributes:
+      label: 视频所在位置
+      options:
+        - 网站自己的播放器（直接播放在页面上）
+        - 同源 iframe 内
+        - 跨域 iframe 内
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望的行为
+    validations:
+      required: false
+
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与操作系统
+      placeholder: "Chrome 141 / macOS 26"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 发布前请确认
+      options:
+        - label: 我确认这不是受版权保护的流媒体内容（如 Netflix、腾讯视频等加密视频），扩展设计上无法接管它们
+          required: false
+        - label: 我已确认扩展版本号（见上）
+          required: false
