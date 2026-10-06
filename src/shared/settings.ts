@@ -1,6 +1,7 @@
 import {
   DEFAULT_SHORTCUTS,
   FIRST_RUN_HINT_KEY,
+  LEGACY_SITE_SPEEDS_KEY,
   LEGACY_SHORTCUTS_KEY,
   PersistedSettings,
   STORAGE_KEY,
@@ -225,6 +226,17 @@ export const wasFirstRunHintShown = async (): Promise<boolean> =>
 
 export const markFirstRunHintShown = async (): Promise<void> => {
   await setValue('local', FIRST_RUN_HINT_KEY, true);
+};
+
+/**
+ * 清掉 6.0.7 起废弃的站点速度记忆表。
+ *
+ * 功能已删除，但老用户机器上仍留着 `vsc-site-speeds`——它记录了用户访问过哪些
+ * 站点并带着播放速度偏好，属于不该继续留存的历史数据。启动时清一次即可：
+ * 键不存在时 remove 是空操作，不值得为此加重试或版本判断。
+ */
+export const purgeLegacySiteSpeeds = async (): Promise<void> => {
+  await removeValue('local', LEGACY_SITE_SPEEDS_KEY);
 };
 
 export const subscribeToSettings = (

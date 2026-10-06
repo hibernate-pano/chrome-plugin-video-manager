@@ -3,6 +3,7 @@ import {
   loadSettings,
   markFirstRunHintShown,
   normalizePersistedSettings,
+  purgeLegacySiteSpeeds,
   saveSettings,
   subscribeToSettings,
   wasFirstRunHintShown,
@@ -10,6 +11,7 @@ import {
 import {
   DEFAULT_SHORTCUTS,
   FIRST_RUN_HINT_KEY,
+  LEGACY_SITE_SPEEDS_KEY,
   LEGACY_SHORTCUTS_KEY,
   STORAGE_KEY,
 } from './types';
@@ -251,6 +253,7 @@ describe('normalizePersistedSettings', () => {
 const installFakeLocal = () => {
   const store = new Map<string, unknown>();
   const writes: Array<Record<string, unknown>> = [];
+  const removals: string[] = [];
 
   vi.stubGlobal('chrome', {
     runtime: { lastError: null },
@@ -264,11 +267,16 @@ const installFakeLocal = () => {
           Object.entries(obj).forEach(([key, value]) => store.set(key, value));
           callback?.();
         },
+        remove: (key: string, callback?: () => void) => {
+          removals.push(key);
+          store.delete(key);
+          callback?.();
+        },
       },
     },
   });
 
-  return { store, writes };
+  return { store, writes, removals };
 };
 
 describe('first-run hint flag', () => {
@@ -296,5 +304,29 @@ describe('first-run hint flag', () => {
     store.set(FIRST_RUN_HINT_KEY, 'true');
 
     await expect(wasFirstRunHintShown()).resolves.toBe(false);
+  });
+});
+
+describe('legacy site speed memory purge', () => {
+  it('deletes the abandoned per-site speed table from storage.local', async () => {
+    const { store, removals } = installFakeLocal();
+    // 6.0.7 删掉了站点速度记忆，但老用户机器上这份数据还在：
+    // 它记录了访问过哪些站点并带着速度偏好，不该继续留存。
+    store.set(LEGACY_SITE_SPEEDS_KEY, { 'youtube.com': 2, 'example.com': 1.75 });
+
+    await purgeLegacySiteSpeeds();
+
+    expect(store.has(LEGACY_SITE_SPEEDS_KEY)).toBe(false);
+    // 只删这一个键：别顺手清掉引导状态或快捷键。
+    expect(removals).toEqual([LEGACY_SITE_SPEEDS_KEY]);
+  });
+
+  it('is a no-op on a fresh install that never had the key', async () => {
+    const { store, removals } = installFakeLocal();
+
+    await purgeLegacySiteSpeeds();
+
+    expect(removals).toEqual([LEGACY_SITE_SPEEDS_KEY]);
+    expect(store.has(LEGACY_SITE_SPEEDS_KEY)).toBe(false);
   });
 });

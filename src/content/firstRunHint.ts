@@ -193,7 +193,7 @@ export class FirstRunHint {
   }
 }
 
-/** 生产环境用的一组默认依赖：状态存在 storage.local，与站点速度记忆同一个域。 */
+/** 生产环境用的一组默认依赖：状态存在 storage.local。 */
 export const createFirstRunHint = (getShortcuts: () => ShortcutSettings) =>
   new FirstRunHint({
     getShortcuts,

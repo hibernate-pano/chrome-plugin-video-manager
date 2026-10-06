@@ -39,7 +39,7 @@ Video Speed Controller 把网页里的视频变成一个干净的全屏播放器
 
 主要功能
 网页全屏：按 f 让正在看的视频铺满整个视口，再按 f 或 Esc 退出，退出后页面布局完整还原。鼠标移动时浮现一条极简控制条，静止 3 秒自动淡出；控制条包含播放/暂停、可拖动的进度、时间、音量、当前速度与退出。扩展会自动挑出你正在看的那个视频。
-播放速度：按 = 加速、- 减速，每次 0.1 倍；按住任一键可连续调速。按 0 回到 1.0 倍。调速时角落会淡入一个「1.5x」小胶囊，约一秒后消失，不打扰你。每个网站的速度会被记住，下次回到该网站自动恢复。
+播放速度：按 = 加速、- 减速，每次 0.1 倍；按住任一键可连续调速。按 0 回到 1.0 倍。调速时角落会淡入一个「1.5x」小胶囊，约一秒后消失，不打扰你。速度不会被记住：任何视频都从 1.0x 开始，看网课还是看纪录片，由你当场决定。
 播放控制：空格播放或暂停，左右方向键后退或前进 5 秒。
 快捷键由你决定：全部 7 个动作都能在设置页改绑，留空即禁用该动作。重复绑定会在保存前被拦下，与浏览器保留键冲突的绑定会被标出。
 点击工具栏图标即可切换当前标签页的网页全屏。
@@ -51,7 +51,7 @@ Video Speed Controller 把网页里的视频变成一个干净的全屏播放器
 只控制视频，不控制纯音频。来自其他网站的嵌入式播放器可能无法直接接管。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
 
 隐私
-不收集任何个人数据，也不向开发者发送任何数据。你的快捷键设置保存在 Chrome 的同步扩展存储中，因此会跟随你的 Chrome 账号；每个网站的速度只保存在本机浏览器里。扩展只在页面上查找并控制视频元素。
+不收集任何个人数据，也不向开发者发送任何数据。你的快捷键设置保存在 Chrome 的同步扩展存储中，因此会跟随你的 Chrome 账号。扩展不保存你的播放速度，也不记录你访问过哪些网站——它只在页面上查找并控制视频元素。
 
 ---
 
@@ -59,7 +59,7 @@ Video Speed Controller turns web video into a clean, fullscreen player, and give
 
 What it does
 Page fullscreen: press f to fill the viewport with the video you are actually watching; f or Esc leaves, and your page layout is fully restored. A minimal control bar appears when you move the mouse and fades out after 3 seconds of stillness. It carries play/pause, draggable progress, time, volume, current speed and exit. The extension picks the video you are watching for you.
-Playback speed: press = to speed up and - to slow down, in 0.1x steps; hold either key to keep stepping. Press 0 to return to 1.0x. A small "1.5x" capsule fades in for about a second and then leaves. Your speed is remembered per site and restored when you come back.
+Playback speed: press = to speed up and - to slow down, in 0.1x steps; hold either key to keep stepping. Press 0 to return to 1.0x. A small "1.5x" capsule fades in for about a second and then leaves. Speed is never remembered: every video starts at 1.0x, so a lecture at 2.0x never follows you into the documentary you open next.
 Playback control: Space plays or pauses. Left and Right arrows skip back or forward 5 seconds.
 Shortcuts you control: all seven actions can be rebound on the options page, and any of them can be left empty to disable it. Duplicate bindings are caught before you save, and shortcuts the browser reserves are flagged.
 Click the toolbar icon to toggle page fullscreen for the current tab.
@@ -71,7 +71,7 @@ Scope
 Controls video only, not audio-only players. Embedded players from other sites may not be directly controllable. Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
 
 Privacy
-No personal data is collected, and nothing is sent to the developer. Your shortcut settings are stored in Chrome's synced extension storage, so they follow your Chrome account; per-site speed is stored only in your local browser. The extension only looks for and controls video elements on the pages you visit.
+No personal data is collected, and nothing is sent to the developer. Your shortcut settings are stored in Chrome's synced extension storage, so they follow your Chrome account. The extension does not store your playback speed and keeps no record of which sites you visit; it only looks for and controls video elements on the pages you visit.
 
 **Category** [REQUIRED]
 <!-- CWS 当前的可选值（18 项）：Accessibility, Art & Design, Communication, Developer Tools,
@@ -102,7 +102,7 @@ English
 | Screenshot 2 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-controls.png` |
 | Screenshot 3 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-speed-toast.png` |
 | Screenshot 4 | 1280×800 | ✅ Ready | `store-assets/output/store-options.png` |
-| Screenshot 5 | 1280×800 | ✅ Ready | `store-assets/output/store-site-speed.png` |
+| Screenshot 5 | 1280×800 | 🟡 Needs update | `store-assets/output/store-fresh-speed.png` |
 | Small Promo Tile [RECOMMENDED] | 440×280 | ✅ Ready | `store-assets/output/store-promo-tile.png` |
 | Marquee Promo Tile | 1400×560 | ⬜ Not created | |
 
@@ -118,7 +118,7 @@ English
 2. `store-controls` — 控制条特写，标题 `Auto-hiding controls, out of your way`
 3. `store-speed-toast` — 调速小胶囊特写，标题 `Fine-tune speed in 0.1x steps`
 4. `store-options` — 设置页 7 行改绑表（英文），标题 `7 shortcuts you can rebind`
-5. `store-site-speed` — 站点速度记忆，标题 `Your speed, remembered per site`
+5. `store-fresh-speed` — 「不记忆速度」，标题 `Every video starts at 1.0x`（6.0.7 起替换原站点速度记忆截图）
 
 ⚠️ 第 5 张是演示页造的**虚构场景**（不是产品真实 UI），措辞与呈现需人工把关。
 ⚠️ 第 2、3 张是 2x 放大特写，不是像素裁切。
@@ -127,7 +127,7 @@ English
 
 | Permission | Type | Justification |
 |------------|------|---------------|
-| `storage` | permissions | Stores your shortcut bindings so they persist and sync with your Chrome profile, and your per-site playback speed so it can be restored on your next visit. |
+| `storage` | permissions | Stores your shortcut bindings so they persist and sync with your Chrome profile. Nothing else is stored. |
 | `<all_urls>` | host_permissions | Video playback is not tied to any particular site, so the extension has to find and control the video element on whatever page you are watching. It reads only video elements and their playback state. It does not read page text, form data, or your browsing history, and nothing is sent anywhere. |
 
 ## Privacy & Data Use
@@ -146,7 +146,7 @@ English
 | Authentication info | No | No | — | No |
 | Personal communications | No | No | — | No |
 | Location | No | No | — | No |
-| Web history | **Yes** | No | 站点速度记忆会按 hostname 记住该站点的播放速度，仅存于本机 `chrome.storage.local` | No |
+| Web history | **No** | No | 6.0.7 起不再记录任何站点信息；历史版本曾按 hostname 记忆播放速度，升级时已自动清除 | No |
 | User activity | **Yes** | **Yes** | 快捷键绑定存于 `chrome.storage.sync`，因此会随 Chrome 账号同步到 Google 服务器 | No |
 | Website content | No | No | 只读视频元素的播放状态用于控制播放，不读取、不保存页面内容 | No |
 

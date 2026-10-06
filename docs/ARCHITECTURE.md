@@ -10,7 +10,6 @@
 - 网页全屏 + 全屏控制条
 - 播放速度控制（快捷键步进 + 长按连续）
 - 播放控制（播放/暂停、快进快退）
-- 站点速度记忆（刷新自动恢复，零界面）
 - 设置持久化与热更新（仅快捷键）
 
 ## 模块总览
@@ -25,8 +24,7 @@ Content Script
       ├── SpeedToast             # 全屏外极简调速提示
       ├── TakeoverNotice         # 接管不了时的诚实反馈
       ├── FirstRunHint           # 首次使用引导（一次性）
-      ├── TransientPill          # 上面两条共用的提示骨架
-      └── SiteSpeedMemory        # 站点速度记忆
+      └── TransientPill          # 上面两条共用的提示骨架
 
 Background (service worker)
   └── 工具栏图标点击 -> 向当前标签页发 TOGGLE_FULLSCREEN
@@ -50,10 +48,9 @@ Shared
 职责：
 
 - 安装运行时样式
-- 加载设置与站点记忆，失败时回退默认
+- 加载设置，失败时回退默认
 - 启动注册表与键盘控制器，订阅设置变化热更新
-- 监听 `ratechange`：把主视频速度同步进站点记忆
-- 监听 `play`：应用站点记忆速度（仅当当前为 1x）
+- 启动时清掉 6.0.7 废弃的站点速度表（`vsc-site-speeds`）
 - 响应 background 的 `TOGGLE_FULLSCREEN`（工具栏图标点击）
 
 ### `VideoRegistry`
@@ -169,17 +166,6 @@ css-cover 模式必须相反：视频留在站点 DOM 原位，站点监听器�
 而所有提示都挂在顶层文档且 `position: fixed`，不换算就会偏离整整一个 iframe 的
 偏移量（曾表现为「视频在 y≈400、提示却出现在 y=16」的屏幕角落）。
 `SpeedToast` 与 `TakeoverNotice` 共用这一处实现。
-
-### `SiteSpeedMemory`
-
-文件：`src/content/siteSpeedMemory.ts`
-
-职责：
-
-- 按 hostname 记住播放速度（storage.local，不占 sync 配额）
-- `play` 事件上自动恢复（仅当当前为 1x，绝不与用户/站点显式设置冲突）
-- 写入防抖 800ms；1x 视为"无记忆"自动清除
-- 无界面、无开关：对用户完全透明
 
 ## 设置与共享逻辑
 

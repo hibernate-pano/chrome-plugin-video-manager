@@ -39,7 +39,7 @@
 > **目前只有这些功能**（v6 做过一次大减法，砍掉了弹窗、徽章、预设档位、HUD 动画）：
 >
 > - 网页全屏：按 `f` 进入，鼠标动一下浮现一条极简控制条，静止 3 秒自动淡出
-> - 倍速：`=` / `-` 每次 0.1 倍，长按连续，`0` 重置；**每个网站的速度会被记住**，下次回来自动恢复
+> - 倍速：`=` / `-` 每次 0.1 倍，长按连续，`0` 重置；**不记忆速度**，任何视频都从 1.0x 开始
 > - 播放控制：`Space` 播放暂停，`←` `→` 快退快进 5 秒
 > - 7 个动作**全部可以在设置页改键**，留空即禁用
 >
@@ -82,8 +82,11 @@
 > 但你伸手去拖进度它一定在。
 >
 > **倍速**：`=` 和 `-` 各 0.1 倍，长按连续。按 `0` 回到 1.0。
-> 这件事我做得比别的扩展多的地方是：**按网站记住速度**。
-> 你在 B站 调到 1.75x，第二天打开 B站 直接就是 1.75x，不用重新按七下。
+>
+> 这里有个地方我和大部分扩展的选择**不一样**：我**不记住速度**。
+> 很多扩展会把你上次的速度存下来，下次打开自动套用——但同一个人看网课要 2.0x、
+> 看纪录片要 1.0x，一旦某个速度被记住了，它就变成一条你看不见的规则，
+> 之后每个视频都被它接管。所以我让它永远从 1.0x 开始，快慢由你当场决定。
 >
 > **不打扰**：调速时角落闪一个 `1.5x` 小胶囊，一秒后消失。没有弹窗、没有角标、
 > 没有「当前速度 1.75x」这种常驻显示——因为你看视频时不想看见任何速度提示，
@@ -122,8 +125,10 @@ keyboard controls and a clean fullscreen player
 >   (captions, recommendations, sidebars) goes away with it. Move the mouse and a
 >   minimal control bar appears; stay still for 3 seconds and it fades out.
 > - `=` / `-` — speed up / slow down by 0.1x, hold to repeat, `0` resets.
->   **Speed is remembered per site**, so if you watch at 1.75x on one platform,
->   it's still 1.75x when you come back tomorrow.
+>   Speed is **never** remembered — every video starts at 1.0x. Most extensions
+>   store your last speed per site; I decided against it, because the same person
+>   wants 2.0x for a lecture and 1.0x for a documentary, and a stored number turns
+>   into a rule you never chose and can't see.
 > - `Space` play/pause, `←` / `→` skip 5 seconds — the same on every site.
 > - All 7 actions are rebindable on the options page, or blank to disable.
 >

@@ -87,7 +87,7 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 - 速度快捷键步进改速
 - 页面脚本用 `stopImmediatePropagation` 抢键也抢不过内容脚本（v5.2.1 的修复点）
 - 内容脚本不打断页面自身的输入框打字
-- 站点速度记忆跨刷新恢复（真实走一遍 `storage.local` 往返）
+- 调速不跨刷新继承，且 6.0.6 时代残留的站点速度表被清除（走一遍 `storage.local` 往返）
 
 `boundary.spec.js` 约束的是「非正常网页 / 非正常元素上的行为」，这些用例只能在
 真实浏览器里跑（jsdom 没有布局引擎、也没有 shadow DOM 事件重定向）：

@@ -26,14 +26,14 @@ const CAPTIONS = {
     controls: 'Auto-hiding controls, out of your way',
     speed: 'Fine-tune speed in 0.1x steps',
     options: '7 shortcuts you can rebind',
-    siteSpeed: 'Your speed, remembered per site',
+    freshSpeed: 'Every video starts at 1.0x',
   },
   zh_CN: {
     fullscreen: '任意网页视频，一键全屏',
     controls: '控制条自动隐藏，不打扰观看',
     speed: '0.1x 精细调速',
     options: '7 个快捷键，全部可改绑',
-    siteSpeed: '每个站点，记住你的速度',
+    freshSpeed: '每个视频都从 1.0x 开始',
   },
 };
 
@@ -250,16 +250,16 @@ try {
       }
     }
 
-    // 5) 站点速度记忆示意：演示页 scene=site-speed 的两张站点速度卡片。
+    // 5) 「不记忆速度」示意：演示页 scene=fresh-speed 的两张速度卡片。
     {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       try {
         const page = await context.newPage();
-        await page.goto(`${BASE}/demo.html?lang=${locale}&scene=site-speed`, { waitUntil: 'networkidle' });
+        await page.goto(`${BASE}/demo.html?lang=${locale}&scene=fresh-speed`, { waitUntil: 'networkidle' });
         await page.waitForSelector('.speed-scene', { state: 'visible' });
-        await addCaption(page, captions.siteSpeed, 'top-center');
-        await page.screenshot({ path: outPath('store-site-speed', locale) });
-        console.log(`${label('store-site-speed', locale)} done (scene=site-speed)`);
+        await addCaption(page, captions.freshSpeed, 'top-center');
+        await page.screenshot({ path: outPath('store-fresh-speed', locale) });
+        console.log(`${label('store-fresh-speed', locale)} done (scene=fresh-speed)`);
       } finally {
         await context.close();
       }

@@ -35,7 +35,7 @@
       background: linear-gradient(135deg, #14532d 0%, #052e16 45%, #0f172a 100%);
     }
 
-    /* --- Site speed memory scene (scene=site-speed) --- */
+    /* --- Fresh-speed scene (scene=fresh-speed) --- */
     .speed-scene {
       display: none;
       width: 100%;
@@ -100,11 +100,11 @@
       font-size: 13.5px;
     }
 
-    body[data-scene="site-speed"] .page-title,
-    body[data-scene="site-speed"] .player {
+    body[data-scene="fresh-speed"] .page-title,
+    body[data-scene="fresh-speed"] .player {
       display: none;
     }
-    body[data-scene="site-speed"] .speed-scene {
+    body[data-scene="fresh-speed"] .speed-scene {
       display: block;
     }
   </style>
@@ -117,9 +117,9 @@
     <video id="demo-video"></video>
   </div>
 
-  <!-- 站点速度记忆示意：两个站点各自记住自己的速度。扩展本身无界面，
+  <!-- 「不记忆速度」示意：两个视频都从 1.0x 开始。扩展本身无界面，
        这是为商店截图造的演示场景，不参与扩展运行逻辑。 -->
-  <section class="speed-scene" aria-label="Site speed memory">
+  <section class="speed-scene" aria-label="Speed always starts fresh">
     <h1 class="speed-scene__heading" id="speed-heading"></h1>
     <p class="speed-scene__sub" id="speed-sub"></p>
     <div class="speed-grid">
@@ -137,10 +137,10 @@
   </section>
 
   <script>
-    // lang=zh_CN / scene=site-speed 由生成脚本通过 query 传入，默认英文、默认播放器场景。
+    // lang=zh_CN / scene=fresh-speed 由生成脚本通过 query 传入，默认英文、默认播放器场景。
     const params = new URLSearchParams(location.search);
     const lang = params.get('lang') === 'zh_CN' ? 'zh_CN' : 'en';
-    const scene = params.get('scene') === 'site-speed' ? 'site-speed' : 'player';
+    const scene = params.get('scene') === 'fresh-speed' ? 'fresh-speed' : 'player';
     document.documentElement.lang = lang;
     document.body.dataset.scene = scene;
 
@@ -148,16 +148,16 @@
       en: {
         pageTitle: 'Example page \u00b7 Online course video',
         poster: 'Online course \u00b7 Lesson 12',
-        speedHeading: 'Two sites, two speeds',
-        speedSub: 'Set a speed once \u2014 it comes back the next time you open the site.',
-        remembered: 'Remembered automatically',
+        speedHeading: 'Every video starts at 1.0x',
+        speedSub: 'A lecture at 2.0x never follows you into the next video. You decide, every time.',
+        remembered: 'Standard speed',
       },
       zh_CN: {
         pageTitle: '\u793a\u4f8b\u9875\u9762 \u00b7 \u5728\u7ebf\u8bfe\u7a0b\u89c6\u9891',
         poster: '\u5728\u7ebf\u8bfe\u7a0b \u00b7 \u7b2c 12 \u8bb2',
-        speedHeading: '\u4e24\u4e2a\u7ad9\u70b9\uff0c\u5404\u81ea\u7684\u901f\u5ea6',
-        speedSub: '\u8c03\u4e00\u6b21\u901f\u5ea6\uff0c\u4e0b\u6b21\u6253\u5f00\u8be5\u7ad9\u70b9\u81ea\u52a8\u6062\u590d\u3002',
-        remembered: '\u81ea\u52a8\u8bb0\u4f4f',
+        speedHeading: '\u6bcf\u4e2a\u89c6\u9891\u90fd\u4ece 1.0x \u5f00\u59cb',
+        speedSub: '\u770b\u8bfe\u65f6\u7684 2.0x \u4e0d\u4f1a\u8dd1\u5230\u4e0b\u4e00\u4e2a\u89c6\u9891\u91cc\u3002\u6bcf\u6b21\u90fd\u7531\u4f60\u51b3\u5b9a\u3002',
+        remembered: '\u6807\u51c6\u901f\u5ea6',
       },
     };
     const copy = COPY[lang];

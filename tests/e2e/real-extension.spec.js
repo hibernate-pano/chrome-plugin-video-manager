@@ -266,14 +266,27 @@ test.describe('真实扩展运行时', () => {
     }
   });
 
-  /** 站点速度记忆：改速 → 写 storage.local → 刷新 → play 事件触发自动恢复。 */
-  test('站点速度记忆跨刷新恢复', async () => {
+  /**
+   * 6.0.7 起不再记忆站点速度：任何视频进入时都从 1.0x 开始，
+   * 调过的速度不该跨刷新变成隐形默认值。同时验证老用户残留的历史表被清掉。
+   */
+  test('调速不跨刷新继承，且残留的站点速度表被清除', async () => {
     const ext = await launchExtension();
     try {
       const page = await ext.context.newPage();
       await serveHtml(page, testHtml);
       await page.goto('https://vsc-memory-test.example/');
       await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+
+      // 预置一份 6.0.6 时代留下的站点速度表，模拟老用户升级。
+      const sw = ext.context.serviceWorkers()[0];
+      if (sw) {
+        await sw.evaluate(async () => {
+          await chrome.storage.local.set({
+            'vsc-site-speeds': { 'vsc-memory-test.example': 2 },
+          });
+        });
+      }
 
       await page.locator('#v1').click();
       await page.evaluate(() => {
@@ -282,23 +295,11 @@ test.describe('真实扩展运行时', () => {
         Object.defineProperty(v, 'paused', { value: false, writable: true, configurable: true });
       });
 
-      // 从 1x 连按 5 次 = 步进到 1.5（数字档位已移除，改用步进键）。
+      // 从 1x 连按 5 次 = 步进到 1.5。
       for (let i = 0; i < 5; i += 1) {
         await page.keyboard.press('=');
       }
       await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.5, 2);
-
-      // 等记忆写盘，否则刷新可能抢在写入之前
-      await expect
-        .poll(async () => {
-          const sw = ext.context.serviceWorkers()[0];
-          if (!sw) return null;
-          return sw.evaluate(async (host) => {
-            const got = await chrome.storage.local.get('vsc-site-speeds');
-            return got['vsc-site-speeds']?.[host] ?? null;
-          }, 'vsc-memory-test.example');
-        }, { timeout: 10_000 })
-        .toBe(1.5);
 
       await page.reload();
       await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
@@ -310,7 +311,20 @@ test.describe('真实扩展运行时', () => {
         v.dispatchEvent(new Event('play'));
       });
 
-      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1.5, 2);
+      // 刷新后回到标准速度：用户的每一次调速都该由用户自己重新做主。
+      await expect.poll(() => page.evaluate(() => window.__rate())).toBeCloseTo(1, 2);
+
+      // 老用户机器上残留的访问记录不该继续留着。
+      await expect
+        .poll(async () => {
+          const worker = ext.context.serviceWorkers()[0];
+          if (!worker) return null;
+          return worker.evaluate(async () => {
+            const got = await chrome.storage.local.get('vsc-site-speeds');
+            return got['vsc-site-speeds'] === undefined ? 'removed' : 'still-there';
+          });
+        }, { timeout: 10_000 })
+        .toBe('removed');
     } finally {
       await ext.close();
     }

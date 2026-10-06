@@ -338,6 +338,54 @@ describe('单元测试覆盖面', () => {
   });
 });
 
+/** 只做「删除旧数据」的文件，不算功能复活。 */
+const MIGRATION_ONLY_FILES = new Set([
+  path.join('src', 'shared', 'settings.ts'),
+  path.join('src', 'shared', 'types.ts'),
+]);
+
+describe('已废弃功能的残留防护', () => {
+  it('src 下不再有读写站点速度记忆的活代码', () => {
+    // 6.0.7 删掉了站点速度记忆。它之所以值得一条守护，是因为这个功能
+    // 「看起来很无害」——重新实现它只需要几行代码，而一旦复活，
+    // 用户就又会被一条自己看不见的默认规则接管速度。
+    //
+    // 只扫 src/：文档里的历史记录（CHANGELOG / PRODUCT 变更记录）
+    // 提到它是应该的，迁移用的 LEGACY_SITE_SPEEDS_KEY 常量也必须留着。
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) {
+          continue;
+        }
+        // 两处白名单都是「只删不读」的迁移代码，删掉功能后必须留着：
+        // settings.ts 负责清掉老用户残留的表，types.ts 只定义那个键名。
+        const relative = path.relative(repoRoot, full);
+        if (MIGRATION_ONLY_FILES.has(relative)) {
+          return;
+        }
+        const source = readFileSync(full, 'utf8');
+        const readsOrWrites =
+          /siteSpeedMemory|SITE_SPEEDS_KEY|rememberSpeed|getSpeed\(|\.remember\(/.test(source);
+        if (readsOrWrites) {
+          offenders.push(relative);
+        }
+      }
+    };
+    walk(resolve(repoRoot, 'src'));
+
+    expect(
+      offenders,
+      `站点速度记忆已被删除，但这些文件仍在读写它：${offenders.join(', ')}`,
+    ).toEqual([]);
+  });
+});
+
 describe('版本号单一来源', () => {
   it('package.json 与 manifest.json 的 version 一致', () => {
     // 版本号是手工同步的第二事实源（scripts/copy-assets.js 直接 copyFileSync
