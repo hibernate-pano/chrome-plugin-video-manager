@@ -102,7 +102,7 @@ English
 | Screenshot 2 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-controls.png` |
 | Screenshot 3 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-speed-toast.png` |
 | Screenshot 4 | 1280×800 | ✅ Ready | `store-assets/output/store-options.png` |
-| Screenshot 5 | 1280×800 | 🟡 Needs update | `store-assets/output/store-fresh-speed.png` |
+| Screenshot 5 | 1280×800 | ✅ Ready | `store-assets/output/store-fresh-speed.png` |
 | Small Promo Tile [RECOMMENDED] | 440×280 | ✅ Ready | `store-assets/output/store-promo-tile.png` |
 | Marquee Promo Tile | 1400×560 | ⬜ Not created | |
 
@@ -118,9 +118,10 @@ English
 2. `store-controls` — 控制条特写，标题 `Auto-hiding controls, out of your way`
 3. `store-speed-toast` — 调速小胶囊特写，标题 `Fine-tune speed in 0.1x steps`
 4. `store-options` — 设置页 7 行改绑表（英文），标题 `7 shortcuts you can rebind`
-5. `store-fresh-speed` — 「不记忆速度」，标题 `Every video starts at 1.0x`（6.0.7 起替换原站点速度记忆截图）
+5. `store-fresh-speed` — 「不记忆速度」，标题 `Never inherits a speed — always 1.0x`
+   （6.0.7 起替换原站点速度记忆截图。走真实 UI：网页全屏 + 控制条右下角如实显示 `1x`；
+   poster 特意换成 `Documentary · Episode 3`，避免与首图 `store-fullscreen` 长得一样浪费展示位）
 
-⚠️ 第 5 张是演示页造的**虚构场景**（不是产品真实 UI），措辞与呈现需人工把关。
 ⚠️ 第 2、3 张是 2x 放大特写，不是像素裁切。
 
 ## Permissions Justification

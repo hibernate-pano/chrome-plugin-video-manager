@@ -26,14 +26,14 @@ const CAPTIONS = {
     controls: 'Auto-hiding controls, out of your way',
     speed: 'Fine-tune speed in 0.1x steps',
     options: '7 shortcuts you can rebind',
-    freshSpeed: 'Every video starts at 1.0x',
+    freshSpeed: 'Never inherits a speed — always 1.0x',
   },
   zh_CN: {
     fullscreen: '任意网页视频，一键全屏',
     controls: '控制条自动隐藏，不打扰观看',
     speed: '0.1x 精细调速',
     options: '7 个快捷键，全部可改绑',
-    freshSpeed: '每个视频都从 1.0x 开始',
+    freshSpeed: '不继承速度，永远从 1.0x 开始',
   },
 };
 
@@ -250,16 +250,37 @@ try {
       }
     }
 
-    // 5) 「不记忆速度」示意：演示页 scene=fresh-speed 的两张速度卡片。
+    // 5) 「不记忆速度」：走真实 UI —— 网页全屏 + 控制条上的 1.0x。
+    //
+    // 早先这版用的是演示页里两张虚构的速度卡片，结果有两个问题：
+    // 标题胶囊与卡片标题重复同一句话，且下方大片留白；更重要的是，
+    // 它和其它四张（都是真实 UI）风格割裂，还容易被误读成产品有这样一个界面。
+    // 「不记忆速度」是个**行为**，不需要也不该配一个专用界面。
     {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       try {
         const page = await context.newPage();
-        await page.goto(`${BASE}/demo.html?lang=${locale}&scene=fresh-speed`, { waitUntil: 'networkidle' });
-        await page.waitForSelector('.speed-scene', { state: 'visible' });
+        await page.goto(`${BASE}/demo.html?lang=${locale}`, { waitUntil: 'networkidle' });
+        await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+        // 换成另一个视频的内容，否则这张会和首图 store-fullscreen 长得一模一样，
+        // 白白浪费一个展示位。用户一眼能看出「换了个视频，速度仍是 1x」。
+        await page.evaluate(() => {
+          const video = document.getElementById('demo-video');
+          const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%231e3a5f'/><stop offset='0.5' stop-color='%230f172a'/><stop offset='1' stop-color='%23241b3a'/></linearGradient></defs><rect width='960' height='540' fill='url(%23g)'/><text x='480' y='270' fill='%2394a3b8' font-family='sans-serif' font-size='28' text-anchor='middle'>Documentary · Episode 3</text></svg>";
+          video?.setAttribute('poster', 'data:image/svg+xml;utf8,' + svg);
+        });
+        await page.mouse.click(640, 360);
+        await page.keyboard.press('f');
+        await page.waitForSelector('#vsc-controls', { state: 'visible' });
+        // 关键：不按 = / -，让控制条如实显示 1.0x —— 这正是「从不记忆」的样子。
+        await page.waitForTimeout(200);
+        const rate = await page.evaluate(
+          () => document.getElementById('demo-video')?.playbackRate ?? null,
+        );
+        if (rate !== 1) throw new Error(`expected playbackRate 1, got ${rate}`);
         await addCaption(page, captions.freshSpeed, 'top-center');
         await page.screenshot({ path: outPath('store-fresh-speed', locale) });
-        console.log(`${label('store-fresh-speed', locale)} done (scene=fresh-speed)`);
+        console.log(`${label('store-fresh-speed', locale)} done (real UI, rate=${rate})`);
       } finally {
         await context.close();
       }
