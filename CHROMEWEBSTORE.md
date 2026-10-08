@@ -199,7 +199,8 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 6.0.6 | 2026-10-06 | **商店改名**为 `Video Speed Controller — Fullscreen & Keys`（原名有 3 个逐字同名扩展，几乎必然导致装错）。功能与 6.0.5 完全一致，无代码变更 | **In Review**（2026-10-06 经 v2 API 实发，PENDING_REVIEW） |
+| 6.0.8 | 2026-10-08 | **不再记忆站点速度**（任何视频都从 1.0x 开始，速度是用户当场的选择而非隐形默认规则）；**网页全屏不再弄丢沉浸式翻译等插件的字幕**（字幕层跟着视频一起进出全屏，弹幕不搬）；同时清掉老用户机器上残留的站点访问记录 | **In Review**（2026-10-08 经 v2 API 实发，PENDING_REVIEW） |
+| 6.0.6 | 2026-10-06 | **商店改名**为 `Video Speed Controller — Fullscreen & Keys`（原名有 3 个逐字同名扩展，几乎必然导致装错）。功能与 6.0.5 完全一致，无代码变更 | **Published**（改名已上线，100% 部署） |
 | 6.0.5 | 2026-10-04 | 新安装时会在你开始看视频后提示一次常用快捷键（之后不再出现）；无法接管的视频会明确告知而不是毫无反应；修复全屏进度条偶尔卡住不动的问题 | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100，已自动推给全部用户） |
 | 6.0.4 | 2026-10-04 | 修复在网页全屏里点击视频画面无法暂停/播放的问题（此前只有键盘快捷键有效）；点击语义现在与站点原生一致，双击行为不变 | Draft |
 | 6.0.3 | 2026-10-04 | 修 6 个影响边界缺陷（无 body 文档抛异常、shadow DOM 输入框被吞键、不可见视频被调速、iframe 提示错位、样式不自愈、跨 document 按 f 静默吞键） | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100） |
@@ -297,22 +298,22 @@ name / description / 截图字段 —— PUT 会被静默忽略（返回 304）�
 
 ---
 
-## 改名执行清单（6.0.6）
+## 改名执行清单（6.0.6 —— ✅ 已完成，2026-10-06 过审上线）
 
 商店名来自 `manifest.json` 的 `name`，**改名必须出新包并重新过审**，不能只改 Dashboard。
 当前线上 6.0.5 已 PUBLISHED 且无待审版本，是执行成本最低的窗口。
 
-- [ ] 1. `manifest.json` 的 `name` 与 `default_locale` 下的 `_locales/en/messages.json`
+- [x] 1. `manifest.json` 的 `name` 与 `default_locale` 下的 `_locales/en/messages.json`
       （`extensionName`）改为 `Video Speed Controller — Fullscreen & Keys`，
       两个文件必须一致（商店只认 manifest，但设置页标题走 i18n）
-- [ ] 2. `package.json` 与 `manifest.json` 版本号同步升到 `6.0.6`
-- [ ] 3. `pnpm test && pnpm build` 全绿
-- [ ] 4. `pnpm build:ext` 出包，人工确认 zip 顶层是 `manifest.json`、内部版本号是 6.0.6
-- [ ] 5. `node scripts/store-publish.mjs release/video-speed-controller-v6.0.6.zip --dry-run --api=v2`
+- [x] 2. `package.json` 与 `manifest.json` 版本号同步升到 `6.0.6`
+- [x] 3. `pnpm test && pnpm build` 全绿
+- [x] 4. `pnpm build:ext` 出包，人工确认 zip 顶层是 `manifest.json`、内部版本号是 6.0.6
+- [x] 5. `node scripts/store-publish.mjs release/video-speed-controller-v6.0.6.zip --dry-run --api=v2`
       看一遍再实发；**永远显式传 zip 路径**（`findLatestZip` 不校验包内版本）
-- [ ] 6. 发布前把本文件的 Name / Short Description / 详细描述 / 截图，
+- [x] 6. 发布前把本文件的 Name / Short Description / 详细描述 / 截图，
       逐字段粘贴到 Developer Dashboard（API 改不了 metadata）
-- [ ] 7. 过审上线后，回本文件把 6.0.6 状态改为 Published
+- [x] 7. 过审上线后，回本文件把 6.0.6 状态改为 Published
 
 **回滚**：CWS 不允许降级安装，回滚只能发一个**版本号更大但内容等于旧版**的包；
 v2 的 `setPublishedDeployPercentage` 可按比例放量，是唯一的真回滚手段。
@@ -342,3 +343,22 @@ v2 的 `setPublishedDeployPercentage` 可按比例放量，是唯一的真回滚
 - [ ] 核对 Extension Name 是否已显示为 `Video Speed Controller — Fullscreen & Keys`
 - [ ] 对齐中英文详细描述（消除 `INCONSISTENT_LOCALE_METADATA` 的成因）
 - [ ] 截图 5 张重新确认（标题文案里不要出现已砍掉的功能）
+
+---
+
+## 6.0.8 发布记录（2026-10-08）
+
+**发布前状态核实**：线上 6.0.6（PUBLISHED / 100%）、无待审版本 —— 窗口干净才发。
+
+**发布方式**：v2 API（`node scripts/store-publish.mjs release/video-speed-controller-v6.0.8.zip --api=v2`）
+上传返回 `uploadState=SUCCEEDED, crxVersion=6.0.8`，发布后进入 `PENDING_REVIEW`。
+
+**出包前的人工核对**（不信任上一轮留下的 zip，重新 `build:ext` 并逐项检查）：
+- manifest 在 zip 根、name 42 字符、version 6.0.8
+- 0 个 `__MACOSX` 条目、无 `dist/` 嵌套
+- 产物里 `attachOverlayers(` 调用存在 → 字幕搬运（6.0.8）真的在包里
+- 产物里 `vsc-site-speeds` 已不存在 → 站点速度记忆（6.0.7）真的删干净了
+
+**⚠️ 同一个警告再次出现**：`INCONSISTENT_LOCALE_METADATA`
+成因与 6.0.6 那次相同（商店 listing 的中英文详细描述不对齐），**尚未修掉**。
+不阻塞提交，但会持续增加人工复审概率 —— 需在 Dashboard 把两段描述逐段对齐。
