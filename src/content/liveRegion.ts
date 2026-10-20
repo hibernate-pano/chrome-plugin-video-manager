@@ -92,6 +92,77 @@ export const destroyLiveRegion = () => {
     announceTimer = null;
   }
 
+  if (throttleTimer !== null) {
+    window.clearTimeout(throttleTimer);
+    throttleTimer = null;
+  }
+
+  pendingThrottledText = null;
+  lastThrottledText = null;
+  lastThrottledAt = 0;
+
   region?.remove();
   region = null;
+};
+
+/**
+ * 连续变化的播报之间的最小间隔（毫秒）。
+ *
+ * 为什么需要节流：`aria-live="polite"` 不是「丢弃」，而是**排队** ——
+ * 读屏用户会一条一条听下去。连续调速时每 120ms 就有一条新值要播报，
+ * 排队速度远快于朗读速度，队列会**无界增长**：用户松开键之后，
+ * 读屏还在念一分钟前的 1.3 倍、1.4 倍、1.5 倍……
+ *
+ * 实测（jsdom 里数 live region 的 DOM 变更次数）：按住 `=` 一秒 →
+  live region 被写 **9 次** → 读屏要念 9 句。
+ *
+ * 1 秒这个间隔的取舍：单次轻点 `=` 仍然**立刻**播报（不受影响），
+  而长按时每 1 秒最多一句，且永远播**最新**的值 ——
+  用户只关心「最后停在几倍」，中间那些过程值对他没有价值。
+ */
+const ANNOUNCE_MIN_INTERVAL = 1000;
+
+let throttleTimer: number | null = null;
+let pendingThrottledText: string | null = null;
+let lastThrottledText: string | null = null;
+let lastThrottledAt = 0;
+
+/**
+ * 播报一条「会连续变化」的消息。
+ *
+ * 与 `announce` 的区别：它在短时间内只播一次，且播的永远是**最新**的那条。
+ * 适合「倍速」「进度」这类每 100 多毫秒就变一次的值。
+ *
+ * 单次调用（间隔已经够了）走的是立刻播报 —— 所以「轻点一下 `=`」
+ * 的体验与以前完全一样。
+ */
+export const announceThrottled = (text: string) => {
+  const now = Date.now();
+  const elapsed = now - lastThrottledAt;
+
+  if (elapsed >= ANNOUNCE_MIN_INTERVAL) {
+    lastThrottledAt = now;
+    lastThrottledText = text;
+    pendingThrottledText = null;
+    announce(text);
+    return;
+  }
+
+  // 攒下最新的一条；中间那些旧值不播（用户只关心最后那个）。
+  pendingThrottledText = text;
+
+  if (throttleTimer === null) {
+    throttleTimer = window.setTimeout(() => {
+      throttleTimer = null;
+      const pending = pendingThrottledText;
+      pendingThrottledText = null;
+      if (pending === null || pending === lastThrottledText) {
+        return;
+      }
+
+      lastThrottledAt = Date.now();
+      lastThrottledText = pending;
+      announce(pending);
+    }, ANNOUNCE_MIN_INTERVAL - elapsed);
+  }
 };

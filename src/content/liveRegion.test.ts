@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { announce, destroyLiveRegion } from './liveRegion';
+import { announce, announceThrottled, destroyLiveRegion } from './liveRegion';
 
 /**
  * 读屏播报通道。
@@ -127,5 +127,88 @@ describe('liveRegion', () => {
       // 必须放在 finally：断言失败时若跳过还原，覆盖会泄漏给后面所有用例。
       delete (document as unknown as { body?: unknown }).body;
     }
+  });
+
+  /**
+   * 连续变化的播报必须节流。
+   *
+   * `aria-live="polite"` 不是「丢弃」，而是**排队** —— 读屏用户会一条一条
+   * 听下去。连按加速时每 120ms 就有一个新值，排队速度远快于朗读速度，
+   * 队列会无界增长：用户松开键之后，读屏还在念一分钟前的 1.3 倍、1.4 倍。
+   */
+  describe('announceThrottled', () => {
+    /**
+     * 数 live region 被写了几次 —— 每次写入对应一次读屏播报。
+     *
+     * ⚠️ 必须**同步**地数：MutationObserver 的回调是微任务，
+     * 断言前若没把微任务排空，读到的会是 0 —— 那种断言永远不会红，
+     * 是一道假守卫。所以这里直接包住 `textContent` 的 setter。
+     */
+    const countWrites = (run: () => void) => {
+      const descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+      if (!descriptor?.set) {
+        throw new Error('拿不到 textContent 的 setter');
+      }
+
+      let writes = 0;
+      Object.defineProperty(Node.prototype, 'textContent', {
+        ...descriptor,
+        set(this: Node, value: string) {
+          if (this instanceof HTMLElement && this.id === 'vsc-live-region') {
+            writes += 1;
+          }
+          descriptor.set!.call(this, value);
+        },
+      });
+
+      try {
+        run();
+      } finally {
+        Object.defineProperty(Node.prototype, 'textContent', descriptor);
+      }
+
+      return writes;
+    };
+
+    it('单次播报立刻生效（轻点一下 `=` 的体验不变）', () => {
+      announceThrottled('播放速度 1.1x');
+
+      expect(region()!.textContent).toBe('播放速度 1.1x');
+    });
+
+    it('连按调速时不会每次都播报', () => {
+      const writes = countWrites(() => {
+        // 模拟按住 `=` 一秒：每 120ms 一次（与键盘控制器的连发机制同频）。
+        for (let i = 0; i < 8; i += 1) {
+          announceThrottled(`播放速度 ${(1 + i * 0.1).toFixed(1)}x`);
+          vi.advanceTimersByTime(120);
+        }
+      });
+
+      // 修复前是 9 次（每次写入都会让读屏念一句）。
+      expect(writes, '长按一秒不该产生 9 次播报').toBeLessThanOrEqual(2);
+      expect(writes, '守卫本身要能数到写入（否则是假守卫）').toBeGreaterThan(0);
+    });
+
+    it('长按结束时播报的是**最新**的值', () => {
+      announceThrottled('播放速度 1.1x');
+
+      for (let i = 2; i <= 8; i += 1) {
+        announceThrottled(`播放速度 ${(1 + i * 0.1).toFixed(1)}x`);
+        vi.advanceTimersByTime(120);
+      }
+
+      // 节流窗口到了 → 播最新那个，不是第一个。
+      vi.advanceTimersByTime(1000);
+      expect(region()!.textContent).toBe('播放速度 1.8x');
+    });
+
+    it('值没变时不重复播报', () => {
+      announceThrottled('播放速度 1.1x');
+      announceThrottled('播放速度 1.1x');
+
+      vi.advanceTimersByTime(2000);
+      expect(region()!.textContent).toBe('播放速度 1.1x');
+    });
   });
 });

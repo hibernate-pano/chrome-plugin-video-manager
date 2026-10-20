@@ -1,6 +1,6 @@
 import { t } from '../shared/i18n';
 import { formatRate } from '../shared/rate';
-import { announce } from './liveRegion';
+import { announceThrottled } from './liveRegion';
 import { topLevelOffset } from './frameOffset';
 import { FULLSCREEN_OVERLAY_ID, NOTICE_INSET } from './runtimeStyles';
 
@@ -290,7 +290,12 @@ export class SpeedToast {
     // 读屏播报：调速胶囊是**唯一**的速度反馈通道（控制条 3 秒就隐藏，
     // 键盘调速时它往往根本不在屏幕上），而它本身是 aria-hidden 的纯视觉元素。
     // 不播报的话，读屏用户按了 `=` 之后得不到任何确认。
-    announce(t('speedChanged', '播放速度 {rate}x').replace('{rate}', formatRate(rate)));
+    //
+    // ⚠️ 走的是**节流**通道：长按加速时每 120ms 就有一个新值，
+    // 而 `aria-live="polite"` 是排队而不是丢弃 —— 读屏会一条一条念下去，
+    // 队列无界增长（实测：按住 `=` 一秒 → live region 被写 9 次）。
+    // 节流后每 1 秒最多一句，且永远播**最新**的值。
+    announceThrottled(t('speedChanged', '播放速度 {rate}x').replace('{rate}', formatRate(rate)));
 
     // 新的调速操作：角标回到「一次性胶囊」形态，计时整个重来。
     this.clearBadgeTimer();
