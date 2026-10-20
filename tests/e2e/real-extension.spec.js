@@ -2,6 +2,7 @@ import { test, expect, chromium } from '@playwright/test';
 import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { CLIP_10S_WEBM_BASE64 } from './fixtures/clip-10s.ts';
 
 // VSC_EXTENSION_DIR 可以指向别的构建目录（例如故意改坏的副本），
 // 默认测 dist/。走环境变量而不是硬编码，是为了让「变异验证」能在不碰源码的前提下跑。
@@ -179,9 +180,7 @@ const serveHtml = async (page, html) => {
  * 为什么内联而不是走 http://127.0.0.1:4173：测试页是 https://example.com/，
  * 去 http 取资源会被浏览器按「混合内容」拦掉。
  */
-const clipDataUri = `data:video/webm;base64,${readFileSync(
-  resolve(process.cwd(), 'tests/e2e/fixtures/clip-10s.webm'),
-).toString('base64')}`;
+const clipDataUri = `data:video/webm;base64,${CLIP_10S_WEBM_BASE64}`;
 
 /**
  * 派发一个**带自动重复标记**的按键。
