@@ -678,3 +678,76 @@ test('按住不放不会重复执行动作（播放/快进/全屏）', async () 
     await ext.close();
   }
 });
+
+/**
+ * 焦点所在控件的键归它自己。
+ *
+ * 实测（真实 Chromium，修复前）：焦点落在站点自己的 range 滑块上按 →，
+ * 滑块 value 纹丝不动、input 事件 0 次，而视频 currentTime 从 0 跳到 5；
+ * 焦点落在站点按钮上按空格，按钮 click 次数 0，视频反而开始播放。
+ */
+test('焦点在站点自己的控件上时，那个控件的键不被视频抢走', async () => {
+  const ext = await launchExtension();
+  try {
+    const page = await ext.context.newPage();
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>vsc focus</title>
+      <style>body{margin:0}video{width:480px;height:270px;background:#000}</style></head>
+      <body>
+        <video id="v1" width="480" height="270" muted playsinline src="${clipDataUri}"></video>
+        <input id="slider" type="range" min="0" max="100" step="1" value="40" />
+        <button id="btn" type="button">站点按钮</button>
+        <script>
+          window.__clicks = 0;
+          window.__inputs = 0;
+          document.getElementById('btn').addEventListener('click', () => { window.__clicks += 1; });
+          document.getElementById('slider').addEventListener('input', () => { window.__inputs += 1; });
+        <\/script>
+      </body></html>`;
+    await serveHtml(page, html);
+    await page.goto('https://example.com/');
+    await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+
+    await page.locator('#v1').click();
+    await page.evaluate(async () => {
+      const v = document.getElementById('v1');
+      if (v.readyState < 1) {
+        await new Promise((resolve) => {
+          v.addEventListener('loadedmetadata', resolve, { once: true });
+          setTimeout(resolve, 3000);
+        });
+      }
+      v.currentTime = 0;
+      await v.play().catch(() => {});
+    });
+    await page.waitForTimeout(200);
+
+    const client = await ext.context.newCDPSession(page);
+
+    // —— 站点的 range 滑块 ——
+    await page.locator('#slider').focus();
+    await dispatchKey(client, 'ArrowRight');
+    await expect
+      .poll(() => page.evaluate(() => document.getElementById('slider').value))
+      .toBe('41');
+    expect(
+      await page.evaluate(() => window.__inputs),
+      '滑块必须真的收到按键',
+    ).toBeGreaterThan(0);
+    expect(
+      await page.evaluate(() => document.getElementById('v1').currentTime),
+      '视频不能同时被 seek（键被抢走的症状）',
+    ).toBeLessThan(2);
+
+    // —— 站点的按钮 ——
+    await page.locator('#btn').focus();
+    const pausedBefore = await page.evaluate(() => document.getElementById('v1').paused);
+    await dispatchKey(client, ' ');
+    await expect.poll(() => page.evaluate(() => window.__clicks)).toBeGreaterThan(0);
+    expect(
+      await page.evaluate(() => document.getElementById('v1').paused),
+      '空格不该被视频拿去切换播放（按钮没触发就是被抢走的症状）',
+    ).toBe(pausedBefore);
+  } finally {
+    await ext.close();
+  }
+});
