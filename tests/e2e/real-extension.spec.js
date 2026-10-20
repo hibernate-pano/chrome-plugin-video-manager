@@ -167,6 +167,58 @@ const serveHtml = async (page, html) => {
   });
 };
 
+/**
+ * 一段**真的**能播、真的能 seek 的 10 秒视频（内联成 data URI）。
+ *
+ * 为什么必须要真的媒体：`paused` / `currentTime` 是**原生 DOM 属性**，
+ * 内容脚本在隔离世界里改它们，页面主世界读得到 —— 这正是跨世界可观测的量。
+ * 反过来，`Object.defineProperty(video, 'play', ...)` 这类改写**只在定义它的
+ * 那个世界里可见**（隔离世界有自己的一层 wrapper），所以主世界挂的假 play/pause
+ * 钩子根本观测不到扩展干了什么。真的媒体没有这个问题。
+ *
+ * 为什么内联而不是走 http://127.0.0.1:4173：测试页是 https://example.com/，
+ * 去 http 取资源会被浏览器按「混合内容」拦掉。
+ */
+const clipDataUri = `data:video/webm;base64,${readFileSync(
+  resolve(process.cwd(), 'tests/e2e/fixtures/clip-10s.webm'),
+).toString('base64')}`;
+
+/**
+ * 派发一个**带自动重复标记**的按键。
+ *
+ * Playwright 的 keyboard.press() 造不出 `repeat: true` 的事件 ——
+ * 而浏览器按住不放时派发的正是那种（`event.repeat === true`）。
+ * CDP 的 `Input.dispatchKeyEvent` 带 `autoRepeat: true` 是唯一能造出来的路子，
+ * 而且它是**浏览器自己派发**的事件（isTrusted 为 true），扩展会真的当它处理。
+ */
+const dispatchKey = async (client, key, { autoRepeat = false } = {}) => {
+  const info = {
+    ' ': { code: 'Space', keyCode: 32, text: ' ' },
+    ArrowRight: { code: 'ArrowRight', keyCode: 39, text: '' },
+    f: { code: 'KeyF', keyCode: 70, text: 'f' },
+  }[key];
+
+  await client.send('Input.dispatchKeyEvent', {
+    type: autoRepeat ? 'rawKeyDown' : 'keyDown',
+    key,
+    code: info.code,
+    windowsVirtualKeyCode: info.keyCode,
+    nativeVirtualKeyCode: info.keyCode,
+    text: autoRepeat ? '' : info.text,
+    autoRepeat,
+  });
+
+  if (!autoRepeat) {
+    await client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key,
+      code: info.code,
+      windowsVirtualKeyCode: info.keyCode,
+      nativeVirtualKeyCode: info.keyCode,
+    });
+  }
+};
+
 test.describe('真实扩展运行时', () => {
   test('内容脚本在隔离世界注入样式，并能响应速度快捷键', async () => {
     const ext = await launchExtension();
@@ -534,4 +586,95 @@ test.describe('字幕等浮层兼容性', () => {
       await ext.close();
     }
   });
+});
+
+/**
+ * 按住不放（浏览器自动重复的 keydown）不能重复执行动作。
+ *
+ * 修复前实测（真实 Chromium + 真实扩展 + CDP autoRepeat）：
+ *   空格：按 1 次 + 自动重复 3 次 → 播放状态被切了 4 次（视频在闪）
+ *   →  ：按 1 次 + 自动重复 3 次 → 进度多跳了 15 秒（按住一秒 ≈ 跳 150 秒）
+ *   f  ：按 1 次 + 自动重复 3 次 → 全屏被退出了（进进出出地闪）
+ *
+ * 这三条都是「用户按住一个键」就会遇到的最常见场景，所以必须是回归守卫。
+ */
+test('按住不放不会重复执行动作（播放/快进/全屏）', async () => {
+  const ext = await launchExtension();
+  try {
+    const page = await ext.context.newPage();
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>vsc repeat</title>
+      <style>body{margin:0}video{width:480px;height:270px;background:#000}</style></head>
+      <body><video id="v1" width="480" height="270" muted playsinline src="${clipDataUri}"></video></body></html>`;
+    await serveHtml(page, html);
+    await page.goto('https://example.com/');
+    await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
+
+    await page.locator('#v1').click();
+    await page.evaluate(async () => {
+      const v = document.getElementById('v1');
+      if (v.readyState < 1) {
+        await new Promise((resolve) => {
+          v.addEventListener('loadedmetadata', resolve, { once: true });
+          setTimeout(resolve, 3000);
+        });
+      }
+      await v.play().catch(() => {});
+    });
+    await expect.poll(() => page.evaluate(() => document.getElementById('v1').paused)).toBe(false);
+
+    const client = await ext.context.newCDPSession(page);
+
+    // —— 空格：切换播放/暂停 ——
+    await dispatchKey(client, ' ');
+    await expect.poll(() => page.evaluate(() => document.getElementById('v1').paused)).toBe(true);
+
+    for (let i = 0; i < 3; i += 1) {
+      await dispatchKey(client, ' ', { autoRepeat: true });
+    }
+    await page.waitForTimeout(300);
+    expect(
+      await page.evaluate(() => document.getElementById('v1').paused),
+      '按住空格时视频不能反复切换播放/暂停',
+    ).toBe(true);
+
+    // —— 方向键：快进 5 秒 ——
+    await page.evaluate(async () => {
+      const v = document.getElementById('v1');
+      v.currentTime = 0;
+      await v.play().catch(() => {});
+    });
+    await page.waitForTimeout(200);
+
+    await dispatchKey(client, 'ArrowRight');
+    await expect
+      .poll(() => page.evaluate(() => document.getElementById('v1').currentTime))
+      .toBeGreaterThan(4);
+
+    const afterSeek = await page.evaluate(() => document.getElementById('v1').currentTime);
+    for (let i = 0; i < 3; i += 1) {
+      await dispatchKey(client, 'ArrowRight', { autoRepeat: true });
+    }
+    await page.waitForTimeout(200);
+    const afterRepeat = await page.evaluate(() => document.getElementById('v1').currentTime);
+    // 允许自然播放推进，但绝不能再跳 5 秒 × 3。
+    expect(
+      afterRepeat - afterSeek,
+      '按住方向键时不能反复快进',
+    ).toBeLessThan(2);
+
+    // —— f：进出全屏 ——
+    await dispatchKey(client, 'f');
+    await expect(page.locator('#vsc-page-fullscreen-overlay')).toBeVisible();
+
+    for (let i = 0; i < 3; i += 1) {
+      await dispatchKey(client, 'f', { autoRepeat: true });
+    }
+    await page.waitForTimeout(300);
+    await expect(
+      page.locator('#vsc-page-fullscreen-overlay'),
+      '按住 f 时不能反复进出全屏',
+    ).toBeVisible();
+  } finally {
+    await ext.close();
+  }
 });

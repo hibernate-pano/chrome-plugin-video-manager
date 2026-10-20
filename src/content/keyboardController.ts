@@ -5,7 +5,17 @@ import {
   togglePlayback,
 } from './playback';
 import { matchesShortcut } from '../shared/shortcuts';
-import { SEEK_STEP_SECONDS, type PersistedSettings } from '../shared/types';
+import {
+  SEEK_STEP_SECONDS,
+  type PersistedSettings,
+  type ShortcutSettings,
+} from '../shared/types';
+
+/**
+ * 快捷键动作。**与 ShortcutSettings 的键一一对应** —— 所以
+ * `shortcuts[action]` 永远是那条绑定，不用另建映射表。
+ */
+type ShortcutAction = keyof ShortcutSettings;
 
 interface KeyboardControllerOptions {
   getSettings: () => PersistedSettings;
@@ -171,23 +181,78 @@ export class KeyboardController {
   private repeatDelayTimer: ReturnType<typeof setTimeout> | null = null;
   private repeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
   private repeatingShortcut: 'increaseSpeed' | 'decreaseSpeed' | null = null;
+  /**
+   * 当前这次「按住」我们是否拥有这个键。
+   *
+   * 物理按键按住期间，浏览器会持续派发 keydown（`event.repeat === true`）。
+   * 这些重复事件**不能重复执行动作**（详见 handleKeyDown 里的说明），
+   * 但**要不要吞掉**它们，必须跟第一次按下保持一致：
+   * - 第一次按下时页面上没有视频 → 键本来就该给页面（长按 = 滚动页面）；
+   * - 第一次按下时我们接管了 → 长按期间页面不该动。
+   *
+   * 所以判据是「上一次我们接管的是哪个动作」，而不是「这次页面上有没有视频」。
+   */
+  private holdOwner: ShortcutAction | null = null;
   private readonly boundHandleKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
   private readonly boundHandleKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event);
   /**
    * 窗口失焦（切走标签页/应用）或页面转入后台时，keyup 不会到达本窗口，
    * 长按加速留下的重复定时器必须在这里被终止，否则会一直跑到页面销毁。
    */
-  private readonly boundHandleFocusLoss = () => this.clearRepeat();
+  private readonly boundHandleFocusLoss = () => {
+    this.clearRepeat();
+    // keyup 不会来了，「按住」的归属也就无从解除 —— 只能在这儿清掉。
+    this.holdOwner = null;
+  };
 
   constructor(options: KeyboardControllerOptions) {
     this.options = options;
     this.isTrustedEvent = options.isTrustedEvent ?? ((event) => event.isTrusted);
   }
 
-  private intercept(event: KeyboardEvent) {
+  /**
+   * 吞掉这个键。
+   *
+   * @param action 我们接管的是哪个动作。传了它就意味着「这个键归我们了」，
+   *   长按期间的重复事件会被一并吞掉（见 handleKeyDown）。
+   */
+  private intercept(event: KeyboardEvent, action?: ShortcutAction) {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation?.();
+
+    if (action) {
+      this.holdOwner = action;
+    }
+  }
+
+  /**
+   * 这个键对应哪个动作；不是我们的键就返回 null。
+   *
+   * ⚠️ 顺序必须与 handleKeyDown 里原来那条 if 链**逐行一致** ——
+   * 同一个键被绑到多个动作时，先匹配到的赢。改顺序 = 改行为。
+   */
+  private matchAction(event: KeyboardEvent, shortcuts: ShortcutSettings): ShortcutAction | null {
+    if (matchesShortcut(event, shortcuts.seekBack)) return 'seekBack';
+    if (matchesShortcut(event, shortcuts.seekForward)) return 'seekForward';
+    if (matchesShortcut(event, shortcuts.togglePlay)) return 'togglePlay';
+    if (matchesShortcut(event, shortcuts.increaseSpeed)) return 'increaseSpeed';
+    if (matchesShortcut(event, shortcuts.decreaseSpeed)) return 'decreaseSpeed';
+    if (matchesShortcut(event, shortcuts.resetSpeed)) return 'resetSpeed';
+    if (matchesShortcut(event, shortcuts.fullscreen)) return 'fullscreen';
+    return null;
+  }
+
+  /** 松手了就不再拥有这个键。 */
+  private releaseHold(event: KeyboardEvent) {
+    if (!this.holdOwner) {
+      return;
+    }
+
+    const shortcuts = this.options.getSettings().shortcuts;
+    if (matchesShortcut(event, shortcuts[this.holdOwner])) {
+      this.holdOwner = null;
+    }
   }
 
   private clearRepeat() {
@@ -276,41 +341,86 @@ export class KeyboardController {
       return true;
     }
 
+    // ⚠️ 先判定这个键是不是我们关心的 —— 不是就**直接放行，不查视频**。
+    //
+    // 「查视频」不是一次轻量判断：它要扫遍全页的 DOM 节点（还要顺带钻进
+    // 每个 shadow root 与同源 iframe 找里面的 <video>），再对每个候选强制
+    // 算一次样式和布局。实测（真实 Chromium，3 万节点的页面）单次约 3ms。
+    //
+    // 扩展注入在 <all_urls>，**每一个按键**都会走到这里；而用户按的绝大多数键
+    // （字母、数字、功能键、Ctrl 组合…）根本不是我们的快捷键。
+    // 为这些键付一次全页扫描的代价，是纯浪费。
+    const action = this.matchAction(event, shortcuts);
+    if (!action) {
+      return false;
+    }
+
+    // ⚠️ 物理按键按住期间，浏览器会持续派发 keydown（`event.repeat === true`）。
+    //
+    // 这些重复事件**不能重复执行动作**：
+    // - 空格是「切换播放/暂停」→ 重复执行 = 视频每 120ms 闪一次；
+    // - 方向键是「跳 5 秒」→ 重复执行 = 按住一秒跳过 150 秒；
+    // - f 是「进出全屏」→ 重复执行 = 全屏来回闪。
+    //
+    // 实测（真实 Chromium + 真实扩展 + CDP autoRepeat 按键）：
+    //   空格：按 1 次 + 自动重复 3 次 → 播放状态被切了 4 次
+    //   →  ：按 1 次 + 自动重复 3 次 → 进度从 0.2s 跳到 10.2s（多跳了 15 秒）
+    //   f  ：按 1 次 + 自动重复 3 次 → 全屏被退出了
+    //
+    // 但**要不要吞掉**这些重复事件，必须跟第一次按下保持一致：
+    // 第一次按下时页面上没有视频 → 键本来就该给页面（长按 = 滚动页面）；
+    // 第一次按下时我们接管了 → 长按期间页面不该动。
+    // 所以判据是 holdOwner（上次我们接管的是哪个动作），而不是「这次有没有视频」。
+    //
+    // 加/减速是例外：它们本来就有刻意的连发机制（延迟 280ms + 每 120ms 一次），
+    // 由 startRepeat 驱动，与浏览器自己的按键重复无关。
+    if (event.repeat && action !== 'increaseSpeed' && action !== 'decreaseSpeed') {
+      if (this.holdOwner !== action) {
+        return false;
+      }
+
+      // 吞掉但不执行：页面在长按期间不会滚动/触发别的默认行为。
+      this.intercept(event);
+      return true;
+    }
+
     // 快捷键只作用于「用户此刻正在看的视频」。
     // 没有明确目标就**完全穿透**给页面 —— 宁可不接管，也不要接管错对象。
     const video = this.options.getWatchedVideo();
     if (!video) {
+      this.holdOwner = null;
       return false;
     }
 
-    if (matchesShortcut(event, shortcuts.seekBack)) {
-      this.intercept(event);
+    if (action === 'seekBack') {
+      this.intercept(event, action);
       this.clearRepeat();
       seekBy(video, -SEEK_STEP_SECONDS);
       return true;
     }
 
-    if (matchesShortcut(event, shortcuts.seekForward)) {
-      this.intercept(event);
+    if (action === 'seekForward') {
+      this.intercept(event, action);
       this.clearRepeat();
       seekBy(video, SEEK_STEP_SECONDS);
       return true;
     }
 
-    if (matchesShortcut(event, shortcuts.togglePlay)) {
+    if (action === 'togglePlay') {
       // 裸空格 + YouTube：放行给站点原生处理，避免双重切换。
       if (isYouTube() && shortcuts.togglePlay === ' ') {
+        this.holdOwner = null;
         return false;
       }
 
-      this.intercept(event);
+      this.intercept(event, action);
       this.clearRepeat();
       togglePlayback(video);
       return true;
     }
 
-    if (matchesShortcut(event, shortcuts.increaseSpeed)) {
-      this.intercept(event);
+    if (action === 'increaseSpeed') {
+      this.intercept(event, action);
       if (event.repeat && this.repeatingShortcut === 'increaseSpeed') {
         return true;
       }
@@ -320,8 +430,8 @@ export class KeyboardController {
       return true;
     }
 
-    if (matchesShortcut(event, shortcuts.decreaseSpeed)) {
-      this.intercept(event);
+    if (action === 'decreaseSpeed') {
+      this.intercept(event, action);
       if (event.repeat && this.repeatingShortcut === 'decreaseSpeed') {
         return true;
       }
@@ -331,38 +441,36 @@ export class KeyboardController {
       return true;
     }
 
-    if (matchesShortcut(event, shortcuts.resetSpeed)) {
-      this.intercept(event);
+    if (action === 'resetSpeed') {
+      this.intercept(event, action);
       this.clearRepeat();
       this.runSpeedChange(0, video);
       return true;
     }
 
-    if (matchesShortcut(event, shortcuts.fullscreen)) {
-      // 已激活时按 f 是「退出」：canEnter 只描述「能否进入」，这里必须
-      // 独立成一支，否则全屏里按 f 会因为 canEnter=false 而退不出去。
-      if (this.options.isFullscreenActive()) {
-        this.intercept(event);
-        this.clearRepeat();
-        this.options.exitFullscreen();
-        return true;
-      }
-
-      // 未激活：先问 canEnter，进不去（跨 document 的视频）就不吞键，
-      // 让页面自己处理，避免静默丢键。但放行必须配一句解释——否则在用户
-      // 眼里「不吞键」和「扩展坏了」是同一件事。
-      if (!this.options.canToggleFullscreen(video)) {
-        this.options.notifyTakeoverUnavailable(video);
-        return false;
-      }
-
-      this.intercept(event);
+    // action === 'fullscreen'
+    // 已激活时按 f 是「退出」：canEnter 只描述「能否进入」，这里必须
+    // 独立成一支，否则全屏里按 f 会因为 canEnter=false 而退不出去。
+    if (this.options.isFullscreenActive()) {
+      this.intercept(event, action);
       this.clearRepeat();
-      this.options.toggleFullscreen(video);
+      this.options.exitFullscreen();
       return true;
     }
 
-    return false;
+    // 未激活：先问 canEnter，进不去（跨 document 的视频）就不吞键，
+    // 让页面自己处理，避免静默丢键。但放行必须配一句解释——否则在用户
+    // 眼里「不吞键」和「扩展坏了」是同一件事。
+    if (!this.options.canToggleFullscreen(video)) {
+      this.holdOwner = null;
+      this.options.notifyTakeoverUnavailable(video);
+      return false;
+    }
+
+    this.intercept(event, action);
+    this.clearRepeat();
+    this.options.toggleFullscreen(video);
+    return true;
   }
 
   handleKeyUp(event: KeyboardEvent): boolean {
@@ -371,6 +479,9 @@ export class KeyboardController {
     if (!this.isTrustedEvent(event)) {
       return false;
     }
+
+    // 松手了就不再拥有这个键：之后的长按重复不该再被我们吞掉。
+    this.releaseHold(event);
 
     const repeatingShortcut = this.repeatingShortcut;
     if (!repeatingShortcut) {
@@ -397,6 +508,9 @@ export class KeyboardController {
    */
   onSettingsChanged() {
     this.clearRepeat();
+    // 绑定变了，「按住」的归属也作废：holdOwner 记的是动作名，
+    // 而动作名对应的绑定可能已经不是刚才那条了。
+    this.holdOwner = null;
   }
 
   start() {
@@ -422,6 +536,7 @@ export class KeyboardController {
 
   stop() {
     this.clearRepeat();
+    this.holdOwner = null;
     const bridgeWindow = window as typeof window & {
       __vscRegisterKeyboard?: (type: 'keydown' | 'keyup', handler: ((event: KeyboardEvent) => void) | null) => void;
     };

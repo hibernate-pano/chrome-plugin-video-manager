@@ -627,4 +627,104 @@ describe('KeyboardController', () => {
     expect(showSpeedFeedback).toHaveBeenCalledTimes(calls);
     controller.stop();
   });
+
+  /**
+   * 长按（浏览器自动重复的 keydown）不能重复执行动作。
+   *
+   * 实测（真实 Chromium + 真实扩展 + CDP autoRepeat 按键）：
+   *   空格：按 1 次 + 自动重复 3 次 → 播放状态被切了 4 次（视频在闪）
+   *   →  ：按 1 次 + 自动重复 3 次 → 进度多跳了 15 秒
+   *   f  ：按 1 次 + 自动重复 3 次 → 全屏被退出了
+   */
+  describe('按住不放（event.repeat）', () => {
+    it('空格长按不再反复切换播放/暂停', () => {
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+      expect(video?.pause).toHaveBeenCalledTimes(1);
+
+      expect(controller.handleKeyDown(keyEvent(' ', { repeat: true }))).toBe(true);
+      expect(controller.handleKeyDown(keyEvent(' ', { repeat: true }))).toBe(true);
+
+      expect(video?.pause).toHaveBeenCalledTimes(1);
+      expect(video?.play).not.toHaveBeenCalled();
+    });
+
+    it('方向键长按不再反复快进', () => {
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(true);
+      expect(video?.currentTime).toBe(17);
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight', { repeat: true }))).toBe(true);
+      expect(controller.handleKeyDown(keyEvent('ArrowRight', { repeat: true }))).toBe(true);
+
+      expect(video?.currentTime).toBe(17);
+    });
+
+    it('全屏键长按不再反复进出全屏', () => {
+      const toggle = vi.fn(() => true);
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedVideo: () => video,
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen: toggle,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        isTrustedEvent: () => true,
+      });
+
+      expect(controller.handleKeyDown(keyEvent('f'))).toBe(true);
+      expect(toggle).toHaveBeenCalledTimes(1);
+
+      expect(controller.handleKeyDown(keyEvent('f', { repeat: true }))).toBe(true);
+
+      expect(toggle).toHaveBeenCalledTimes(1);
+      expect(exitFullscreen).not.toHaveBeenCalled();
+    });
+
+    it('松手之后长按的归属作废：下一次按下重新判定', () => {
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+      expect(controller.handleKeyUp(keyUpEvent(' '))).toBe(false);
+
+      // 松手后再次按下（不是 repeat）→ 正常再切一次。
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+      expect(video?.pause).toHaveBeenCalledTimes(1);
+      expect(video?.play).toHaveBeenCalledTimes(1);
+    });
+
+    it('页面上没有视频时，长按的空格仍然完整放行给页面（页面要能滚动）', () => {
+      video = null;
+
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+      expect(controller.handleKeyDown(keyEvent(' ', { repeat: true }))).toBe(false);
+    });
+
+    it('长按期间页面不会被我们抢走按键（吞掉但不执行）', () => {
+      // cancelable 必须是 true，否则 preventDefault 在 jsdom 里什么也不做。
+      const event = keyEvent(' ', { repeat: true, cancelable: true });
+      controller.handleKeyDown(keyEvent(' '));
+
+      expect(controller.handleKeyDown(event)).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('不是我们快捷键的键根本不查视频', () => {
+      const getWatchedVideo = vi.fn(() => video);
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedVideo,
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        isTrustedEvent: () => true,
+      });
+
+      expect(controller.handleKeyDown(keyEvent('a'))).toBe(false);
+      expect(controller.handleKeyDown(keyEvent('F5'))).toBe(false);
+      expect(controller.handleKeyDown(keyEvent('Tab'))).toBe(false);
+      expect(getWatchedVideo).not.toHaveBeenCalled();
+    });
+  });
 });
