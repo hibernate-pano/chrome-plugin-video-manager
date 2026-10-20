@@ -143,9 +143,7 @@ const RANGE_KEYS = new Set([
  * 滑块一动不动（原生 range 的方向键行为被 preventDefault 吃掉了）。
  * 这正是 6.0.9 承诺的「控制条的滑块在键盘下重新可用」。
  *
- * 只认 `data-role="progress" / "volume"` 这两个我们自己的标记：
- * 站点自己的 range 不该由我们让路（那会让站点滑块在视频全屏里失灵），
- * 但站点滑块本来也不该被我们抢 —— 那个由「用户正在看的视频」那条判据负责。
+ * 只认 `data-role="progress" / "volume"` 这两个我们自己的标记。
  */
 const isOurRangeSliderEvent = (event: KeyboardEvent): boolean => {
   if (!RANGE_KEYS.has(event.key)) {
@@ -161,6 +159,148 @@ const isOurRangeSliderEvent = (event: KeyboardEvent): boolean => {
   const role = target.getAttribute('data-role');
   return role === 'progress' || role === 'volume';
 };
+
+/**
+ * 我们自己的全屏控制条的宿主 id。
+ *
+ * 与 `fullscreenControls.ts` 里的 `CONTROLS_ID` 必须是同一个值 —— 那边在改
+ * 标记时这边要跟着改，所以**改那边之前先看这里**（或者干脆把常量导过去）。
+ */
+const OUR_CONTROLS_ID = 'vsc-controls';
+
+/** 焦点在我们自己的控制条里时，这些键归控件自己。 */
+const OUR_CONTROLS_OWNED_KEYS = new Set<string>([' ', 'Enter', ...RANGE_KEYS]);
+
+/**
+ * 事件是不是落在**我们自己的**控制条里，且这个键是控件自己要用的。
+ *
+ * 为什么必须有这条：我们在 window 捕获阶段就 `preventDefault()` 了空格，
+ * 浏览器「空格激活按钮」的默认行为因此被取消 —— 我们控制条上的
+ * 播放 / 静音 / 退出 / 倍速按钮按空格**全都不响应**（只有 Enter 响应）。
+ * 实测：焦点在静音按钮上按空格 → 静音没触发，反而把视频切成了播放；
+ * 焦点在退出按钮上按空格 → 全屏没关，也变成了切播放。
+ *
+ * 让路只给「控件自己会用的键」：空格 / Enter / 方向键 / Home / End。
+ * `=`、`-`、`0`、`f` 仍然归我们 —— 那些是浏览器的默认行为里没有的键。
+ */
+const isOurControlsEvent = (event: KeyboardEvent): boolean => {
+  if (!OUR_CONTROLS_OWNED_KEYS.has(event.key)) {
+    return false;
+  }
+
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  return path.some((node) => node instanceof HTMLElement && node.id === OUR_CONTROLS_ID);
+};
+
+/** 按钮类控件自己会用的键：空格与 Enter（HTML 的标准激活键）。 */
+const BUTTON_OWNED_KEYS = new Set<string>([' ', 'Enter']);
+
+/** 滑块类控件自己会用的键：方向键与 Home / End / PageUp / PageDown。 */
+const SLIDER_OWNED_KEYS = RANGE_KEYS;
+
+/** ARIA 角色里表示「可激活 / 可切换」的。 */
+const ACTIVATABLE_ROLES = new Set([
+  'button',
+  'link',
+  'checkbox',
+  'radio',
+  'switch',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'tab',
+  'option',
+]);
+
+/**
+ * 这个元素是不是「有键盘语义」的控件？它自己会用掉哪些键？
+ *
+ * 返回 null = 不是这类控件（我们照常接管）。
+ *
+ * ⚠️ 为什么必须有这条（6.0.9 三审实测）：
+ * 焦点落在**站点自己的**控件上时，我们抢键会让那些控件在键盘下**彻底失效**：
+ * - 焦点在站点的 range 滑块上按 → → 滑块 value 纹丝不动、`input` 事件 0 次，
+ *   而视频 currentTime 从 0 跳到 5（键被视频吃了）；
+ * - 焦点在站点的按钮上按空格 → 按钮 click 次数 0（没触发），视频反而开始播放。
+ *
+ * 早先的注释写着「站点滑块本来也不该被我们抢 —— 那个由『用户正在看的视频』
+ * 那条判据负责」—— **那是错的**：视频够大成立，与焦点落在哪个控件上是
+ * **两条独立的轴**。
+ */
+const ownedKeysOf = (element: Element): ReadonlySet<string> | null => {
+  const tag = element.tagName.toLowerCase();
+
+  if (tag === 'input') {
+    const type = (element as HTMLInputElement).type?.toLowerCase() ?? 'text';
+    // 文本类由 isEditableTarget 负责（那里直接整体放行）。
+    if (type === 'range') return SLIDER_OWNED_KEYS;
+    if (type === 'checkbox' || type === 'radio' || type === 'button'
+      || type === 'submit' || type === 'reset') {
+      return BUTTON_OWNED_KEYS;
+    }
+    return null;
+  }
+
+  if (tag === 'button' || tag === 'summary') {
+    return BUTTON_OWNED_KEYS;
+  }
+
+  if (tag === 'a' && element.hasAttribute('href')) {
+    return BUTTON_OWNED_KEYS;
+  }
+
+  const role = element.getAttribute('role')?.toLowerCase();
+  if (!role) {
+    return null;
+  }
+
+  if (role === 'slider' || role === 'spinbutton' || role === 'progressbar') {
+    return SLIDER_OWNED_KEYS;
+  }
+
+  if (ACTIVATABLE_ROLES.has(role)) {
+    return BUTTON_OWNED_KEYS;
+  }
+
+  return null;
+};
+
+/**
+ * 焦点所在控件要用这个键吗？要的话，这个键就归它 —— 我们放行。
+ *
+ * 只放行「控件自己会用的那几���键」，不是把整个键盘都让出去：
+ * 焦点在站点按钮上时按 `=` 仍然是我们调速（浏览器对按钮没有 `=` 的默认行为）。
+ */
+const yieldsToFocusedControl = (event: KeyboardEvent): boolean => {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  const target = path[0] ?? event.target;
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  // 我们自己的控件另有一套规则（见 isOurControlsEvent）。
+  if (path.some((node) => node instanceof HTMLElement && node.id === OUR_CONTROLS_ID)) {
+    return false;
+  }
+
+  const owned = ownedKeysOf(target);
+  return owned !== null && owned.has(event.key);
+};
+
+/**
+ * 这个视频是不是**根本没法 seek**（直播流）。
+ *
+ * 直播流（MediaStream / 无时长源）的 `duration` 是 Infinity 且 `seekable` 为空，
+ * `video.currentTime = x` 什么也不会发生 —— 但我们会把这个键**吞掉**，
+ * 于是用户看到的是「按了 → 什么都没发生，页面也没滚动」。
+ *
+ * 这种情况下不该吞键：让它落到页面上，用户至少还能滚动。
+ *
+ * 只在「能确定是直播」时才放行（duration 无限 **且** 没有可 seek 区间）：
+ * 别的情形（媒体还没加载完、时长还没算出来）保持原样，免得漏掉正常的快进。
+ */
+const isUnseekableLiveStream = (video: HTMLVideoElement): boolean =>
+  video.duration === Number.POSITIVE_INFINITY && video.seekable.length === 0;
 
 /**
  * YouTube 站点例外：它的播放器对空格有完整原生处理，且实现挂在 keyup 上。
@@ -331,6 +471,20 @@ export class KeyboardController {
       return false;
     }
 
+    // 焦点在我们自己的控制条里时，空格/Enter/方向键归控件自己 ——
+    // 否则我们在捕获阶段 preventDefault 掉的空格会让「空格激活按钮」失效
+    // （实测：焦点在静音按钮上按空格 → 静音没触发，反而把视频切成了播放）。
+    if (isOurControlsEvent(event)) {
+      return false;
+    }
+
+    // 焦点在**站点自己的**控件上时，那个控件的键归它自己。
+    // 否则站点的滑块在键盘下彻底失效（方向键被视频吃掉，滑块纹丝不动），
+    // 站点的按钮按空格也不会触发（空格被视频吃去切换播放了）。
+    if (yieldsToFocusedControl(event)) {
+      return false;
+    }
+
     const shortcuts = this.options.getSettings().shortcuts;
 
     // 退出全屏不需要有视频：全屏状态本身已隐含一个受控对象。
@@ -393,6 +547,13 @@ export class KeyboardController {
     }
 
     if (action === 'seekBack') {
+      // 直播流根本没法 seek：吞掉键只会让用户看到「按了 → 什么都没发生」。
+      // 这种时候把键放回页面，用户至少还能滚动。
+      if (isUnseekableLiveStream(video)) {
+        this.holdOwner = null;
+        return false;
+      }
+
       this.intercept(event, action);
       this.clearRepeat();
       seekBy(video, -SEEK_STEP_SECONDS);
@@ -400,6 +561,11 @@ export class KeyboardController {
     }
 
     if (action === 'seekForward') {
+      if (isUnseekableLiveStream(video)) {
+        this.holdOwner = null;
+        return false;
+      }
+
       this.intercept(event, action);
       this.clearRepeat();
       seekBy(video, SEEK_STEP_SECONDS);

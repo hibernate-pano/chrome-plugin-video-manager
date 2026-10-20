@@ -148,8 +148,14 @@ describe('KeyboardController', () => {
     expect(controller.handleKeyDown(event)).toBe(false);
   });
 
-  it('still runs shortcuts when the composed path starts on a range slider', () => {
-    // 与上一条镜像：composedPath 优先级提高后，进度条的既有行为不能回退。
+  it('站点的 range 滑块拿走方向键，但别的快捷键照常', () => {
+    // ⚠️ 这条曾经断言「站点的 range 滑块也抢不到键」（方向键仍然被我们接管），
+    // 而那是**错的**：实测（真实 Chromium）焦点落在站点的 range 上按 →，
+    // 滑块 value 纹丝不动、`input` 事件 0 次，键却被视频吃了（currentTime 0→5）。
+    // 滑块在键盘下**彻底失效**。
+    //
+    // 「视频够大」与「焦点落在哪个控件上」是**两条独立的轴**，
+    // 不能用前者去推断后者。
     const host = document.createElement('div');
     const slider = document.createElement('input');
     slider.type = 'range';
@@ -159,21 +165,27 @@ describe('KeyboardController', () => {
     Object.defineProperty(event, 'target', { value: host });
     Object.defineProperty(event, 'composedPath', { value: () => [slider, host, document, window] });
 
-    expect(controller.handleKeyDown(event)).toBe(true);
+    // 方向键归滑块。
+    expect(controller.handleKeyDown(event)).toBe(false);
+
+    // 但 `=` 不是滑块要的键 —— 仍然归我们。
+    expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
   });
 
-  it('still runs shortcuts when focus is on a range slider (our progress bar)', () => {
+  it('我们自己控制条上的控件仍然只让路给方向键，f / Esc 照常', () => {
     // 回归：点击全屏进度条后焦点落在 <input type="range"> 上；旧逻辑把所有
     // <input> 当编辑态，导致方向键/Esc/f 全部失灵。
     const slider = document.createElement('input');
     slider.type = 'range';
+    slider.setAttribute('data-role', 'progress');
     const target = (key: string) => {
       const e = keyEvent(key);
       Object.defineProperty(e, 'target', { value: slider });
+      Object.defineProperty(e, 'composedPath', { value: () => [slider, document, window] });
       return e;
     };
 
-    expect(controller.handleKeyDown(target('ArrowRight'))).toBe(true); // 交给播放器跳转，而非滑块 0.1s 微调
+    expect(controller.handleKeyDown(target('ArrowRight'))).toBe(false); // 交给滑块自己
     expect(controller.handleKeyDown(target('f'))).toBe(true);           // 仍能切换全屏
     // Escape 仅在「全屏激活」时才被拦截（用于退出全屏）。
     createController(true);
@@ -222,16 +234,16 @@ describe('KeyboardController', () => {
     expect(controller.handleKeyDown(event)).toBe(false);
   });
 
-  it('站��自己的 range 滑块不让我们让路', () => {
-    // 站点滑块（没有 data-role）不在我们的让路范围内 ——
-    // 否则站点自己的音量条在视频全屏里就动不了了。
+  it('站��自己的 range 滑块不再被我们抢走方向键', () => {
+    // 站点滑块（没有 data-role）拿回自己的方向键 —— 见上面那条的实测证据：
+    // 抢走它的后果是滑块在键盘下彻底失效，而不是「让站点滑块动不了」。
     const slider = document.createElement('input');
     slider.type = 'range';
     const event = keyEvent('ArrowRight');
     Object.defineProperty(event, 'target', { value: slider });
     Object.defineProperty(event, 'composedPath', { value: () => [slider, document, window] });
 
-    expect(controller.handleKeyDown(event)).toBe(true);
+    expect(controller.handleKeyDown(event)).toBe(false);
   });
 
   /**
@@ -726,5 +738,102 @@ describe('KeyboardController', () => {
       expect(controller.handleKeyDown(keyEvent('Tab'))).toBe(false);
       expect(getWatchedVideo).not.toHaveBeenCalled();
     });
+  });
+
+  /**
+   * 焦点在站点自己的控件上时，那个控件的键归它自己。
+   *
+   * 实测（真实 Chromium，站点自己的 range + 按钮）：
+   * - 焦点在 range 上按 → → 滑块 value 纹丝不动、input 事件 0 次，
+   *   而视频 currentTime 从 0 跳到 5（键被视频吃了）；
+   * - 焦点在按钮上按空格 → 按钮 click 次数 0（没触发），视频反而开始播放。
+   */
+  describe('焦点在站点控件上', () => {
+    const withTarget = (target: HTMLElement, key: string) => {
+      const event = keyEvent(key);
+      Object.defineProperty(event, 'target', { value: target });
+      Object.defineProperty(event, 'composedPath', { value: () => [target, document, window] });
+      return event;
+    };
+
+    it('站点的 range 滑块拿走方向键', () => {
+      const slider = document.createElement('input');
+      slider.type = 'range';
+
+      expect(controller.handleKeyDown(withTarget(slider, 'ArrowRight'))).toBe(false);
+      expect(controller.handleKeyDown(withTarget(slider, 'Home'))).toBe(false);
+      expect(controller.handleKeyDown(withTarget(slider, 'End'))).toBe(false);
+      // 但视频没被 seek 过。
+      expect(video?.currentTime).toBe(12);
+    });
+
+    it('站点的按钮拿走空格与 Enter', () => {
+      const button = document.createElement('button');
+
+      expect(controller.handleKeyDown(withTarget(button, ' '))).toBe(false);
+      expect(controller.handleKeyDown(withTarget(button, 'Enter'))).toBe(false);
+      // 视频没被切换播放。
+      expect(video?.pause).not.toHaveBeenCalled();
+      expect(video?.play).not.toHaveBeenCalled();
+    });
+
+    it('站点按钮上的调速键仍然归我们', () => {
+      const button = document.createElement('button');
+
+      expect(controller.handleKeyDown(withTarget(button, '='))).toBe(true);
+      expect(showSpeedFeedback).toHaveBeenCalled();
+    });
+
+    it('ARIA 角色同样算数', () => {
+      const slider = document.createElement('div');
+      slider.setAttribute('role', 'slider');
+
+      expect(controller.handleKeyDown(withTarget(slider, 'ArrowRight'))).toBe(false);
+    });
+  });
+
+  /**
+   * 我们自己控制条上的按钮必须能被空格激活。
+   *
+   * 实测：焦点在静音按钮上按空格 → 静音没触发（muted 仍 false），
+   * 反而把视频切成了播放；焦点在退出按钮上按空格 → 全屏没关。
+   * 根因：我们在 window 捕获阶段 preventDefault 掉了空格。
+   */
+  describe('焦点在我们自己的控制条上', () => {
+    const withTarget = (target: HTMLElement, key: string) => {
+      const event = keyEvent(key);
+      const host = document.createElement('div');
+      host.id = 'vsc-controls';
+      host.append(target);
+      Object.defineProperty(event, 'target', { value: target });
+      Object.defineProperty(event, 'composedPath', { value: () => [target, host, document, window] });
+      return event;
+    };
+
+    it('空格与 Enter 让给控件自己', () => {
+      const button = document.createElement('button');
+
+      expect(controller.handleKeyDown(withTarget(button, ' '))).toBe(false);
+      expect(controller.handleKeyDown(withTarget(button, 'Enter'))).toBe(false);
+      expect(video?.pause).not.toHaveBeenCalled();
+    });
+
+    it('调速键仍然归我们', () => {
+      const button = document.createElement('button');
+
+      expect(controller.handleKeyDown(withTarget(button, '='))).toBe(true);
+      expect(showSpeedFeedback).toHaveBeenCalled();
+    });
+  });
+
+  it('直播流上不吞掉快进键（那个键根本没用）', () => {
+    if (!video) throw new Error('video missing');
+
+    Object.defineProperty(video, 'duration', { value: Number.POSITIVE_INFINITY, configurable: true });
+    Object.defineProperty(video, 'seekable', { value: [], configurable: true });
+
+    // 吞掉键 = 用户看到「按了 → 什么都没发生，页面也没滚动」。
+    // 直播流没法 seek，所以把键放回页面。
+    expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
   });
 });
