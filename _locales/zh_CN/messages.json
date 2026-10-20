@@ -1,9 +1,7 @@
 {
-  "optTitle": {
-    "message": "快捷键"
-  },
   "optSubtitle": {
-    "message": "每个动作都可以改键。留空表示禁用该动作，保存后已打开的页面会立即生效。"
+    "message": "快捷键",
+    "description": "设置页副标题：这一节的名字"
   },
   "optSave": {
     "message": "保存"
@@ -84,18 +82,83 @@
     "message": "音量"
   },
   "ctlExit": {
-    "message": "退出全屏"
+    "message": "退出全屏 (Esc)"
+  },
+  "ctlGroup": {
+    "message": "视频播放控制"
+  },
+  "ctlPause": {
+    "message": "暂停"
+  },
+  "ctlUnmute": {
+    "message": "取消静音"
+  },
+  "ctlMuted": {
+    "message": "已静音"
+  },
+  "ctlSpeed": {
+    "message": "播放速度"
   },
   "hintFullscreen": {
     "message": "网页全屏"
   },
   "hintSpeed": {
-    "message": "{up} / {down} 调速"
+    "message": "$1 / $2 调速",
+    "placeholders": {
+      "up": {
+        "content": "$1",
+        "example": "="
+      },
+      "down": {
+        "content": "$2",
+        "example": "-"
+      }
+    }
   },
   "hintMore": {
-    "message": "全部快捷键可在扩展设置里改绑"
+    "message": "全部快捷键可在扩展设置里改绑（右键扩展图标 → 选项）"
+  },
+  "actionTitle": {
+    "message": "Video Speed Controller"
   },
   "noticeCannotTakeOver": {
     "message": "这个视频暂时接管不了"
+  },
+  "speedChanged": {
+    "message": "播放速度 {rate}x"
+  },
+  "optProductName": {
+    "message": "Video Speed Controller — Fullscreen & Keys",
+    "description": "设置页 H1：产品名"
+  },
+  "optPageTitle": {
+    "message": "Video Speed Controller — Fullscreen & Keys",
+    "description": "设置页的浏览器标签标题"
+  },
+  "optLead": {
+    "message": "每个动作都可以改键。留空表示禁用该动作，保存后已打开的页面会立即生效。",
+    "description": "设置页说明段落"
+  },
+  "optPrivacy": {
+    "message": "隐私政策",
+    "description": "页脚链接：隐私政策"
+  },
+  "optRepository": {
+    "message": "源码仓库",
+    "description": "页脚链接：源码仓库"
+  },
+  "optVersion": {
+    "message": "版本",
+    "description": "页脚版本号标签"
+  },
+  "commandOpenOptions": {
+    "message": "打开扩展设置"
+  },
+  "__vscLocale": {
+    "message": "zh-CN",
+    "description": "Language marker: lets the extension know which locale directory Chrome actually selected (read via chrome.i18n.getMessage). Do not translate — it is a BCP 47 tag."
+  },
+  "noticeNoVideo": {
+    "message": "这个页面里没有视频"
   }
 }

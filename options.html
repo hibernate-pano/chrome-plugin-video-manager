@@ -1,4 +1,16 @@
 <!DOCTYPE html>
+<!--
+  lang 不写死：界面文案走 chrome.i18n，Chrome 挑了哪个 _locales 目录就渲染哪种语言，
+  <html lang> 必须由 src/options/index.ts 在启动时与**实际渲染的语言**对齐，
+  否则屏幕阅读器会用错误的语音朗读（且没有任何视觉症状）。
+
+  ⚠️ 对齐时不能用 chrome.i18n.getUILanguage() —— 它是浏览器**界面**语言，
+  而 Chrome 选 locale 目录可能受**系统/地区设置**影响。两者不一致时
+  （macOS 上"系统中文 + Chrome 界面英文"很常见）就会 lang 与内容对不上。
+  详见 src/shared/i18n.ts 的 currentLocale()。
+
+  <title> 同理：扩展页面里的 __MSG_ 占位符不会被 Chrome 替换，只能用 JS 设置。
+-->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">

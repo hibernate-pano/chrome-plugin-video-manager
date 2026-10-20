@@ -1,11 +1,7 @@
 {
-  "optTitle": {
-    "message": "Shortcuts",
-    "description": "Options page title"
-  },
   "optSubtitle": {
-    "message": "Every action can be rebound. Leave a field empty to disable it; changes apply to open tabs immediately.",
-    "description": "Options subtitle"
+    "message": "Shortcuts",
+    "description": "Options page subtitle: the section name"
   },
   "optSave": {
     "message": "Save",
@@ -112,23 +108,96 @@
     "description": "Fullscreen control volume slider"
   },
   "ctlExit": {
-    "message": "Exit fullscreen",
+    "message": "Exit fullscreen (Esc)",
     "description": "Fullscreen control exit button"
+  },
+  "ctlGroup": {
+    "message": "Video playback controls",
+    "description": "Accessible name of the fullscreen control bar"
+  },
+  "ctlPause": {
+    "message": "Pause",
+    "description": "Fullscreen control play button while the video is playing"
+  },
+  "ctlUnmute": {
+    "message": "Unmute",
+    "description": "Fullscreen control mute button while muted"
+  },
+  "ctlMuted": {
+    "message": "Muted",
+    "description": "Fullscreen control volume slider while muted"
+  },
+  "ctlSpeed": {
+    "message": "Playback speed",
+    "description": "Fullscreen control speed button; the current rate is appended to it"
   },
   "hintFullscreen": {
     "message": "Fullscreen",
     "description": "First-run hint: fullscreen action label"
   },
   "hintSpeed": {
-    "message": "{up} / {down} speed",
-    "description": "First-run hint: speed step actions"
+    "message": "$1 / $2 speed",
+    "description": "First-run hint: speed step actions",
+    "placeholders": {
+      "up": {
+        "content": "$1",
+        "example": "="
+      },
+      "down": {
+        "content": "$2",
+        "example": "-"
+      }
+    }
   },
   "hintMore": {
-    "message": "All shortcuts can be rebound in the extension settings",
-    "description": "First-run hint: footer line"
+    "message": "All shortcuts can be rebound in the extension settings (right-click the extension icon → Options)",
+    "description": "First-run hint: footer line, tells the user where the settings live"
+  },
+  "actionTitle": {
+    "message": "Video Speed Controller",
+    "description": "Toolbar icon title prefix; the current speed is appended to it"
   },
   "noticeCannotTakeOver": {
     "message": "This video cannot be taken over here",
     "description": "Shown when the page fullscreen player cannot take over a video"
+  },
+  "speedChanged": {
+    "message": "Playback speed {rate}x",
+    "description": "Screen reader announcement when the playback rate changes"
+  },
+  "optProductName": {
+    "message": "Video Speed Controller — Fullscreen & Keys",
+    "description": "Options page H1: product name"
+  },
+  "optPageTitle": {
+    "message": "Video Speed Controller — Fullscreen & Keys",
+    "description": "Browser tab title of the options page"
+  },
+  "optLead": {
+    "message": "Every action can be rebound. Leave a field empty to disable it; changes apply to open tabs immediately.",
+    "description": "Options page lead paragraph"
+  },
+  "optPrivacy": {
+    "message": "Privacy policy",
+    "description": "Footer link: privacy policy"
+  },
+  "optRepository": {
+    "message": "Source code",
+    "description": "Footer link: source repository"
+  },
+  "optVersion": {
+    "message": "Version",
+    "description": "Footer version label"
+  },
+  "commandOpenOptions": {
+    "message": "Open extension settings"
+  },
+  "__vscLocale": {
+    "message": "en",
+    "description": "Language marker: lets the extension know which locale directory Chrome actually selected (read via chrome.i18n.getMessage). Do not translate — it is a BCP 47 tag."
+  },
+  "noticeNoVideo": {
+    "message": "There is no video on this page",
+    "description": "Shown when the user clicks the toolbar icon on a page that has no video"
   }
 }

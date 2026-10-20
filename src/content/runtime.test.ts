@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContentRuntime } from './runtime';
-import { STORAGE_KEY, TOGGLE_FULLSCREEN_MESSAGE } from '../shared/types';
+import { STORAGE_KEY, SPEED_REPORT_MESSAGE, TOGGLE_FULLSCREEN_MESSAGE } from '../shared/types';
 
 /** 取最近一个 ContentRuntime 注册的 onMessage 监听器（beforeEach 的实例先注册）。 */
 const lastMessageListener = () => {
@@ -86,7 +86,15 @@ describe('ContentRuntime integration', () => {
         onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
       },
     });
-    runtime = new ContentRuntime();
+    runtime = new ContentRuntime({
+      // jsdom 造不出可信事件：`isTrusted` 是实例上的 non-configurable 属性，
+      // `Object.defineProperty` 会抛 TypeError，原型上也没有 getter 可覆盖。
+      // 键盘控制器默认只认 isTrusted —— 于是「按 = 真的改倍速」这条集成链路
+      // 在单测里永远跑不起来（合成事件会被正确地当成伪造事件拒掉）。
+      // 这里注入一条恒真的判据，把「真实输入」这一层让给浏览器，
+      // 单测只验证接线与行为。伪造事件的拒绝另有专门的单测覆盖。
+      isTrustedEvent: () => true,
+    });
     await runtime.start();
     await vi.advanceTimersByTimeAsync(0);
   });
@@ -152,6 +160,83 @@ describe('ContentRuntime integration', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(toast()?.classList.contains('vsc-visible')).toBe(true);
     expect(document.getElementById('vsc-controls')).not.toBeNull();
+  });
+
+  it('档位菜单选中后给出提示，并把倍速告诉 background', async () => {
+    // 控制条只有全屏时才挂上，所以先进全屏。
+    lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+
+    const shadow = document.getElementById('vsc-controls')!.shadowRoot!;
+    shadow.querySelector<HTMLButtonElement>('[data-role="speed"]')!.click();
+    shadow.querySelector<HTMLButtonElement>('[data-rate="1.5"]')!.click();
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // 胶囊提示：控制条 3 秒就隐藏，用户可能压根没看见自己选了什么。
+    expect(document.getElementById('vsc-speed-toast')?.textContent).toBe('1.5x');
+    // 工具栏标题要显示当前倍速。
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: SPEED_REPORT_MESSAGE,
+      rate: 1.5,
+    });
+  });
+
+  it('档位菜单开着时，Esc 关菜单而不是退出全屏', async () => {
+    lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+
+    const shadow = document.getElementById('vsc-controls')!.shadowRoot!;
+    shadow.querySelector<HTMLButtonElement>('[data-role="speed"]')!.click();
+
+    const menu = shadow.querySelector<HTMLElement>('[data-role="speed-menu"]')!;
+    expect(menu.hidden).toBe(false);
+
+    // composed: true —— 真实浏览器的 keydown 是 composed 的，会一路冒泡到 window，
+    // 正好复现「键盘控制器在捕获阶段先看到 Esc」这个真实顺序。
+    shadow.querySelector<HTMLButtonElement>('[data-rate="1.5"]')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, composed: true }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(menu.hidden).toBe(true);
+    // 全屏还在：Esc 被菜单吃掉了，而不是把整个全屏关掉。
+    expect(document.getElementById('vsc-page-fullscreen-overlay')?.classList.contains('vsc-active')).toBe(true);
+  });
+
+  it('点工具栏图标但页面上没有视频时，给出提示而不是静默', async () => {
+    // 工具栏图标是扩展**唯一**看得见的入口。点了毫无反应，
+    // 用户能得出的唯一结论就是「扩展坏了」。
+    // 键盘路径有 notifyTakeoverUnavailable 兜底，图标路径原本什么都没有。
+    video.remove();
+
+    lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+
+    const notice = document.getElementById('vsc-takeover-notice');
+    expect(notice?.textContent).toBe('这个页面里没有视频');
+    // 提示是 position:fixed，必须有明确坐标，否则静态位置在文档流末尾（屏幕外）。
+    expect(notice?.style.left).toBe('16px');
+    expect(notice?.style.top).toBe('16px');
+  });
+
+  it('点工具栏图标但接管不了时，回报失败而不是假装成功', async () => {
+    // 跨 document（同源 iframe）的视频接管不了。
+    // 回应必须是"失败"，否则调用方（未来的 popup / 命令）会以为全屏已经进了。
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    const frameDocument = iframe.contentDocument!;
+    frameDocument.body.innerHTML = '<video id="framed"></video>';
+    // 顶层不能有别的视频，否则 registry 会挑走顶层那个（它能接管）。
+    video.remove();
+
+    let response: unknown = null;
+    lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, (value: unknown) => {
+      response = value;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(response).toEqual({ ok: false, active: false });
+    const notice = document.getElementById('vsc-takeover-notice');
+    expect(notice?.textContent).toBe('这个视频暂时接管不了');
   });
 
   it('applies shortcut changes to the already-open page without a reload', async () => {

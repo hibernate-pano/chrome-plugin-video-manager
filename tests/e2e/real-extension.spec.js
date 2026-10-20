@@ -358,8 +358,19 @@ test.describe('反馈：不让用户面对静默失败', () => {
       await expect(page.locator('#vsc-first-run-hint.vsc-visible')).toHaveCount(1, { timeout: 6000 });
       // 文案必须用用户当前真实的绑定（默认 f 与 = / -），并且不教播放/暂停——
       // 用户刚刚才按过播放，那个键不需要被教。
+      //
+      // ⚠️ 这里断言的是**小写 f**，不是 F。
+      //
+      // 匹配是区分 Shift 的（event.shiftKey === modifiers.has('shift')），
+      // 绑定 `f` 时按 Shift+F 根本不会触发。旧实现把单字符一律大写，
+      // 界面上写着 `F` 而用户照着按大写**按了没反应**。6.0.9 起
+      // 字母保持原样（见 src/shared/shortcuts.ts 的 formatShortcut）。
+      //
+      // 这条断言此前一直写着 'F'，与新行为不符 —— 是**断言过时**，
+      // 不是实现回归。
       const text = await page.locator('#vsc-first-run-hint').textContent();
-      expect(text).toContain('F');
+      expect(text).toContain('f');
+      expect(text).not.toContain('F');
       expect(text).toContain('= / -');
       expect(text).not.toContain('Space');
 
@@ -460,22 +471,42 @@ test.describe('字幕等浮层兼容性', () => {
         })
         .toBe(true);
       // 字幕必须跟着视频进入 overlay —— 留在站点播放器里就等于留在原地看不见了。
+      //
+      // ⚠️ 判据是 **z-index**，不是 DOM 顺序。
+      //
+      // 早先这里断言「字幕排在视频之后」，理由是"后画的盖住先画的"。那是错的：
+      // z-index 只在**同一层叠上下文**内比较，一个 z-index:auto 的定位元素
+      // 依然会输给显式高层级的视频。视频在 reparent 后带 z-index 2147483643
+      // （inline !important），字幕原本是 auto —— 哪怕 DOM 顺序排在视频之后，
+      // 实测字幕被 100% 盖住，一个像素都看不见。
+      //
+      // 字幕现在住在一个专门的定位参照物里（[data-vsc-caption-host]），
+      // 那个容器与画面等大，让站点的 `bottom: %` 相对画面而不是视口算。
       const inFullscreen = await page.evaluate(() => {
         const stage = document.getElementById('vsc-page-fullscreen-stage');
         const caption = document.getElementById('imt-caption-container');
         const video = document.getElementById('v1');
         if (!stage || !caption || !video) return null;
-        const kids = Array.from(stage.children);
+        const host = stage.querySelector('[data-vsc-caption-host]');
+        const rect = caption.getBoundingClientRect();
         return {
           captionInStage: stage.contains(caption),
-          captionAfterVideo: kids.indexOf(caption) > kids.indexOf(video),
-          captionVisible: caption.getBoundingClientRect().height > 0,
+          inCaptionHost: Boolean(host && host.contains(caption)),
+          captionZ: Number(getComputedStyle(caption).zIndex),
+          videoZ: Number(getComputedStyle(video).zIndex),
+          captionVisible: rect.height > 0 && rect.width > 0,
         };
       });
       expect(inFullscreen).not.toBeNull();
       expect(inFullscreen.captionInStage, '字幕应被搬进 stage 跟随视频').toBe(true);
-      expect(inFullscreen.captionAfterVideo, '字幕必须排在视频之后，否则会被高 z-index 盖住').toBe(true);
-      expect(inFullscreen.captionVisible).toBe(true);
+      expect(inFullscreen.inCaptionHost, '字幕应住在与画面等大的定位参照物里').toBe(true);
+      expect(
+        inFullscreen.captionZ,
+        '字幕的 z-index 必须高于视频，否则被视频整个盖住（DOM 顺序不够）',
+      ).toBeGreaterThan(inFullscreen.videoZ);
+      // 宽度为 0 的字幕等于没字幕：字幕容器是 stage 的 flex item，
+      // 尺寸塌成 0 时站点字幕的 `left:0;right:0` 相对 0 宽包含块 → 自己也变 0 宽。
+      expect(inFullscreen.captionVisible, '字幕必须有真实的尺寸').toBe(true);
 
       await page.keyboard.press('f');
       await expect

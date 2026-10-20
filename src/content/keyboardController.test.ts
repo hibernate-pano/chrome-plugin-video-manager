@@ -48,6 +48,18 @@ const createSettings = (
   shortcuts: { ...DEFAULT_SHORTCUTS, ...shortcuts },
 });
 
+/**
+ * 造一个键盘事件。
+ *
+ * 6.0.9 起键盘控制器只处理「可信」事件（页面能 dispatchEvent 伪造按键来
+ * 操纵用户的视频）。但 jsdom 造不出可信事件：`isTrusted` 在 jsdom 里是
+ * **实例上的 non-configurable 属性**（实测 `Object.defineProperty` 抛
+ * TypeError，连原型上的 getter 都覆盖不了）。
+ *
+ * 所以信任判定被做成**可注入**的依赖（`isTrustedEvent`）：
+ * 真实运行时读 `event.isTrusted`，单测里由我们控制。
+ * 这样「可信 → 接管」与「不可信 → 完全放行」两个方向都能测到。
+ */
 const keyEvent = (key: string, init: KeyboardEventInit = {}) =>
   new KeyboardEvent('keydown', { key, ...init });
 
@@ -79,13 +91,17 @@ describe('KeyboardController', () => {
   const createController = (fullscreenActive = false) => {
     controller = new KeyboardController({
       getSettings: () => settings,
-      getCurrentVideo: () => video,
+      // 默认「用户正在看的视频」就是那个 video；测「没有明确目标」那条时置 null。
+      getWatchedVideo: () => video,
       isFullscreenActive: () => fullscreenActive,
       canToggleFullscreen,
       toggleFullscreen,
       exitFullscreen,
       showSpeedFeedback,
       notifyTakeoverUnavailable,
+      // 默认所有事件都算「可信」——除专门的不可信用例外，其余用例关注的
+      // 是快捷键匹配本身。真实运行时读的是 event.isTrusted。
+      isTrustedEvent: () => true,
     });
   };
 
@@ -162,6 +178,218 @@ describe('KeyboardController', () => {
     // Escape 仅在「全屏激活」时才被拦截（用于退出全屏）。
     createController(true);
     expect(controller.handleKeyDown(target('Escape'))).toBe(true);      // 仍能退出全屏
+  });
+
+  /**
+   * 我们**自己**的滑块（带 data-role）必须把方向键让给原生 range 行为。
+   *
+   * 默认绑定里方向键是「快退/快进 5 秒」。焦点落在进度条上时若仍被我们抢走，
+   * 滑块在键盘下就**完全不可用** —— 读屏用户按方向键，滑块一动不动
+   * （原生 range 的方向键行为被 preventDefault 吃掉了）。
+   *
+   * ⚠️ 但只有**我们自己的**滑块让路：站点自己的 range 不该由我们让路
+   * （那会让站点滑块在视频全屏里失灵）。
+   */
+  it('焦点在我们自己的滑块上时，方向键让给原生 range 行为', () => {
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.setAttribute('data-role', 'progress');
+    const target = (key: string) => {
+      const e = keyEvent(key);
+      Object.defineProperty(e, 'target', { value: slider });
+      Object.defineProperty(e, 'composedPath', { value: () => [slider, document, window] });
+      return e;
+    };
+
+    // 方向键归滑块：原生 range 的一格步进。
+    expect(controller.handleKeyDown(target('ArrowRight'))).toBe(false);
+    expect(controller.handleKeyDown(target('ArrowLeft'))).toBe(false);
+    expect(controller.handleKeyDown(target('Home'))).toBe(false);
+    expect(controller.handleKeyDown(target('End'))).toBe(false);
+
+    // 其它键仍然归我们：f 切全屏。
+    expect(controller.handleKeyDown(target('f'))).toBe(true);
+  });
+
+  it('焦点在音量滑块上时，方向键同样让给原生 range 行为', () => {
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.setAttribute('data-role', 'volume');
+    const event = keyEvent('ArrowRight');
+    Object.defineProperty(event, 'target', { value: slider });
+    Object.defineProperty(event, 'composedPath', { value: () => [slider, document, window] });
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+  });
+
+  it('站��自己的 range 滑块不让我们让路', () => {
+    // 站点滑块（没有 data-role）不在我们的让路范围内 ——
+    // 否则站点自己的音量条在视频全屏里就动不了了。
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    const event = keyEvent('ArrowRight');
+    Object.defineProperty(event, 'target', { value: slider });
+    Object.defineProperty(event, 'composedPath', { value: () => [slider, document, window] });
+
+    expect(controller.handleKeyDown(event)).toBe(true);
+  });
+
+  /**
+   * 页面伪造的键盘事件不得驱动扩展。
+   *
+   * 扩展在 document_start 抢注捕获阶段监听器，本来是为了赢过页面脚本 ——
+   * 副作用是页面能 `dispatchEvent(new KeyboardEvent('keydown', {key:'='}))`
+   * 随意操纵用户的视频：改倍速、触发全屏、劫持进度。
+   */
+  it('页面伪造的键盘事件被完全放行', () => {
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getWatchedVideo: () => video,
+      isFullscreenActive: () => false,
+      canToggleFullscreen,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedFeedback,
+      notifyTakeoverUnavailable,
+      // 真实运行时的判定：合成事件 isTrusted 为 false。
+      isTrustedEvent: (event) => event.isTrusted,
+    });
+
+    // jsdom 造出来的事件 isTrusted 恒为 false —— 正好就是「页面伪造的那种」。
+    const forged = keyEvent('=');
+    expect(forged.isTrusted, '前置条件：jsdom 的合成事件不可信').toBe(false);
+
+    const event = keyEvent('=');
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(video?.playbackRate, '伪造事件不该改变速度').toBe(1);
+    expect(showSpeedFeedback).not.toHaveBeenCalled();
+  });
+
+  it('页面伪造的 keyup 也不该掐断长按加速', () => {
+    // 信任判定做成可注入的：这里用一个「按事件类型区分」的判定 ——
+    // keydown 可信、keyup 不可信 —— 于是能验证「不可信的 keyup 被忽略」。
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getWatchedVideo: () => video,
+      isFullscreenActive: () => false,
+      canToggleFullscreen,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedFeedback,
+      notifyTakeoverUnavailable,
+      isTrustedEvent: (event) => event.type === 'keydown',
+    });
+
+    vi.useFakeTimers();
+    try {
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+      vi.advanceTimersByTime(1000);
+      const callsBefore = showSpeedFeedback.mock.calls.length;
+      expect(callsBefore).toBeGreaterThan(1);
+
+      // 一个不可信的 keyup 想让长按停下来 —— 不理它。
+      expect(controller.handleKeyUp(keyUpEvent('='))).toBe(false);
+      vi.advanceTimersByTime(1000);
+
+      expect(showSpeedFeedback.mock.calls.length, '伪造的 keyup 不该掐断长按')
+        .toBeGreaterThan(callsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * 没有「正在看的视频」时，快捷键必须**完全穿透**给页面。
+   *
+   * 这是 6.0.9 最重要的一条行为变更：以前只要页面上存在任何 <video>，
+   * 空格/方向键就在整页生效 —— 用户在读长文（页面里嵌了个静音预览视频），
+   * 按空格翻页结果视频跳了。这是唯一会让人直接卸载的问题。
+   */
+  it('没有明确目标时，所有快捷键都穿透给页面', () => {
+    controller = new KeyboardController({
+      getSettings: () => settings,
+      getWatchedVideo: () => null,
+      isFullscreenActive: () => false,
+      canToggleFullscreen,
+      toggleFullscreen,
+      exitFullscreen,
+      showSpeedFeedback,
+      notifyTakeoverUnavailable,
+      isTrustedEvent: () => true,
+    });
+
+    for (const key of ['=', '-', '0', ' ', 'ArrowLeft', 'ArrowRight', 'f']) {
+      const event = keyEvent(key);
+      const preventDefault = vi.spyOn(event, 'preventDefault');
+      expect(controller.handleKeyDown(event), `按键 ${key} 不该被接管`).toBe(false);
+      expect(preventDefault, `按键 ${key} 不该被吞掉`).not.toHaveBeenCalled();
+    }
+
+    expect(showSpeedFeedback).not.toHaveBeenCalled();
+    expect(video?.playbackRate).toBe(1);
+  });
+
+  /**
+   * ARIA 角色标注的输入框同样要让位给站点。
+   *
+   * 站点常用 `role="textbox"` / `role="searchbox"` 造自己的输入框
+   * （富文本编辑器、组合框、代码输入区）。它们不是 <input>、也不是
+   * contentEditable —— 只认标签类型的话，用户在那里打字会被吞掉。
+   */
+  it('role="textbox" 的元素算编辑态，打字不被吞', () => {
+    const box = document.createElement('div');
+    box.setAttribute('role', 'textbox');
+    document.body.append(box);
+
+    const event = keyEvent('=');
+    Object.defineProperty(event, 'target', { value: box });
+    Object.defineProperty(event, 'composedPath', { value: () => [box, document, window] });
+
+    expect(controller.handleKeyDown(event)).toBe(false);
+  });
+
+  it('role="searchbox" / "combobox" 同样算编辑态', () => {
+    for (const role of ['searchbox', 'combobox']) {
+      const box = document.createElement('div');
+      box.setAttribute('role', role);
+      document.body.append(box);
+
+      const event = keyEvent('=');
+      Object.defineProperty(event, 'target', { value: box });
+      Object.defineProperty(event, 'composedPath', { value: () => [box, document, window] });
+
+      expect(controller.handleKeyDown(event), `role=${role} 应算编辑态`).toBe(false);
+    }
+  });
+
+  /**
+   * 设置改了，正在跑的长按重复必须立刻停掉。
+   *
+   * 否则：用户按着 `=` 的过程中改了键，`=` 不再绑在加速上 ——
+   * 松开按键时 keyup 匹配不上，`clearRepeat()` 不会被调用，
+   * 那个 120ms 的重复定时器会**一直跑到页面销毁**。
+   * 表现是：用户松手了，速度却还在自己往上飘，而且再也停不下来。
+   */
+  it('设置热更新时停掉正在跑的长按重复', () => {
+    vi.useFakeTimers();
+    try {
+      controller.start();
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+      vi.advanceTimersByTime(1000);
+      const callsBefore = showSpeedFeedback.mock.calls.length;
+      expect(callsBefore).toBeGreaterThan(1);
+
+      controller.onSettingsChanged();
+
+      vi.advanceTimersByTime(2000);
+      expect(showSpeedFeedback).toHaveBeenCalledTimes(callsBefore);
+      controller.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('steps speed up and down with feedback', () => {

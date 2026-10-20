@@ -1,8 +1,13 @@
 # Chrome Web Store Listing — Video Speed Controller
 
-> Last Updated: 2026-10-04
+> Last Updated: 2026-10-20
 > 本文件是 Chrome Web Store 上架信息的**单一事实来源**（chrome-extensions skill 约定）。
 > 标注 ⚠️ 的字段需要发布者确认后才能提交。
+>
+> 2026-10-20 更新：整份文案对齐到 6.0.9 的真实功能集（字幕跟走、倍速档位菜单、
+> 工具栏提示倍速、设置页入口、只接管你正在看的视频、控制条不被网站样式弄乱），
+> 并把中英详细描述改成**逐段对齐**（见下方说明）。改动前逐条比对过代码，
+> 没有写入任何尚未实现的功能。
 
 ## Store Listing
 
@@ -26,52 +31,82 @@ Video Speed Controller — Fullscreen & Keys
 **Short Description** [REQUIRED]
 <!-- Max 132 characters. Shown in search results and tiles. Be specific about function. -->
 
-把网页视频变成干净的全屏播放器，控制条自动隐藏、快捷键可改绑。Clean fullscreen player for web video, with auto-hiding controls.
+网页视频一键全屏，字幕跟着走；倍速档位可点选，快捷键可改绑。Fullscreen for web video: subtitles follow, clickable speed presets, rebindable keys.
 
-<!-- 实测字符数见文件末尾的「提交前自检」 -->
+<!-- 实测 115 字符（上限 132）。2026-10-20 改写。
+     为什么改：旧文案只说了「控制条自动隐藏」，而 6.0.9 最有辨识度的三件事
+     ——字幕跟着视频走、倍速能点档位、只接管你正在看的那个视频——一件都没出现。
+     商店搜索结果里能看到的只有这一句，写什么就等于承诺什么。
+     为什么是这 115 个字符：把它留给「字幕跟着走」+「倍速可点档位」，
+     因为这两条是 6.0.9 真正的差异点，也最容易让人误以为做不到；
+     「只接管你正在看的视频」信息量足但太长（加上就超 132），留到详细描述里讲。
+     「控制条自动隐藏」相对弱，且详细描述里有，不占这里的名额。
+     实测命令见文件末尾的「提交前自检」。 -->
 
 **Detailed Description** [REQUIRED]
 <!-- Max 16,000 characters. CWS 会剥离 markdown，所以用换行而不是 bullet 语法。
      用户视角，禁提实现细节（API / 库 / 框架 / 代码模式）。
      中英双语用 --- 分隔。 -->
 
+<!--
+  ⚠️ 中英双语是**逐段对齐**的，这是刻意的，不是碰巧。
+
+  6.0.6 与 6.0.8 两次发布，CWS 都返回了 `INCONSISTENT_LOCALE_METADATA`
+  （"Mismatching metadata: Discrepancies in feature desc…"）——
+  已经排除扩展包内 i18n 的可能（`_locales/en` 与 `_locales/zh_CN` 各 48 个键、
+  键集合完全一致，且不含 name/description 键），成因就在**商店 listing 的
+  中英文描述之间**。
+
+  「逐段对齐」在这里的定义：两边段落数相同、顺序相同、每段讲同一件事。
+  这样审核员对照两种语言时，看到的是同一条承诺的两种说法，而不是两份功能清单。
+  下面每一段的段首标题也一一对应（主要功能 / What it does 等）。
+-->
+
 Video Speed Controller 把网页里的视频变成一个干净的全屏播放器，并给你一组安静的键盘控制。
 
 主要功能
-网页全屏：按 f 让正在看的视频铺满整个视口，再按 f 或 Esc 退出，退出后页面布局完整还原。鼠标移动时浮现一条极简控制条，静止 3 秒自动淡出；控制条包含播放/暂停、可拖动的进度、时间、音量、当前速度与退出。扩展会自动挑出你正在看的那个视频。
-播放速度：按 = 加速、- 减速，每次 0.1 倍；按住任一键可连续调速。按 0 回到 1.0 倍。调速时角落会淡入一个「1.5x」小胶囊，约一秒后消失，不打扰你。速度不会被记住：任何视频都从 1.0x 开始，看网课还是看纪录片，由你当场决定。
+网页全屏：按 f 让正在看的视频铺满整个视口，再按 f 或 Esc 退出，退出后页面布局完整还原。鼠标移动时浮现一条极简控制条，静止 3 秒自动淡出；控制条包含播放/暂停、可拖动的进度、时间、音量、当前速度与退出。和站点播放器自带的全屏不一样：视口里铺满的是视频本身，站点自己那些层（弹幕、推荐面板）留在画面外面，字幕反而跟着视频一起走。
+控制条不会被网站样式弄乱：有些网站给页面上所有按钮和滑块都定了自己的样式，可能把你的播放器控制条撑变形。扩展的控制条不吃这一套，看起来始终是你熟悉的那个样子。
+字幕跟着视频一起进出全屏：页面上盖在视频上的字幕（包括沉浸式翻译这类插件生成的）会一起被带进全屏，退出时也归回原处，不会被画面盖住。
+播放速度：按 = 加速、- 减速，每次 0.1 倍；按住任一键可连续调速。按 0 回到 1.0 倍。调速时角落会淡入一个「1.5x」小胶囊，约一秒后淡出，并留下一枚很淡的小角标，让你随时看得到当前是几倍速（视频暂停、滚出画面或进入全屏时它就消失）。不像某些扩展会记住你上次的倍速：任何视频都从 1.0x 开始，看网课还是看纪录片，由你当场决定。
+鼠标也能调速：全屏控制条上的倍速可以点开，列出 0.5x 到 4x 的常用档位（含 0.5x 这个慢看档），点一下就切过去。键盘侧仍是 = / - 的 ±0.1 微调，两种方式互不干扰。
 播放控制：空格播放或暂停，左右方向键后退或前进 5 秒。
+只接管你正在看的那个视频：页面上有多个视频时，扩展只对正在播、或者你刚刚点过/操作过的那个生效；分不清是哪一个时它会让路，把按键还给页面，而不是替你猜一个。
 快捷键由你决定：全部 7 个动作都能在设置页改绑，留空即禁用该动作。重复绑定会在保存前被拦下，与浏览器保留键冲突的绑定会被标出。
-点击工具栏图标即可切换当前标签页的网页全屏。
+点击工具栏图标即可切换当前标签页的网页全屏；鼠标悬停在图标上时，提示里会显示这个标签页当前的倍速。
 
 怎么用
-安装后无需任何配置即可使用。需要改键时打开设置页，点一下想改的那一行，直接按新键即可。设置页支持简体中文与 English。
+安装后无需任何配置即可使用。需要改键时按 Ctrl+Shift+, 打开设置页（macOS 上是 ⌘⇧,），点一下想改的那一行，直接按新键即可；也可以右键扩展图标选择「选项」。设置页支持简体中文与 English。
 
 适用范围
-只控制视频，不控制纯音频。来自其他网站的嵌入式播放器可能无法直接接管。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
+只控制视频，不控制纯音频。跨域 iframe 里的播放器无法接管（同一网站的 iframe 可以）。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
 
 隐私
-不收集任何个人数据，也不向开发者发送任何数据。你的快捷键设置保存在 Chrome 的同步扩展存储中，因此会跟随你的 Chrome 账号。扩展不保存你的播放速度，也不记录你访问过哪些网站——它只在页面上查找并控制视频元素。
+不收集任何个人数据，也不向开发者发送任何数据。你的快捷键设置保存在 Chrome 的同步扩展存储中，因此会跟随你的 Chrome 账号。扩展不保存你的浏览记录，也不跨设备同步你的倍速——倍速只留在当前这个标签页里，关掉浏览器就没了。它只在页面上查找并控制视频元素。
 
 ---
 
 Video Speed Controller turns web video into a clean, fullscreen player, and gives you quiet keyboard control over playback.
 
 What it does
-Page fullscreen: press f to fill the viewport with the video you are actually watching; f or Esc leaves, and your page layout is fully restored. A minimal control bar appears when you move the mouse and fades out after 3 seconds of stillness. It carries play/pause, draggable progress, time, volume, current speed and exit. The extension picks the video you are watching for you.
-Playback speed: press = to speed up and - to slow down, in 0.1x steps; hold either key to keep stepping. Press 0 to return to 1.0x. A small "1.5x" capsule fades in for about a second and then leaves. Speed is never remembered: every video starts at 1.0x, so a lecture at 2.0x never follows you into the documentary you open next.
+Page fullscreen: press f to fill the viewport with the video you are actually watching; f or Esc leaves, and your page layout is fully restored. A minimal control bar appears when you move the mouse and fades out after 3 seconds of stillness. It carries play/pause, draggable progress, time, volume, current speed and exit. Unlike the site's own fullscreen button, what fills the viewport here is the video itself — the site's own layers (bullet comments, recommendation panels) stay outside the picture — while the subtitles travel with the video.
+Your site's styles cannot mess it up: some sites style every button and slider on the page, which can leave a player control bar stretched out of shape. The extension's control bar does not take that, and keeps looking like the one you know.
+Subtitles follow the video in and out of fullscreen: subtitles sitting on top of the video (including ones generated by tools like immersive translation) are carried in with the video and put back afterwards, instead of being covered by the picture.
+Playback speed: press = to speed up and - to slow down, in 0.1x steps; hold either key to keep stepping. Press 0 to return to 1.0x. A small "1.5x" capsule fades in for about a second, then fades out and leaves a faint little badge in the corner so you can always see the rate you are at (it goes away when the video pauses, scrolls out of view, or you go fullscreen). Unlike some extensions that keep your last rate: every video starts at 1.0x, so a lecture at 2.0x never follows you into the documentary you open next.
+Mouse speed control too: on the fullscreen control bar, the speed label opens a list of common steps from 0.5x to 4x (including 0.5x for slow viewing); pick one and it applies. The keyboard side stays = / - for ±0.1 fine steps, and the two never fight each other.
 Playback control: Space plays or pauses. Left and Right arrows skip back or forward 5 seconds.
+It only takes over the video you are watching: on a page with several videos, the extension acts on the one that is playing, or the one you just interacted with; when it cannot tell which one you mean, it steps aside and hands the keys back to the page instead of guessing.
 Shortcuts you control: all seven actions can be rebound on the options page, and any of them can be left empty to disable it. Duplicate bindings are caught before you save, and shortcuts the browser reserves are flagged.
-Click the toolbar icon to toggle page fullscreen for the current tab.
+Click the toolbar icon to toggle page fullscreen for the current tab; hover over the icon and the tooltip tells you the rate that tab is running at.
 
 How to use
-Works out of the box with no setup. To rebind a key, open the options page, click the row you want, and press the new key. The options page is available in English and Simplified Chinese.
+Works out of the box with no setup. To rebind a key, press Ctrl+Shift+, to open the options page (⇧⌘, on macOS), click the row you want, and press the new key; you can also right-click the extension icon and choose "Options". The options page is available in English and Simplified Chinese.
 
 Scope
-Controls video only, not audio-only players. Embedded players from other sites may not be directly controllable. Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
+Controls video only, not audio-only players. Players inside cross-origin iframes cannot be taken over (same-site iframes can). Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
 
 Privacy
-No personal data is collected, and nothing is sent to the developer. Your shortcut settings are stored in Chrome's synced extension storage, so they follow your Chrome account. The extension does not store your playback speed and keeps no record of which sites you visit; it only looks for and controls video elements on the pages you visit.
+No personal data is collected, and nothing is sent to the developer. Your shortcut settings are stored in Chrome's synced extension storage, so they follow your Chrome account. The extension keeps no record of which sites you visit, and your playback rate never leaves the tab it belongs to — it is gone once you close the browser. It only looks for and controls video elements on the pages you visit.
 
 **Category** [REQUIRED]
 <!-- CWS 当前的可选值（18 项）：Accessibility, Art & Design, Communication, Developer Tools,
@@ -87,7 +122,12 @@ Functionality & UI
 **Single Purpose** [REQUIRED]
 <!-- One sentence. Narrow and easy to understand. -->
 
-Turns any web video into a clean fullscreen player and provides quiet keyboard control over playback speed and play/pause.
+Turns the web video you are watching into a clean fullscreen player and provides quiet keyboard control over playback speed and play/pause.
+
+> 2026-10-20 微调：原句是 "Turns **any** web video into ..."。
+> `any` 在这里既可以读成「任意一个视频」，也可以读成「所有网站上的视频」——
+> 后者是**绝对化表述**，CWS 的拒审清单上有一条。改成 "the web video you are
+> watching" 之后既消除了歧义，也正好是 6.0.9 的真实行为（只接管你正在看的那个）。
 
 **Primary Language** [REQUIRED]
 
@@ -108,28 +148,115 @@ English
 
 <!-- Status options: ⬜ Not created | 🟡 Needs update | ✅ Ready -->
 
+> ✅ 2026-10-20：5 张截图与 promo tile 全部按 6.0.9 的真实 UI 重新生成并逐张看过。
+> 之前是 🟡 的两个原因都已消除：
+> 1. **图是旧的** —— 6.0.9 重做了控制条（搬进 shadow root、换配色排版、倍速变成
+>    可点的按钮），旧的 6.0.8 图上的控制条跟实际跑出来的不是同一款。
+>    现已全部重截（mtime 2026-10-20 15:47）。
+> 2. **promo tile 副标题带着 `any`** —— 已改成 `Clean fullscreen for web video`
+>    （`scripts/render-icons.mjs:33` 的 `TILE` 常量）。
+>
+> ⚠️ 生成脚本里的 `any` 问题此前一直没被真正修掉：文案在本文件里写着
+> 「首图标题已改成 `Watch web video fullscreen`」，但 `scripts/generate-store-assets.mjs`
+> 的 `CAPTIONS` 里仍然是 `Watch any web video fullscreen` —— 审核员读到的
+> Short Description 与首图大标题口径不一致。现在两边都已改掉并重新出图。
+> **改图上的字只有一处地方能改**，见下方「Screenshot Notes」。
+
+### 素材文案的唯一来源（改图前先看这里）
+
+图上的每一句字都写在**脚本常量**里，不在本文件里。改文案 = 改常量 + 重跑脚本：
+
+| 图上的位置 | 改哪个常量 | 行号 |
+|---|---|---|
+| 首图大标题（英文） | `scripts/generate-store-assets.mjs` → `CAPTIONS.en.fullscreen` | `scripts/generate-store-assets.mjs:25` |
+| 首图大标题（中文） | `scripts/generate-store-assets.mjs` → `CAPTIONS.zh_CN.fullscreen` | `scripts/generate-store-assets.mjs:32` |
+| 其余四张标题 | `scripts/generate-store-assets.mjs` → `CAPTIONS.<locale>.<key>` | `scripts/generate-store-assets.mjs:23`（整个 `CAPTIONS` 对象起于这一行） |
+| promo tile 副标题 | `scripts/render-icons.mjs` → `TILE` 里的 `<text>` | `scripts/render-icons.mjs:33` |
+
+改完按顺序跑：
+
+```bash
+pnpm build          # 先构建 dist/ —— 截图脚本把 dist 当 web 根目录服务
+pnpm icons          # 重画 icons/ 与 promo tile
+pnpm store:assets   # 重截 5 张图
+```
+
+> ⚠️ 行号会漂。上面那几行是 **2026-10-20** 的位置；下次改动前用
+> `grep -n "fullscreen:" scripts/generate-store-assets.mjs` 与
+> `grep -n "Clean fullscreen" scripts/render-icons.mjs` 重新定位，
+> 然后把这里的行号一起更新 —— 这张表存在的意义就是让「图上的字」有唯一的出处。
+>
+> 上一版这里只写了「改它要动 `scripts/render-icons.mjs` 里的 `TILE` 常量」，
+> 没有说是哪一行，于是 promo tile 的 `any` 一直没人改 —— **写「改哪里」不够，
+> 要写「改哪一行」**。
+
 ### Screenshot Notes
 
 全部 1280×800，英文文案，各叠一句标题；`store-assets/output/` 被 .gitignore 忽略，用
 `pnpm store:assets` + `pnpm icons` 重新生成（脚本见 `scripts/generate-store-assets.mjs`、
 `scripts/render-icons.mjs`）。
 
-1. `store-fullscreen` — 首图。全屏态 + 底部控制条，标题 `Watch any web video fullscreen`
+> 2026-10-20 逐张对过 6.0.9 的真实 UI。除了**首图标题**（见下）其余标题全部保留不变 ——
+> 每一句都还对得上，没有一句是 6.0.9 做不到的。变的是**图**（控制条换了样子、
+> 设置页多了内容）。生成脚本里的 `CAPTIONS` 常量与这份清单保持一致，
+> 图上的字和这里说的必须一字不差。
+
+1. `store-fullscreen` — 首图。全屏态 + 底部控制条，标题 `Watch web video fullscreen`
+   （控制条本体在 6.0.9 换了配色与排版，这张要重截）
 2. `store-controls` — 控制条特写，标题 `Auto-hiding controls, out of your way`
+   （同上，控制条换了样子，这张要重截）
 3. `store-speed-toast` — 调速小胶囊特写，标题 `Fine-tune speed in 0.1x steps`
 4. `store-options` — 设置页 7 行改绑表（英文），标题 `7 shortcuts you can rebind`
+   （6.0.9 的设置页多了产品名、深色模式与底部版本号；且**方向键现在显示成箭头符号**
+   （`←` `→`）而不是 `ArrowLeft` / `ArrowRight` —— 旧图里显示的是后者，
+   与扩展实际显示的不一致。这张要重截）
 5. `store-fresh-speed` — 「不记忆速度」，标题 `Never inherits a speed — always 1.0x`
    （6.0.7 起替换原站点速度记忆截图。走真实 UI：网页全屏 + 控制条右下角如实显示 `1x`；
    poster 特意换成 `Documentary · Episode 3`，避免与首图 `store-fullscreen` 长得一样浪费展示位）
 
 ⚠️ 第 2、3 张是 2x 放大特写，不是像素裁切。
 
+> **首图标题为什么改了**：原来是 `Watch any web video fullscreen`。那个 `any`
+> 与 Single Purpose 里的 "any web video" 是同一个毛病 —— 可以被读成
+> 「所有网站上的视频」，属绝对化表述。两处口径不一致时，审核员只会挑最刺眼的那处。
+> 改成 `Watch web video fullscreen` 后既没有那个歧义，意思也没丢。
+> ⚠️ 改图时必须同步改 `scripts/generate-store-assets.mjs:25` 的
+> `CAPTIONS.en.fullscreen` 与 `scripts/generate-store-assets.mjs:32` 的
+> `CAPTIONS.zh_CN.fullscreen`。
+>
+> **同样的问题在 promo tile 上**：副标题写的是 "Clean fullscreen for any web video"
+> （`scripts/render-icons.mjs:33` 的 `TILE` 常量）。它由 `pnpm icons` 生成，
+> 不在截图脚本里，容易被漏掉 —— 一并改掉。
+>
+> ✅ 2026-10-20 已全部改完并重新出图（上面 5 张 + promo tile 都逐张看过，
+> 首图大标题现在是 `Watch web video fullscreen`，promo tile 副标题是
+> `Clean fullscreen for web video`，图上**再无 `any`**）。
+>
+> **建议换掉第 3 张**：现在 5 张里没有任何一张能让人看出 6.0.9 最直观的新能力
+> ——「倍速可以点，弹出 0.5x–4x 的档位菜单」。`store-speed-toast` 展示的是
+> 6.0.7 就有的调速胶囊，信息量最低；若要换，把它换成**倍速档位菜单打开的样子**。
+> （商店截图上限 5 张，所以是替换而不是新增。）
+> ⚠️ 改图必然要同步改 `scripts/generate-store-assets.mjs` 里的 `CAPTIONS`。
+
 ## Permissions Justification
 
 | Permission | Type | Justification |
 |------------|------|---------------|
-| `storage` | permissions | Stores your shortcut bindings so they persist and sync with your Chrome profile. Nothing else is stored. |
-| `<all_urls>` | host_permissions | Video playback is not tied to any particular site, so the extension has to find and control the video element on whatever page you are watching. It reads only video elements and their playback state. It does not read page text, form data, or your browsing history, and nothing is sent anywhere. |
+| `storage` | permissions | Stores your shortcut bindings so they persist and sync with your Chrome profile, plus one flag that remembers whether the one-time intro has already been shown on this device, and the current playback rate of each open tab. Only the shortcut bindings are synced to your Chrome account; the other two stay on the device or in the current browser session. |
+| `<all_urls>` | host_permissions | Video playback is not tied to any particular site, so the extension has to find and control the video element on whatever page you are watching. It reads only video elements and their playback state, and measures the position and size of overlays such as subtitles so they can follow the video into fullscreen. It does not read page text, form data, or your browsing history, and nothing is sent anywhere. |
+
+> 2026-10-20 更新 `storage` 那一行：6.0.9 新增了「标签页当前倍速」这份数据
+> （`chrome.storage.session`）。旧文案说 "Nothing else is stored" —— 现在**不准确**，
+> 而"不准确"是 CWS 的拒审项之一，所以必须改。
+> 为什么这么写仍然算"最小披露"：
+> - 首次引导标记（`chrome.storage.local`）6.0.5 就在存了 —— 旧文案其实漏了它；
+> - 标签页倍速（`chrome.storage.session`）6.0.9 才加，**只在浏览器会话内**存在，
+>   关掉浏览器即消失，**不会同步到任何设备**（这一点与 `sync` 的快捷键不同，
+>   所以在表里也分开表述）。
+>
+> `<all_urls>` 那一行补了"测量字幕浮层的位置与尺寸" —— 6.0.9 重写了字幕跟随
+> 的实现，审核员如果自己装扩展，会看到扩展确实在测量浮层几何；提前说清楚，
+> 比被问出来好。
 
 ## Privacy & Data Use
 
@@ -148,12 +275,20 @@ English
 | Personal communications | No | No | — | No |
 | Location | No | No | — | No |
 | Web history | **No** | No | 6.0.7 起不再记录任何站点信息；历史版本曾按 hostname 记忆播放速度，升级时已自动清除 | No |
-| User activity | **Yes** | **Yes** | 快捷键绑定存于 `chrome.storage.sync`，因此会随 Chrome 账号同步到 Google 服务器 | No |
-| Website content | No | No | 只读视频元素的播放状态用于控制播放，不读取、不保存页面内容 | No |
+| User activity | **Yes** | **Yes** | 快捷键绑定存于 `chrome.storage.sync`，因此会随 Chrome 账号同步到 Google 服务器。除此之外还存两项**不同步**的数据：设备上的「首次引导已展示」标记（`chrome.storage.local`），以及每个打开标签页的当前倍速（`chrome.storage.session`，仅本次浏览器会话有效、关闭浏览器即消失） | No |
+| Website content | No | No | 只读视频元素的播放状态用于控制播放；字幕等浮层只测量其位置与尺寸（宽/高/行数），不读取、不保存文字内容 | No |
 
 > ⚠️ 上面两行 `Yes` 是刻意保守的如实披露。`chrome.storage.sync` 属于 off-device
 > transmission，写成「全部存在本地」会与代码不符 —— 那是拒审项。
 > 提交时需在 Dashboard 的数据使用表单里与上表保持一致。
+>
+> 2026-10-20 更新 `User activity` 那一行：6.0.9 多了标签页倍速（`storage.session`）。
+> 它**不跨设备**，所以没有把 "Transmitted Off-Device" 改成更多内容 —— 但必须在
+> Purpose 里写清楚，避免审核员以为只有快捷键会被存。
+> 同一行里顺带补上了 6.0.5 就有的「首次引导标记」：旧文案连它都没提。
+>
+> `Website content` 那行补了字幕的测量口径 —— 扩展测的是浮层的几何（宽/高/行数），
+> 不是字幕文字本身；说清楚这一点，比笼统写「不读取页面内容」更经得起对照。
 
 ### Data Use Certification
 
@@ -165,9 +300,34 @@ English
 
 **Privacy Policy URL** [REQUIRED]
 
-⚠️ **缺失。** 仓库里没有任何隐私政策文件，线上 listing 也没看到该链接。
-由于上表披露了 Web history 与 User activity，**需要一份可公开访问的隐私政策**并填写 URL。
-（GitHub Pages / 仓库内的 `PRIVACY.md` + Pages / 个人站点均可。）
+https://github.com/hibernate-pano/chrome-plugin-video-manager/blob/main/PRIVACY.md
+
+> 政策正文在仓库根目录的 `PRIVACY.md`（中英双语）。
+> 2026-10-20 已补齐 —— 之前这一栏是空的，而上表披露了 User activity
+> （快捷键绑定走 `chrome.storage.sync`），**这是 CWS 的硬性拒审项**。
+>
+> 上面的 URL 用仓库 blob 链接：仓库已公开，不需要额外搭 GitHub Pages。
+> 如果 CWS 的审核员不点开链接、需要能直接渲染的页面，就改用 GitHub Pages
+> 并把 URL 换成 `https://<user>.github.io/chrome-plugin-video-manager/privacy`。
+
+### 已核实但**不成立**的顾虑（2026-10-20 审计）
+
+审计提出「`web_accessible_resources` 把 content.js 暴露给所有页面，是安全暴露」。
+**实测不成立**，记录在此以免下一个人重复调查：
+
+- 页面确实能 `fetch('chrome-extension://<id>/content.js')` 拿到源码（42KB）——
+  但**任何**扩展的内容脚本源码都是如此，这是扩展的固有属性，不是我们特有的暴露。
+- 页面**猜不到扩展 ID**：没有 `<script src>` 泄漏，`chrome.runtime.id` 在页面 realm
+  里根本不存在（实测 `chrome.runtime` 为 undefined）。要拿到 ID 必须先有别的漏洞。
+- 页面即使 import 到我们的 content.js，**拿不到任何扩展能力**：
+  它在页面的 realm 里执行，`chrome.runtime` / `chrome.storage` 均为 undefined，
+  模块也没有导出任何东西。扩展 API 只在 content script 的隔离世界里存在。
+- 试过 `use_dynamic_url: true`（Chrome 102+ 的硬化手段，让 URL 每次会话随机）：
+  **与 content script 的动态 `import()` 不兼容** —— content-loader 需要在
+  `document_start` 同步 import，动态 URL 此时还拿不到。实测 7 条 E2E 全挂，已撤回。
+
+结论：**保留现状**。`web_accessible_resources` 是动态 import 的硬性要求，
+去掉它扩展根本加载不起来。
 
 ## Distribution
 
@@ -200,6 +360,31 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
+| 6.0.9 | 2026-10-20 | 审计驱动的修复轮：网页全屏的字幕**真的**可见了（6.0.8 号称修好、实测从未生效 —— 字幕判据量错了对象、DOM 顺序不足以决定可见、字幕容器塌成 0 宽，三个独立原因）；控制条搬进 shadow root（站点 CSS 打不穿）；不再全站劫持按键（只有用户正在看的视频才被接管，多视频页面认怂）；页面伪造的键盘事件不再能驱动扩展；设置页 Tab 不再被吞（此前纯键盘用户被困在输入框里）；控制条滑块键盘可用；设置有了入口（`Ctrl+Shift+,`）；工具栏图标显示当前倍速；控制条倍速可点击（档位菜单）；调速胶囊淡出后留下一枚很淡的小角标（视频暂停 / 滚出视口 / 进全屏时消失）；读屏播报通道；控制条视觉重做与对比度修复；设置页深色模式与产品名；补上隐私政策 | 待发布 |
+
+> ⚠️ **2026-10-20 逐条核对**：上面这一行里的每一项都对照过代码或测试，
+> 没有把「计划做」写成「已做」。核实方式记在这里，避免下一个人重复查：
+>
+> | 描述的能力 | 核实位置 |
+> |---|---|
+> | 字幕跟着进出全屏 | `src/content/overlayLayers.ts`（墨水范围判据）、`src/content/fullscreenController.ts`（搬运与还原） |
+> | 站点 CSS 打不穿控制条 | `src/content/controlsStyles.ts`（独立样式表 + shadow root） |
+> | 只有正在看的视频被接管 | `src/content/videoRegistry.ts`（视口/面积/交互时间判据） |
+> | 页面伪造事件不驱动扩展 | `src/content/keyboardController.ts`（`isTrusted` 过滤） |
+> | 设置页 Tab 不被吞 | `src/options/index.ts`（Tab / Enter / Escape 分支） |
+> | 控制条滑块键盘可用 | `src/content/keyboardController.ts`（range 放行） |
+> | `Ctrl+Shift+,` 打开设置 | `manifest.json` 的 `commands` + `src/background/index.ts` |
+> | 工具栏图标显示当前倍速 | `src/background/index.ts`（`action.setTitle` + `storage.session`） |
+> | 倍速档位菜单 | `src/content/fullscreenControls.ts`（`SPEED_RATES` + `role="menu"`） |
+> | 读屏播报 | `src/content/liveRegion.ts` + `transientPill.ts` |
+> | 调速胶囊淡出后留下常驻小角标 | `src/content/speedToast.ts`（`scheduleBadge` / `dismissBadge`）、`src/content/runtime.ts`（进全屏时撤下） |
+> | 设置页深色模式与产品名 | `src/options/options-theme.ts`、`_locales/*/messages.json` |
+> | 隐私政策 | 仓库根目录 `PRIVACY.md` |
+>
+> **商店展示用的版本历史要短得多** —— Dashboard 上那一栏建议只写用户看得懂的
+> 五句话（字幕跟走了、控制条不被网站样式弄乱、只接管你正在看的视频、
+> 倍速可以点、设置有入口了），上面这版是**仓库内部**的完整记录。
+> 理由：商店那一栏是给用户读的，不是给下一个维护者读的。
 | 6.0.8 | 2026-10-08 | **不再记忆站点速度**（任何视频都从 1.0x 开始，速度是用户当场的选择而非隐形默认规则）；**网页全屏不再弄丢沉浸式翻译等插件的字幕**（字幕层跟着视频一起进出全屏，弹幕不搬）；同时清掉老用户机器上残留的站点访问记录 | **In Review**（2026-10-08 经 v2 API 实发，PENDING_REVIEW） |
 | 6.0.6 | 2026-10-06 | **商店改名**为 `Video Speed Controller — Fullscreen & Keys`（原名有 3 个逐字同名扩展，几乎必然导致装错）。功能与 6.0.5 完全一致，无代码变更 | **Published**（改名已上线，100% 部署） |
 | 6.0.5 | 2026-10-04 | 新安装时会在你开始看视频后提示一次常用快捷键（之后不再出现）；无法接管的视频会明确告知而不是毫无反应；修复全屏进度条偶尔卡住不动的问题 | **Published**（2026-10-06 经 v2 API fetchStatus 核实，deployPercentage=100，已自动推给全部用户） |
@@ -218,6 +403,24 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 - 跨域 iframe 内的视频无法直接接管
 - DRM 受保护内容无法接管
 - 极少数据点会退回更简单的布局模式（CSS cover）
+- **弹幕不会被搬进全屏**：扩展按「字幕 / 弹幕」的形态区分两者，只搬字幕。
+  弹幕宽、分散、满屏飘，搬进来反而更吵 —— 这是取舍，不是缺陷
+- **倍速菜单的下限是 0.5x**（菜单档位），键盘侧可以调到 0.1x；上限 16x
+- **跨设备同步的只有快捷键**：倍速是每个标签页各自一份，关掉浏览器就没了
+- **页面里会留一枚很淡的倍速小角标**：调速胶囊淡出后，视频角落会留下一枚
+  角标，直到视频暂停、滚出画面或进入全屏。它不可点击，绝不挡住你点视频。
+  这是扩展里唯一一处常驻界面 —— 它换来的是「当前几倍速随时可见」，
+  因为控制条 3 秒就隐藏，而非全屏时没有别的地方会显示倍速
+
+> 2026-10-20 更新：补了「弹幕不搬」与「倍速不同步」两条。
+> 这两条**必须在 listing 里说清楚** —— 6.0.8 的更新说明写着
+> 「字幕层跟着视频一起进出全屏，弹幕不搬」，用户看到「字幕跟着走」很自然会
+> 期待弹幕也跟。既然详细描述里承诺了字幕跟随，就必须在已知问题里把弹幕的
+> 例外讲明白，否则属于「描述与实际不符」。
+>
+> 「倍速不同步」同理：README 与设置页都强调过「不记忆速度」，而隐私一栏
+> 又披露了 `storage.sync` 会同步快捷键 —— 审核员完全可能问「那倍速会不会
+> 同步过去」。先说清楚。
 
 ### Rejection History
 
@@ -245,16 +448,35 @@ PY
 
 # 素材尺寸（截图必须 1280x800 或 640x400；promo tile 必须 440x280）
 pnpm icons && pnpm store:assets
+
+# 图上的字里还有没有 `any`（绝对化表述，在 CWS 的拒审清单上）。
+# 查的是**脚本常量**，不是本文件 —— 本文件里的 "any" 只出现在解释它为什么被删的段落里。
+grep -n "any" scripts/generate-store-assets.mjs scripts/render-icons.mjs
 ```
 
-- [ ] 短描述 ≤ 132 字符
-- [ ] 详细描述不含实现细节（API / 库 / 框架 / 代码模式）
-- [ ] 详细描述不罗列站点名清单（keyword spam）
-- [ ] 不出现绝对化表述（「支持所有网站」「无广告」）
-- [ ] 截图与 promo tile 尺寸合规
+- [x] 短描述 ≤ 132 字符 —— **实测 115**（2026-10-20）
+- [x] 详细描述不含实现细节（API / 库 / 框架 / 代码模式）
+- [x] 详细描述不罗列站点名清单（keyword spam）
+- [x] 不出现绝对化表述（「支持所有网站」「无广告」）—— 6.0.9 起 Single Purpose
+      里的 "any web video" 也改掉了（见该字段下方的说明）
+- [x] **图上的字也不出现绝对化表述** —— 首图大标题与 promo tile 副标题里的 `any`
+      已删（`scripts/generate-store-assets.mjs:25` / `:32` / `scripts/render-icons.mjs:33`）。
+      ⚠️ 这一项以前只查了本文件里的文案，漏掉了脚本常量 —— 于是审核员读到的
+      Short Description 与首图大标题口径不一致。**改图上的字要查脚本，不是查本文件。**
+- [x] 截图与 promo tile 尺寸合规 —— 5 张截图 1280×800、promo tile 440×280，
+      2026-10-20 15:47 重新生成并逐张看过
 - [ ] `manifest.json` 的 `name` 与本文件的 Extension Name 完全一致
-- [ ] 隐私措辞与实际存储位置一致（`storage.sync` 不可写成「全部在本地」）
+- [x] 隐私措辞与实际存储位置一致（`storage.sync` 不可写成「全部在本地」）
+- [x] 中英文详细描述**逐段对齐**（段落数相同、顺序相同、每段讲同一件事）——
+      6.0.6 与 6.0.8 两次发布都被 `INCONSISTENT_LOCALE_METADATA` 警告过，
+      这次是刻意对齐的，粘贴到 Dashboard 后**再逐段核一遍**
 - [ ] 若要重新上传包：**版本号必须高于线上版本**（CWS 拒绝 version ≤ 已发布版本）
+
+> 2026-10-20 的自检结果：**全部通过** —— 文案与素材两侧都齐了。
+> 截图已按 6.0.9 的真实 UI 重新生成（控制条重做、设置页重做），
+> 图上的绝对化表述也一并清掉了。
+> ⚠️ 剩下一项仍然要人来点：`manifest.json` 的 `name` 与本文件的 Extension Name
+> 要一致（`Video Speed Controller — Fullscreen & Keys`）。
 
 ## 发布流程
 
@@ -363,3 +585,75 @@ v2 的 `setPublishedDeployPercentage` 可按比例放量，是唯一的真回滚
 **⚠️ 同一个警告再次出现**：`INCONSISTENT_LOCALE_METADATA`
 成因与 6.0.6 那次相同（商店 listing 的中英文详细描述不对齐），**尚未修掉**。
 不阻塞提交，但会持续增加人工复审概率 —— 需在 Dashboard 把两段描述逐段对齐。
+
+---
+
+## 6.0.9 文案对齐记录（2026-10-20）
+
+**背景**：6.0.9 要送审，而 6.0.6 与 6.0.8 两次发布都被
+`INCONSISTENT_LOCALE_METADATA` 警告过（成因：商店 listing 的中英文描述不对齐）。
+另外扩展这轮功能变化很大 —— 字幕跟随、倍速档位菜单、工具栏倍速提示、
+设置页入口、只接管你正在看的视频 —— 而线上文案一个字都没提。
+「描述与实际不符」是 CWS 的拒审项，所以这一轮必须把文案对齐到真实功能集。
+
+### 本轮改了哪些字段
+
+| 字段 | 改了什么 | 为什么 |
+|---|---|---|
+| `Last Updated` | 2026-10-04 → 2026-10-20 | 本轮整体重写了文案 |
+| `Short Description` | 重写，**实测 115 字符**（旧 96） | 旧文案只说了「控制条自动隐藏」，6.0.9 最有辨识度的三件事一件都没出现 |
+| `Detailed Description` | 中英**逐段对齐**重写，各 17 段 | 补 6 项新功能 + 对齐（治 `INCONSISTENT_LOCALE_METADATA`） |
+| `Single Purpose` | "any web video" → "the web video you are watching" | `any` 可被读成「所有网站」，属绝对化表述 |
+| `Graphics & Assets` | 5 张截图 + promo tile 全部重新生成，状态 → ✅ Ready | 磁盘上的截图 PNG 还是 6.0.8 那版，控制条已重做；promo tile 的副标题有 `any` 歧义 |
+| `Screenshot Notes` | 逐张核对并补注「为什么这张要重截」；新增「素材文案的唯一来源」表 | 设置页方向键显示从 `ArrowLeft` 变成 `←`，旧图对不上了 |
+| `Permissions Justification` | `storage` 一行改写；`<all_urls>` 补字幕测量说明 | 旧文案 "Nothing else is stored" 已经不准确（6.0.9 多了标签页倍速） |
+| `Privacy & Data Use` | `User activity` 与 `Website content` 两行改写 | 6.0.9 新增 `storage.session`（不同步）；字幕测量口径要说清 |
+| `Version History` | 6.0.9 行保留，另加一份「逐条核实」对照表 | 防止下一个人把「计划做」当成「已做」 |
+| `Known Issues` | 补「弹幕不搬」「倍速不同步」「倍速上下限」 | 详细描述承诺了字幕跟随，就必须说清弹幕的例外 |
+
+### ⚠️ 上一轮「已改」里有两处其实没改（2026-10-20 复核）
+
+这一节原本写着「首图标题已改成 `Watch web video fullscreen`」、自检项也打着
+`[x] 不出现绝对化表述`。**复核发现那是假的**：
+
+- `scripts/generate-store-assets.mjs` 的 `CAPTIONS` 里仍然是
+  `Watch any web video fullscreen` / `任意网页视频，一键全屏`，
+  `scripts/render-icons.mjs` 的 `TILE` 里仍然是
+  `Clean fullscreen for any web video`。
+- 也就是说：**审核员读到的 Short Description 已经去掉了 `any`，
+  但首图大标题和 promo tile 上白纸黑字写着 `any`** —— 两处口径不一致。
+- 而 `any` 在 CWS 的拒审清单上。
+
+**为什么上一轮会漏**：上一轮只查了**本文件里的文案**，没查**脚本常量**；
+本文件的自检项于是自己给自己打了勾。图上的字不在本文件里，
+所以「本文件查过了」根本不构成「图上的字没问题」。
+
+**这一轮的修法**（避免再犯）：
+1. 脚本常量改掉，并**重新出图**（2026-10-20 15:47），5 张 + promo tile 逐张看过；
+2. 本文件新增「素材文案的唯一来源」表，**写明改哪一行的常量**；
+3. 自检清单新增一条独立项，并且**给出查什么命令**：
+   ```bash
+   grep -n "any" scripts/generate-store-assets.mjs scripts/render-icons.mjs
+   ```
+   查的是脚本，不是本文件 —— 本文件里的 "any" 只出现在解释它为什么被删的段落里。
+
+**教训**：自检项要对着**产物**打勾，不能对着**自己的说明文字**打勾。
+截图与图上文字是两条独立的检查线，本文件原来只写了后者。
+
+### Dashboard 内操作清单（API 改不了 metadata）
+
+- [ ] Short Description → 复制上面那一行（115 字符，**别让编辑器自动换行**）
+- [ ] 详细描述（中文）→ 复制 `---` 之前的那一段
+- [ ] 详细描述（English）→ 复制 `---` 之后的那一段
+- [ ] 粘贴后**逐段数一遍**：中文 17 段，英文 17 段，一一对应
+- [ ] Single Purpose → 替换成改过的那句
+- [ ] 5 张截图 → `store-assets/output/` 下已按 6.0.9 重新生成（2026-10-20 15:47），
+      直接上传；重生成命令见「素材文案的唯一来源」
+- [ ] Small Promo Tile → `store-assets/output/store-promo-tile.png`（已重新生成，
+      副标题里的 `any` 已删）
+- [ ] 版本历史 → 用上面「版本历史」那栏建议的五句话版本
+- [ ] 核对 Extension Name 仍是 `Video Speed Controller — Fullscreen & Keys`
+
+> ⚠️ **粘贴到 Dashboard 时最容易翻车的一点**：CWS 的多语言详情是**两个独立的
+> 文本框**，不是同一段文本的翻译对。把中文和英文分别贴进各自语言的框里，
+> 然后**数段数**。段数对不上 → 警告还会再来一次。

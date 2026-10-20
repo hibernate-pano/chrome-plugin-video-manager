@@ -12,6 +12,7 @@ const createMockVideo = () => {
   let volume = 1;
   let muted = false;
   let seeking = false;
+  let playbackRate = 1;
 
   Object.defineProperty(video, 'currentTime', {
     get: () => currentTime,
@@ -36,7 +37,10 @@ const createMockVideo = () => {
     configurable: true,
   });
   Object.defineProperty(video, 'playbackRate', {
-    get: () => 1,
+    get: () => playbackRate,
+    set: (value: number) => {
+      playbackRate = value;
+    },
     configurable: true,
   });
   Object.defineProperty(video, 'volume', {
@@ -69,8 +73,15 @@ const createMockVideo = () => {
   return video;
 };
 
+/**
+ * 控制条住在 shadow root 里（样式隔离，见 controlsStyles.ts），
+ * 所以要透过 shadowRoot 才能拿到内部元素。
+ */
+const shadowRoot = () =>
+  document.getElementById('vsc-controls')?.shadowRoot ?? null;
+
 const $ = <T extends HTMLElement>(role: string) =>
-  document.querySelector<T>(`#vsc-controls [data-role="${role}"]`)!;
+  shadowRoot()?.querySelector<T>(`[data-role="${role}"]`) as T;
 
 describe('formatTime', () => {
   it('formats mm:ss and h:mm:ss and guards invalid input', () => {
@@ -117,7 +128,7 @@ describe('FullscreenControls', () => {
     mount();
 
     ['play', 'mute', 'exit', 'progress', 'volume', 'time', 'speed'].forEach((role) => {
-      expect(document.querySelector(`#vsc-controls [data-role="${role}"]`)).not.toBeNull();
+      expect(shadowRoot()?.querySelector(`[data-role="${role}"]`)).not.toBeNull();
     });
 
     expect($('time').textContent).toBe('0:30 / 2:00');
@@ -159,10 +170,10 @@ describe('FullscreenControls', () => {
 
     // 先让控制条自动隐藏。
     vi.advanceTimersByTime(3000);
-    expect($('play').closest('#vsc-controls')?.classList.contains('vsc-ctl--visible')).toBe(false);
+    expect(shadowRoot()?.querySelector('.bar')?.classList.contains('bar--visible')).toBe(false);
 
     clickVideo({ button: 0 });
-    expect(document.getElementById('vsc-controls')?.classList.contains('vsc-ctl--visible')).toBe(true);
+    expect(shadowRoot()?.querySelector('.bar')?.classList.contains('bar--visible')).toBe(true);
   });
 
   it('does not toggle when the site still owns the video surface (css-cover)', () => {
@@ -300,15 +311,15 @@ describe('FullscreenControls', () => {
 
   it('hides itself after idle and reappears on pointer movement', () => {
     mount();
-    const root = document.getElementById('vsc-controls')!;
-    expect(root.classList.contains('vsc-ctl--visible')).toBe(true);
+    const bar = () => shadowRoot()?.querySelector('.bar');
+    expect(bar()?.classList.contains('bar--visible')).toBe(true);
 
     vi.advanceTimersByTime(3000);
-    expect(root.classList.contains('vsc-ctl--visible')).toBe(false);
+    expect(bar()?.classList.contains('bar--visible')).toBe(false);
 
     // jsdom 没有 PointerEvent 构造器；监听器只认事件名，用 MouseEvent 派发即可。
     window.dispatchEvent(new MouseEvent('pointermove'));
-    expect(root.classList.contains('vsc-ctl--visible')).toBe(true);
+    expect(bar()?.classList.contains('bar--visible')).toBe(true);
   });
 
   it('disables the progress bar for a live stream without a duration', () => {
@@ -327,5 +338,204 @@ describe('FullscreenControls', () => {
     expect(document.getElementById('vsc-controls')).toBeNull();
     // 卸载后再触发视频事件不应报错（监听器已摘除）。
     expect(() => video.dispatchEvent(new Event('timeupdate'))).not.toThrow();
+  });
+
+  // --- 倍速档位菜单 ---
+
+  const menu = () => $<HTMLDivElement>('speed-menu');
+  const menuItem = (rate: string) =>
+    menu().querySelector<HTMLButtonElement>(`[data-rate="${rate}"]`);
+
+  /**
+   * 当前拿到焦点的元素。
+   *
+   * 焦点落在 shadow tree 内部时，document.activeElement 会被重定向成宿主，
+   * 想看「到底是哪个按钮」必须问 ShadowRoot.activeElement。
+   */
+  const focused = () => shadowRoot()?.activeElement ?? document.activeElement;
+
+  const openMenu = () => {
+    $('speed').click();
+  };
+
+  it('opens the speed menu and applies the picked rate', () => {
+    mount();
+    const changes: number[] = [];
+    document.addEventListener('vsc-speed-change', (event) => {
+      changes.push((event as CustomEvent<{ rate: number }>).detail.rate);
+    });
+
+    expect(menu().hidden).toBe(true);
+    openMenu();
+    expect(menu().hidden).toBe(false);
+    expect($('speed').getAttribute('aria-expanded')).toBe('true');
+
+    menuItem('1.5')!.click();
+
+    expect(video.playbackRate).toBe(1.5);
+    expect(changes).toEqual([1.5]);
+    expect(menu().hidden).toBe(true);
+    expect($('speed').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('offers 0.5x — the real lower bound for slow viewing', () => {
+    mount();
+    openMenu();
+
+    // playback.ts 允许到 0.1x，但 10 倍慢放必然音画不同步。
+    // 档位是给鼠标用户的快捷入口，下限取 0.5。
+    expect(menuItem('0.5')).not.toBeNull();
+    expect(menuItem('1')).not.toBeNull();
+    expect(menuItem('4')).not.toBeNull();
+  });
+
+  it('marks the current rate and keeps the badge text in sync', () => {
+    mount();
+    video.playbackRate = 1.5;
+    video.dispatchEvent(new Event('ratechange'));
+
+    expect($('speed').textContent).toBe('1.5x');
+    expect($('speed').getAttribute('aria-label')).toContain('1.5x');
+
+    openMenu();
+    expect(menuItem('1.5')!.getAttribute('aria-current')).toBe('true');
+    expect(menuItem('1')!.getAttribute('aria-current')).toBeNull();
+  });
+
+  it('prefers the onSpeedChange callback over the DOM event', () => {
+    const onSpeedChange = vi.fn();
+    const controls = new FullscreenControls(video, { onExit, onSpeedChange });
+    controls.mount();
+
+    const changes = vi.fn();
+    document.addEventListener('vsc-speed-change', changes);
+
+    openMenu();
+    menuItem('2')!.click();
+
+    expect(onSpeedChange).toHaveBeenCalledWith(2);
+    // 两条通道是互斥的：都触发的话用户会看到两遍提示、读屏播报两遍。
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it('closes the menu on Escape and hands focus back to the badge', () => {
+    mount();
+    openMenu();
+    expect(document.activeElement).toBe(document.getElementById('vsc-controls'));
+
+    menuItem('1.5')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+
+    expect(menu().hidden).toBe(true);
+    // 焦点在 shadow tree 内部时 document.activeElement 会被重定向成宿主。
+    expect(document.activeElement).toBe(document.getElementById('vsc-controls'));
+  });
+
+  it('closes the menu when the user clicks outside it', () => {
+    mount();
+    openMenu();
+
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+
+    expect(menu().hidden).toBe(true);
+  });
+
+  it('moves focus between items with the arrow keys', () => {
+    mount();
+    openMenu();
+
+    const items = Array.from(menu().querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    // 打开时焦点落在当前档位（1x）上。
+    const start = items.findIndex((item) => item === focused());
+    expect(start).toBeGreaterThanOrEqual(0);
+
+    items[start].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(focused()).toBe(items[start + 1]);
+  });
+
+  it('keeps the bar on screen while the menu is open', () => {
+    mount();
+    openMenu();
+
+    vi.advanceTimersByTime(10_000);
+
+    // 菜单是控制条的一部分：控制条一藏，菜单也跟着没了。
+    expect(shadowRoot()?.querySelector('.bar')?.classList.contains('bar--visible')).toBe(true);
+  });
+
+  it('keeps the bar on screen while focus is inside it', () => {
+    mount();
+    $('play').focus();
+
+    vi.advanceTimersByTime(10_000);
+
+    // 焦点还在控制条里却把它藏了，键盘用户盯着屏幕什么也看不到。
+    expect(shadowRoot()?.querySelector('.bar')?.classList.contains('bar--visible')).toBe(true);
+  });
+
+  it('exposes focusFirst() for keyboard-driven fullscreen entry', () => {
+    const controls = mount();
+    expect(document.activeElement).not.toBe($('play'));
+
+    controls.focusFirst();
+
+    expect(document.activeElement).toBe(document.getElementById('vsc-controls'));
+  });
+
+  // --- 无障碍 ---
+
+  it('labels the bar as a group and keeps the labels in sync with the state', () => {
+    mount();
+
+    const bar = shadowRoot()?.querySelector('.bar');
+    expect(bar?.getAttribute('role')).toBe('group');
+    expect(bar?.getAttribute('aria-label')).toBeTruthy();
+
+    // 播放中：按钮的可访问名是「暂停」。
+    expect($('play').getAttribute('aria-label')).toBe('暂停');
+    video.pause();
+    video.dispatchEvent(new Event('pause'));
+    expect($('play').getAttribute('aria-label')).toBe('播放/暂停');
+
+    // 进度用「1:48 / 30:00」这种念得出来的形式，而不是裸数字。
+    expect($('progress').getAttribute('aria-valuetext')).toBe('0:30 / 2:00');
+
+    expect($('speed').getAttribute('aria-live')).toBe('polite');
+    expect($('speed').getAttribute('aria-haspopup')).toBe('menu');
+    expect($('exit').getAttribute('aria-label')).toContain('Esc');
+  });
+
+  it('keeps the volume slider on the real volume while muted', () => {
+    mount();
+
+    video.volume = 0.65;
+    video.muted = true;
+    video.dispatchEvent(new Event('volumechange'));
+
+    // 静音只影响喇叭图标；滑块显示的是真实音量。
+    // 拉成 0 的话，一取消静音音量会突然跳回满格，看起来像 bug。
+    expect($<HTMLInputElement>('volume').value).toBe('0.65');
+    expect($('volume').getAttribute('aria-valuetext')).toBe('已静音');
+    expect($('mute').getAttribute('aria-label')).toBe('取消静音');
+
+    video.muted = false;
+    video.dispatchEvent(new Event('volumechange'));
+
+    expect($<HTMLInputElement>('volume').value).toBe('0.65');
+    expect($('volume').getAttribute('aria-valuetext')).toBe('65%');
+    expect($('mute').getAttribute('aria-label')).toBe('静音');
+  });
+
+  it('does not drag the volume slider to zero when muting', () => {
+    mount();
+
+    // 这条是 P1-D 的原始症状：静音后滑块掉到 0，用户以为音量被清空了。
+    $('mute').click();
+    expect(video.muted).toBe(true);
+
+    // 真实浏览器里 muted 一变就会派发 volumechange，UI 同步挂在这个事件上。
+    video.dispatchEvent(new Event('volumechange'));
+    expect($<HTMLInputElement>('volume').value).toBe('1');
   });
 });

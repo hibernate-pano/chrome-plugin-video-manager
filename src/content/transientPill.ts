@@ -6,6 +6,8 @@
  * 抽出来，两处各自不再重复「判空宿主 / 自愈 / 计时 / 清理」这四件事。
  */
 
+import { announce } from './liveRegion';
+
 export interface TransientPillOptions {
   /** DOM id；也是 runtimeStyles 里选择器的锚点。 */
   id: string;
@@ -13,6 +15,17 @@ export interface TransientPillOptions {
   visibleClass: string;
   /** 停留时长（毫秒）。 */
   duration: number;
+  /**
+   * 是否同时用读屏播报。
+   *
+   * 默认 true：这两个提示都是**产品唯一的告知渠道**（首次引导是整个扩展的
+   * 发现机制，接管失败是"为什么没反应"的唯一解释），视觉上只是一块深色底、
+   * 白字的贴片，读屏用户从中得不到任何信息。所以它们必须有一条读屏通道。
+   *
+   * 视觉节点本身仍然保持 aria-hidden：播报走的是独立的 live region，
+   * 保留 aria-hidden 可以避免某些读屏器在 DOM 变化时重复念一遍。
+   */
+  announce?: boolean;
 }
 
 export class TransientPill {
@@ -40,6 +53,10 @@ export class TransientPill {
     root.classList.remove(this.options.visibleClass);
     void root.offsetWidth;
     root.classList.add(this.options.visibleClass);
+
+    if (this.options.announce !== false) {
+      announce(text);
+    }
 
     if (this.hideTimer !== null) {
       window.clearTimeout(this.hideTimer);

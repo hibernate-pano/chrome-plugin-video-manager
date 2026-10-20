@@ -26,6 +26,15 @@ export interface OverlayLayer {
   kind: 'subtitle' | 'overlay';
   rect: DOMRect;
   /**
+   * 文字实际占据的范围（容器度量的是排版方式，不是内容）。
+   *
+   * 搬运时需要用它给字幕一个**高于视频**的 z-index：视频的 z-index 是
+   * 2147483646，而字幕原本是 `z-index: auto`。即使 DOM 顺序排在视频之后，
+   * 一个 auto 的定位元素依然会输给那个显式高层级的视频 —— 实测字幕被
+   * 100% 盖住，一个像素都看不见（6.0.8 号称修好的问题，实测并未生效）。
+   */
+  ink: InkBounds | null;
+  /**
    * 搬运前的原父节点与原兄弟位置。
    *
    * 必须像视频自己那样把位置**记下来**：元素被搬进 overlay 之后再问
@@ -34,6 +43,8 @@ export interface OverlayLayer {
    */
   originalParent: ParentNode | null;
   originalNextSibling: Node | null;
+  /** 搬运前的内联 z-index，退出时原样还原。 */
+  originalZIndex: string;
 }
 
 /** 浮层相对视频矩形的允许超出比例：字幕可能略微溢出视频边缘。 */
@@ -49,15 +60,21 @@ const OVERFLOW_TOLERANCE = 0.12;
 const MIN_COVERAGE = 0.02;
 
 /**
- * 字幕的几何指纹：宽度不超过视频的 70%、高度不超过视频的 30%、
- * 且重心落在视频下半部分。
+ * 字幕的几何指纹：**墨水**宽度不超过视频的 70%、**墨水**高度不超过视频的 30%、
+ * 且重心落在视频下半部分，行盒不超过 2 行。
  *
- * 这三条同时成立才能把一个"飘在画面中间的大面板"排除掉——B站弹幕正好违反。
+ * 早先这里量的是**容器**宽度，那是排版方式的度量：字幕容器普遍写
+ * `left:0; right:0; text-align:center`，铺满播放器（实测 100%），
+ * 于是所有正常字幕都被判成「太宽」而排除在外 —— 6.0.8 号称修好的
+ * 「字幕跟着视频进全屏」实测根本没生效（详见 measureInkBounds 的注释）。
+ *
  * 阈值偏保守是故意的：漏判的代价只是字幕不进全屏（用户仍可退出后看到），
  * 而误判的代价是把整块弹幕搬进全屏，比字幕缺失更糟。
  */
 const SUBTITLE_MAX_WIDTH_RATIO = 0.7;
 const SUBTITLE_MAX_HEIGHT_RATIO = 0.3;
+/** 字幕最多两行：原文 + 译文。超过就是弹幕或列表。 */
+const SUBTITLE_MAX_LINES = 2;
 /**
  * 字幕重心的纵向位置下限（相对视频顶部，0=顶部 1=底部）。
  *
@@ -102,16 +119,114 @@ const fitsWithinVideo = (layer: DOMRect, video: DOMRect) => {
   );
 };
 
-const looksLikeSubtitle = (layer: DOMRect, video: DOMRect) => {
-  if (layer.width > video.width * SUBTITLE_MAX_WIDTH_RATIO) {
+/**
+ * 测量元素里**文字实际占据**的范围。
+ *
+ * 为什么需要它：字幕容器的宽度是**排版方式**决定的，不是内容决定的。
+ * 绝大多数字幕容器写的是 `left:0; right:0; text-align:center` —— 容器铺满
+ * 整个播放器宽度（实测 100%），文字却只有中间一小段。拿容器宽度去和视频比，
+ * 100% 宽的字幕必然被判成「太宽 → 不是字幕」，于是它不搬进全屏，
+ * 用户看到的就是「一按 f 字幕就没了」——这正是 6.0.8 号称修好的那个问题。
+ *
+ * 墨水宽度（文字实际占的宽度）才是内容的度量：字幕的墨水窄而居中，
+ * 弹幕的墨水宽且分散。实测（720×405 的视频）：
+ *   100% 宽居中字幕 → 墨水 380px（53%）
+ *   50% 宽居中字幕 → 墨水 60px（8%）
+ *   左侧字幕       → 墨水 80px（11%）
+ *   弹幕容器       → 墨水 544px（76%），且散在 8 个不连续的行盒上
+ *
+ * 用 Range.getClientRects() 而不是逐个遍历子节点：它对文本节点、
+ * 内联后代、伪元素都有效，且不碰 DOM。
+ */
+export interface InkBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+  /** 行盒数量：字幕通常 1–2 行，弹幕常有 8 行以上。 */
+  lines: number;
+}
+
+const measureInkBounds = (element: HTMLElement): InkBounds | null => {
+  if (typeof document.createRange !== 'function') {
+    return null;
+  }
+
+  let rects: DOMRect[];
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    rects = Array.from(range.getClientRects());
+    range.detach?.();
+  } catch {
+    return null;
+  }
+
+  // 过滤掉零尺寸的矩形（空的行盒、纯空白文本节点）。
+  const boxes = rects.filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+  if (boxes.length === 0) {
+    return null;
+  }
+
+  const left = Math.min(...boxes.map((rect) => rect.left));
+  const right = Math.max(...boxes.map((rect) => rect.right));
+  const top = Math.min(...boxes.map((rect) => rect.top));
+  const bottom = Math.max(...boxes.map((rect) => rect.bottom));
+
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+    lines: boxes.length,
+  };
+};
+
+/**
+ * 判断一个浮层是不是字幕。
+ *
+ * 判据全部基于**内容**而不是容器：
+ * - 墨水宽度不超过视频宽度的 70%（字幕是几行短句，弹幕是满屏散字）
+ * - 墨水高度不超过视频高度的 30%
+ * - 行盒不超过 2 行（原文 + 译文）
+ * - 墨水重心落在视频下半部分
+ *
+ * 量不到墨水时退回**容器**判据。这条退路只在两种情况下生效：
+ * 元素里根本没有文字（纯图形浮层，它本来也不该是字幕），
+ * 或环境没有布局引擎（jsdom 单测）。真实浏览器里带文字的元素一定量得到墨水。
+ */
+const looksLikeSubtitle = (ink: InkBounds | null, layer: DOMRect, video: DOMRect): boolean => {
+  if (!ink) {
+    // 容器判据（历史上的那条）：宽度 70%、高度 30%、重心在下半部分。
+    if (layer.width > video.width * SUBTITLE_MAX_WIDTH_RATIO) {
+      return false;
+    }
+    if (layer.height > video.height * SUBTITLE_MAX_HEIGHT_RATIO) {
+      return false;
+    }
+    const centerY = layer.top + layer.height / 2;
+    return centerY >= video.top + video.height * SUBTITLE_MIN_CENTER_RATIO;
+  }
+
+  if (ink.width > video.width * SUBTITLE_MAX_WIDTH_RATIO) {
     return false;
   }
 
-  if (layer.height > video.height * SUBTITLE_MAX_HEIGHT_RATIO) {
+  if (ink.height > video.height * SUBTITLE_MAX_HEIGHT_RATIO) {
     return false;
   }
 
-  const centerY = layer.top + layer.height / 2;
+  // 字幕最多两行（原文 + 译文）；三行以上基本是弹幕或列表。
+  if (ink.lines > SUBTITLE_MAX_LINES) {
+    return false;
+  }
+
+  // 墨水重心必须落在视频下半部分。
+  const centerY = ink.top + ink.height / 2;
   return centerY >= video.top + video.height * SUBTITLE_MIN_CENTER_RATIO;
 };
 
@@ -125,7 +240,23 @@ const isOverlayCandidate = (
   }
 
   // 我们自己的节点永远不参与：控制条、overlay、背板都会被误判成字幕。
-  if (element.closest('#vsc-page-fullscreen-overlay, #vsc-controls, #vsc-speed-toast') !== null) {
+  //
+  // ⚠️ 接管提示（#vsc-takeover-notice）也必须排除，而且它**曾经真的被误判过**：
+  // 它挂在 body 上，而 body 里的顶层 <video> 恰好也是 body 的直接子节点 ——
+  // 两者成了兄弟。提示挪到视频左下角之后（6.0.9，为了不再压住调速胶囊），
+  // 它的墨水重心正好落在视频下半部分、宽度不到视频的 70%、只有一行 ——
+  // 字幕判据的每一条都满足，于是它被判成「字幕」并被搬进全屏 overlay。
+  //
+  // 后果不是「位置怪一点」，而是**接管提示被搬走了**：它在 overlay 里
+  // 跟着满屏视频走，退出全屏时又被塞回 body —— 用户看到的提示位置整个乱掉，
+  // 而且它在 overlay 里的 z-index 会被抬到字幕那一档（2147483644），
+  // 压在真正的字幕上面。
+  //
+  // 早先提示贴左上角时侥幸没触发（重心在视频上半部分，不满足重心判据），
+  // 所以这个洞一直没人看见 —— 直到它被挪到左下角。
+  if (element.closest(
+    '#vsc-page-fullscreen-overlay, #vsc-controls, #vsc-speed-toast, #vsc-takeover-notice',
+  ) !== null) {
     return null;
   }
 
@@ -153,12 +284,17 @@ const isOverlayCandidate = (
     return null;
   }
 
+  // 墨水是内容的度量：字幕容器可能铺满播放器，但文字只有中间一小段。
+  const ink = measureInkBounds(element);
+
   return {
     element,
-    kind: looksLikeSubtitle(rect, videoRect) ? 'subtitle' : 'overlay',
+    kind: looksLikeSubtitle(ink, rect, videoRect) ? 'subtitle' : 'overlay',
     rect,
+    ink,
     originalParent: element.parentNode,
     originalNextSibling: element.nextSibling,
+    originalZIndex: element.style.zIndex,
   };
 };
 
@@ -195,6 +331,3 @@ export const findOverlayLayers = (video: HTMLVideoElement): OverlayLayer[] => {
 
   return layers;
 };
-
-export const hasBlockingOverlay = (video: HTMLVideoElement): boolean =>
-  findOverlayLayers(video).length > 0;

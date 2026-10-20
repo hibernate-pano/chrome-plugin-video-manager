@@ -1,7 +1,10 @@
 import { t } from '../shared/i18n';
+import { SPEED_CHANGE_EVENT } from '../shared/types';
+import { formatRate } from '../shared/rate';
 import { togglePlayback } from './playback';
-import { installRuntimeStyles } from './runtimeStyles';
-import { formatRate } from './speedToast';
+import { controlsStyles } from './controlsStyles';
+import { setSubtitleOffset } from './subtitleOffset';
+import type { OverlayLayer } from './overlayLayers';
 
 const CONTROLS_ID = 'vsc-controls';
 const IDLE_HIDE_DELAY = 3000;
@@ -19,6 +22,16 @@ const IDLE_HIDE_DELAY = 3000;
  * 用户以为跳转成功了。所以钉住必须有上限，到点无条件回到真实位置。
  */
 const SEEK_PIN_TIMEOUT = 3000;
+
+/**
+ * 倍速档位。
+ *
+ * 为什么最低是 0.5 而不是 playback.ts 允许的 0.1：
+ * 10 倍慢放几乎必然音画不同步（人耳对一百多毫秒的偏移就会察觉），
+ * 0.5x 才是「慢看」的真实下限。档位是给鼠标用户的快捷入口，
+ * 键盘的 0.1 步进仍然保留 —— 这里不改变 playback.ts 的上下限。
+ */
+const SPEED_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
 const ICONS = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',
@@ -44,6 +57,9 @@ export const formatTime = (seconds: number) => {
 };
 
 interface ControlsElements {
+  /** 挂在页面上的宿主节点（只有一个 shadow root，本身不显示）。 */
+  host: HTMLDivElement;
+  /** shadow root 里的控制条本体。 */
   root: HTMLDivElement;
   playButton: HTMLButtonElement;
   muteButton: HTMLButtonElement;
@@ -51,7 +67,24 @@ interface ControlsElements {
   progress: HTMLInputElement;
   volume: HTMLInputElement;
   time: HTMLSpanElement;
-  speed: HTMLSpanElement;
+  /** 倍速徽标：同时是档位菜单的触发器。 */
+  speed: HTMLButtonElement;
+  /** 倍速徽标外面那层（定位菜单用）。 */
+  speedWrap: HTMLSpanElement;
+  speedMenu: HTMLDivElement;
+}
+
+export interface FullscreenControlsOptions {
+  onExit: () => void;
+  ownsVideoSurface?: () => boolean;
+  /**
+   * 选中档位后的回调。
+   *
+   * 不传时控制条会把 `SPEED_CHANGE_EVENT` 派发到宿主节点上（冒泡到 document），
+   * 由运行时订阅。两条路是**互斥**的：给了回调就不发事件，
+   * 避免同一个动作触发两次反馈（两遍 toast、两遍读屏播报）。
+   */
+  onSpeedChange?: (rate: number) => void;
 }
 
 /**
@@ -61,6 +94,7 @@ interface ControlsElements {
 export class FullscreenControls {
   private readonly video: HTMLVideoElement;
   private readonly onExit: () => void;
+  private readonly onSpeedChange?: (rate: number) => void;
   /**
    * 视频表面此刻归不归我们管。
    *
@@ -76,24 +110,34 @@ export class FullscreenControls {
    */
   private readonly ownsVideoSurface: () => boolean;
   private elements: ControlsElements | null = null;
+  /** 被搬进 stage 的字幕层：控制条出现时要给它们让位。 */
+  private subtitleLayers: OverlayLayer[] = [];
   private idleTimer: number | null = null;
   private draggingProgress = false;
   private pendingSeek: number | null = null;
   private pendingSeekTimer: number | null = null;
+  /** 档位菜单是否开着。开着时控制条不能因为 idle 计时器消失。 */
+  private menuOpen = false;
+  /** focusFirst() 之前的焦点，unmount 时还回去。 */
+  private previousFocus: HTMLElement | null = null;
   private readonly boundPointerMove = () => this.show();
+  /** 任何按键都唤醒控制条 —— 纯键盘用户没有鼠标可动。 */
+  private readonly boundHandleKeyWake = () => this.show();
   private readonly boundScheduleHide = () => this.scheduleHide();
   private readonly boundKeepVisible = () => this.cancelHide();
   private readonly boundHandlePointerUp = () => {
     this.draggingProgress = false;
   };
   private readonly boundHandleVideoClick = (event: MouseEvent) => this.handleVideoClick(event);
+  private readonly boundHandleMenuKeyDown = (event: KeyboardEvent) => this.handleMenuKeyDown(event);
+  private readonly boundHandleDocumentPointerDown = (event: Event) => {
+    this.handleDocumentPointerDown(event);
+  };
 
-  constructor(
-    video: HTMLVideoElement,
-    options: { onExit: () => void; ownsVideoSurface?: () => boolean },
-  ) {
+  constructor(video: HTMLVideoElement, options: FullscreenControlsOptions) {
     this.video = video;
     this.onExit = options.onExit;
+    this.onSpeedChange = options.onSpeedChange;
     // 直接构造（不经 FullscreenController）时默认认为表面归我们：
     // 控制条存在本身就意味着视频已被接管。
     this.ownsVideoSurface = options.ownsVideoSurface ?? (() => true);
@@ -126,27 +170,65 @@ export class FullscreenControls {
     this.show();
   }
 
+  /**
+   * 把字幕抬到控制条上方。
+   *
+   * 控制条是贴着视口底部的（还带一层向上的黑色渐变），而字幕恰好在画面
+   * 底部 —— 两者争夺同一块区域。控制条出现时字幕被它压住，用户看到的就是
+   * 「字幕时有时无」。
+   *
+   * 做法：控制条可见时给字幕加一个底部内边距，把字幕内容顶上去；
+   * 控制条隐藏后立刻撤销，字幕回到它原本的位置。
+   *
+   * 字幕是站点自己的节点，动它的 padding 会改到站点样式 —— 所以这里
+   * 用 `transform: translateY()` 而不是改布局属性：位移不影响布局，
+   * 退出全屏时撤销 transform 即可完整还原。
+   */
+  private setSubtitleOffset(pixels: number) {
+    for (const layer of this.subtitleLayers) {
+      if (!layer.element.isConnected) {
+        continue;
+      }
+
+      // 还原逻辑放在 subtitleOffset 里：它记得站点自己写在字幕上的 transform，
+      // 撤位移时**只撤我们加的那部分**，不会把站点的位移一起抹掉。
+      setSubtitleOffset(layer.element, pixels);
+    }
+  }
+
+  /**
+   * 记录被搬进 stage 的字幕层，供控制条避让使用。
+   *
+   * 由 FullscreenController 在搬运字幕后调用。传入时控制条通常已经可见
+   * （mount() 里会先 show() 一次），所以这里要**立刻**补一次避让 ——
+   * 只存引用不生效的话，字幕会一直压在控制条底下。
+   */
+  setSubtitleLayers(layers: OverlayLayer[]) {
+    this.subtitleLayers = layers;
+
+    const root = this.elements?.root;
+    if (root?.classList.contains('bar--visible')) {
+      this.setSubtitleOffset(this.getSubtitleClearance());
+    }
+  }
+
+  /** 控制条可见时字幕需要上抬的高度（控制条高度 + 一点余量）。 */
+  private getSubtitleClearance(): number {
+    const root = this.elements?.root;
+    if (!root) {
+      return 0;
+    }
+
+    const rect = root.getBoundingClientRect();
+    // 控制条高度大约 70px（含渐变 padding）。实测字幕底边离画面底
+    // 约 40px，上抬这么多就够它露在控制条上方了。
+    return Math.max(0, Math.round(rect.height * 0.7));
+  }
+
   mount() {
     if (this.elements) {
       return;
     }
-
-    // 控制条 / overlay 依赖 runtimeStyles 里的定位与配色；进入全屏这条路径必须
-    // 确保样式在场。页面若在全屏期间把样式节点摘走，这里也能顺带补回。
-    installRuntimeStyles();
-
-    const root = document.createElement('div');
-    root.id = CONTROLS_ID;
-    root.className = 'vsc-ctl';
-    root.innerHTML = `
-      <button type="button" class="vsc-ctl__button" data-role="play" aria-label="${t('ctlPlay', '播放/暂停')}">${ICONS.play}</button>
-      <span class="vsc-ctl__time" data-role="time">0:00 / 0:00</span>
-      <input type="range" class="vsc-ctl__range vsc-ctl__progress" data-role="progress" min="0" max="0" step="0.1" value="0" aria-label="${t('ctlProgress', '播放进度')}" />
-      <button type="button" class="vsc-ctl__button" data-role="mute" aria-label="${t('ctlMute', '静音')}">${ICONS.volume}</button>
-      <input type="range" class="vsc-ctl__range vsc-ctl__volume" data-role="volume" min="0" max="1" step="0.01" value="1" aria-label="${t('ctlVolume', '音量')}" />
-      <span class="vsc-ctl__speed" data-role="speed">1x</span>
-      <button type="button" class="vsc-ctl__button" data-role="exit" aria-label="${t('ctlExit', '退出全屏')}">${ICONS.exit}</button>
-    `;
 
     // 与 overlay 同样：非 HTML 文档（SVG/foreignObject）里没有可挂载的宿主。
     // enter() 已会提前拒绝这类文档，这里是直接调用 mount() 时的防御。
@@ -154,12 +236,43 @@ export class FullscreenControls {
       return;
     }
 
-    document.body.appendChild(root);
+    // 控制条住在 shadow root 里：站点的全局 CSS 进不来，我们的样式也出不去。
+    // 这是唯一能挡住站点 `!important` 的结构性保证（见 controlsStyles.ts 的说明）。
+    const host = document.createElement('div');
+    host.id = CONTROLS_ID;
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = controlsStyles;
+    shadow.appendChild(style);
+
+    const root = document.createElement('div');
+    root.className = 'bar';
+    // role="group" + aria-label：读屏用户需要知道「这一组是播放控制」，
+    // 否则他们听到的只是一串没有上下文的裸按钮和裸数字。
+    root.setAttribute('role', 'group');
+    root.setAttribute('aria-label', t('ctlGroup', '视频播放控制'));
+    root.innerHTML = `
+      <button type="button" class="button" data-role="play" aria-label="${t('ctlPlay', '播放/暂停')}">${ICONS.play}</button>
+      <span class="time" data-role="time">0:00 / 0:00</span>
+      <input type="range" class="range progress" data-role="progress" min="0" max="0" step="0.1" value="0" aria-label="${t('ctlProgress', '播放进度')}" />
+      <button type="button" class="button" data-role="mute" aria-label="${t('ctlMute', '静音')}">${ICONS.volume}</button>
+      <input type="range" class="range volume" data-role="volume" min="0" max="1" step="0.01" value="1" aria-label="${t('ctlVolume', '音量')}" />
+      <span class="speed-wrap" data-role="speed-wrap">
+        <button type="button" class="speed" data-role="speed" aria-haspopup="menu" aria-expanded="false" aria-live="polite" aria-label="${t('ctlSpeed', '播放速度')}">1x</button>
+        <div class="speed-menu" data-role="speed-menu" role="menu" hidden aria-label="${t('ctlSpeed', '播放速度')}"></div>
+      </span>
+      <button type="button" class="button" data-role="exit" aria-label="${t('ctlExit', '退出全屏 (Esc)')}">${ICONS.exit}</button>
+    `;
+    shadow.appendChild(root);
+
+    document.body.appendChild(host);
 
     const query = <T extends HTMLElement>(role: string) =>
       root.querySelector<T>(`[data-role="${role}"]`);
 
     const elements: ControlsElements = {
+      host,
       root,
       playButton: query<HTMLButtonElement>('play')!,
       muteButton: query<HTMLButtonElement>('mute')!,
@@ -167,12 +280,38 @@ export class FullscreenControls {
       progress: query<HTMLInputElement>('progress')!,
       volume: query<HTMLInputElement>('volume')!,
       time: query<HTMLSpanElement>('time')!,
-      speed: query<HTMLSpanElement>('speed')!,
+      speed: query<HTMLButtonElement>('speed')!,
+      speedWrap: query<HTMLSpanElement>('speed-wrap')!,
+      speedMenu: query<HTMLDivElement>('speed-menu')!,
     };
     this.elements = elements;
 
+    // 档位菜单的每一项都是真正的 <button role="menuitem">：
+    // 原生按钮自带 Enter 激活、焦点环与禁用态语义，比 div + 手写键盘逻辑可靠。
+    for (const rate of SPEED_RATES) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'speed-menu__item';
+      item.setAttribute('role', 'menuitem');
+      // 菜单项不进 Tab 序列（ARIA menu 模式：一次只有一个可聚焦项）。
+      // 否则用户按 Tab 要穿过 10 个档位才能到退出按钮。
+      item.tabIndex = -1;
+      item.dataset.rate = String(rate);
+      item.textContent = `${formatRate(rate)}x`;
+      item.addEventListener('click', (event) => {
+        // detail === 0 表示这次 click 由键盘触发（Enter）：此时把焦点还给
+        // 倍速按钮，键盘用户不至于在菜单消失后丢失位置。
+        // 鼠标点击（detail > 0）不还焦点：否则焦点一直留在控制条里，
+        // scheduleHide() 会让控制条永远不消失。
+        this.selectSpeed(rate, { restoreFocus: event.detail === 0 });
+      });
+      elements.speedMenu.appendChild(item);
+    }
+
     elements.playButton.addEventListener('click', () => {
       togglePlayback(this.video);
+      // 失焦是有意为之：焦点留在按钮上，scheduleHide() 就会一直把控制条
+      // 算作「用户正在操作」，它从此不再自动隐藏。
       elements.playButton.blur();
       this.show();
     });
@@ -184,6 +323,30 @@ export class FullscreenControls {
     elements.exitButton.addEventListener('click', () => {
       this.onExit();
     });
+    elements.speed.addEventListener('click', (event) => {
+      if (this.menuOpen) {
+        // 鼠标路径（detail > 0）不还焦点 —— 还焦点就等于把控制条钉住，
+        // 它从此不再自动隐藏。键盘路径（detail === 0）必须还，
+        // 否则键盘用户在菜单收起后丢失位置。
+        this.closeSpeedMenu(event.detail === 0);
+        if (event.detail !== 0) {
+          this.releaseFocusToPage();
+        }
+      } else {
+        this.openSpeedMenu();
+      }
+    });
+    elements.speed.addEventListener('keydown', (event) => {
+      // 菜单按钮的常规键盘入口：上下箭头直接展开。
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.openSpeedMenu();
+      }
+    });
+    elements.speedMenu.addEventListener('keydown', this.boundHandleMenuKeyDown);
+    // 点菜单外面要收起菜单。挂在 document 上而不是 bar 上：
+    // 用户点视频、点页面任意位置都算「外面」。
+    document.addEventListener('pointerdown', this.boundHandleDocumentPointerDown, true);
 
     // 点击视频本身也要能暂停：控制条 3 秒就自动隐藏，藏起来之后
     // 鼠标点击是用户唯一还在手的播放控制手段。
@@ -220,10 +383,47 @@ export class FullscreenControls {
       this.show();
     });
 
+    // 滑块松手后把焦点放掉，让控制条能重新自动隐藏。
+    //
+    // ⚠️ 为什么不能放在 `input` 里失焦：实测（真实 Chromium）的事件顺序是
+    // **input 先于 focus** —— 浏览器在 input 之后才把焦点落到滑块上。
+    // 于是 input 里 blur 掉的东西，浏览器紧接着又 focus 回来，
+    // 焦点永远甩不掉。
+    //
+    // ⚠️ 为什么要在**松手**时才放：拖动过程中控制条**就该**一直显示
+    // （用户正在操作它）。拖完就该按 idle 规则隐藏了 ——
+    // 而「焦点还在滑块上」会让 scheduleHide 无限续期。
+    //
+    // ⚠️ 滑块曾经完全忘记处理这件事（只有播放/静音按钮做了），
+    // 于是用户拖过一次音量条之后，控制条就**永远**不再自动隐藏：
+    // 实测点过音量滑块 5 秒后控制条仍然可见。
+    // 这直接违背产品最核心的承诺（「鼠标静止 3 秒后自动隐藏」），
+    // 而且是**每个用户第一次拖滑块**就会遇到。
+    const releaseSliderFocus = () => {
+      this.releaseFocusToPage();
+      this.show();
+    };
+    elements.progress.addEventListener('change', releaseSliderFocus);
+    elements.volume.addEventListener('change', releaseSliderFocus);
+    // change 在键盘操作滑块时也会触发；而鼠标拖动时 change 在松手时触发。
+    // pointerup 兜住「拖到原值、change 不触发」的情况。
+    elements.progress.addEventListener('pointerup', releaseSliderFocus);
+    elements.volume.addEventListener('pointerup', releaseSliderFocus);
+
     root.addEventListener('mouseenter', this.boundKeepVisible);
     root.addEventListener('mouseleave', this.boundScheduleHide);
     window.addEventListener('pointermove', this.boundPointerMove, true);
     window.addEventListener('pointerup', this.boundHandlePointerUp, true);
+    // ⚠️ 键盘也要能唤醒控制条。
+    //
+    // 控制条 3 秒无操作就淡出，鼠标一动就回来 —— 但**纯键盘用户**没有鼠标。
+    // 实测：控制条淡出后，按方向键/空格/任何键都唤不回来，
+    // 键盘用户就此失去了对进度条、音量、退出按钮的访问。
+    //
+    // 监听挂在 **window 的捕获阶段**：内容脚本的键盘拦截也跑在捕获阶段，
+    // 顺序上我们必须**先于**它拿到事件，否则按键被扩展吞掉之后
+    // 根本到不了这里。
+    window.addEventListener('keydown', this.boundHandleKeyWake, true);
 
     // 视频事件 -> UI 同步。
     this.video.addEventListener('timeupdate', this.syncProgress);
@@ -244,6 +444,197 @@ export class FullscreenControls {
     this.syncPlayState();
     this.syncSpeed();
     this.syncVolume();
+  }
+
+  private speedMenuItems(): HTMLButtonElement[] {
+    const menu = this.elements?.speedMenu;
+    if (!menu) {
+      return [];
+    }
+
+    return Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+  }
+
+  private openSpeedMenu() {
+    const elements = this.elements;
+    if (!elements || this.menuOpen) {
+      return;
+    }
+
+    this.menuOpen = true;
+    elements.speedMenu.hidden = false;
+    elements.speed.setAttribute('aria-expanded', 'true');
+
+    // 菜单是绝对定位在按钮上方的，指针移上去会离开控制条本体。
+    // 立刻重新 show() 一次 + scheduleHide 的 menuOpen 守卫，
+    // 保证菜单开着的时候控制条不会因为 idle 计时器跟着消失。
+    this.show();
+
+    // 焦点落在当前档位上：一打开就知道自己现在在哪一档。
+    const items = this.speedMenuItems();
+    const current = items.find((item) => item.getAttribute('aria-current') === 'true');
+    (current ?? items[0])?.focus();
+  }
+
+  private closeSpeedMenu(restoreFocus = true) {
+    const elements = this.elements;
+    if (!elements || !this.menuOpen) {
+      return;
+    }
+
+    this.menuOpen = false;
+    elements.speedMenu.hidden = true;
+    elements.speed.setAttribute('aria-expanded', 'false');
+
+    if (restoreFocus) {
+      elements.speed.focus({ preventScroll: true });
+    }
+
+    // 菜单收起后重新开始 idle 计时，否则控制条会一直挂着。
+    this.show();
+  }
+
+  /**
+   * 把焦点从控制条里放掉，让它能重新自动隐藏。
+   *
+   * ⚠️ 为什么需要它：scheduleHide() 在「焦点还在控制条里」时会无限续期 ——
+   * 那是为了保护键盘用户（控制条藏了而焦点还在里面，键盘用户就瞎了）。
+   * 但**鼠标**用户点完控件之后，焦点还留在那个控件上（浏览器的默认行为），
+   * 于是控制条再也不消失。
+   *
+   * 实测（真实 Chromium）：点过音量滑块 5 秒后，控制条仍然可见。
+   * 这直接违背产品最核心的承诺（「鼠标静止 3 秒后自动隐藏」）——
+   * 而且是**每个用户第一次拖滑块**就会遇到。
+   *
+   * ⚠️ 必须用 shadow root 里的 activeElement：
+   * 焦点在 shadow tree 内部时，document.activeElement 会被重定向成**宿主节点**，
+   * 对宿主 blur() 未必能清掉内部那个元素的焦点。直接对内部元素 blur() 才行。
+   *
+   * ⚠️ 为什么不在 closeSpeedMenu 里无条件 blur：键盘路径需要把焦点还回倍速按钮，
+   * 否则键盘用户在菜单收起后就丢失了位置（那正是 restoreFocus 的用途）。
+   * 所以「鼠标路径失焦、键盘路径保留焦点」是刻意的区分。
+   */
+  private releaseFocusToPage() {
+    const elements = this.elements;
+    if (!elements) {
+      return;
+    }
+
+    const inner = elements.host.shadowRoot?.activeElement;
+    if (inner instanceof HTMLElement) {
+      inner.blur();
+      return;
+    }
+
+    // 焦点在宿主上（shadow 之外还有焦点逻辑时的兜底）。
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && elements.host.contains(active)) {
+      active.blur();
+    }
+  }
+
+  /**
+   * 选中一个档位。
+   *
+   * 直接写 playbackRate：档位全部落在 playback.ts 的 [0.1, 16] 安全区间内，
+   * 不需要再走 clamp。
+   */
+  private selectSpeed(rate: number, options: { restoreFocus: boolean }) {
+    const elements = this.elements;
+
+    this.video.playbackRate = rate;
+    this.closeSpeedMenu(options.restoreFocus);
+    // 鼠标选的档位：焦点原本留在菜单项上（菜单项一藏，焦点就落在
+    // 一个看不见的地方）。必须放掉，否则控制条再也不自动隐藏。
+    if (!options.restoreFocus) {
+      this.releaseFocusToPage();
+    }
+    this.show();
+
+    if (this.onSpeedChange) {
+      this.onSpeedChange(rate);
+      return;
+    }
+
+    // 没有外部回调时，用事件把「倍速变了」送出去。
+    // 事件派发在宿主节点上并冒泡 —— 宿主在 light DOM 里，document 收得到。
+    elements?.host.dispatchEvent(new CustomEvent(SPEED_CHANGE_EVENT, {
+      bubbles: true,
+      detail: { rate, video: this.video },
+    }));
+  }
+
+  private handleMenuKeyDown(event: KeyboardEvent) {
+    if (!this.menuOpen) {
+      return;
+    }
+
+    const items = this.speedMenuItems();
+    if (items.length === 0) {
+      return;
+    }
+
+    const current = items.indexOf(event.target as HTMLButtonElement);
+    const focusAt = (index: number) => {
+      const wrapped = ((index % items.length) + items.length) % items.length;
+      items[wrapped]?.focus();
+    };
+
+    switch (event.key) {
+      case 'Escape':
+        // Esc 关菜单而不是退出全屏：键盘控制器在 window 捕获阶段会先一步
+        // 拦下 Escape（见 runtime.ts 里 isFullscreenActive 的说明），
+        // 这里能收到就说明它让行了。
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeSpeedMenu();
+        break;
+      case 'ArrowDown':
+        event.preventDefault();
+        focusAt(current < 0 ? 0 : current + 1);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        focusAt(current < 0 ? items.length - 1 : current - 1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        focusAt(0);
+        break;
+      case 'End':
+        event.preventDefault();
+        focusAt(items.length - 1);
+        break;
+      case 'Tab':
+        // 菜单不困住 Tab：收起菜单、把焦点交还倍速按钮，
+        // 随后浏览器的默认 Tab 会从按钮继续往后走。
+        this.closeSpeedMenu();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** 点击菜单与倍速按钮之外的任何地方都收起菜单。 */
+  private handleDocumentPointerDown(event: Event) {
+    const elements = this.elements;
+    if (!elements || !this.menuOpen) {
+      return;
+    }
+
+    // composedPath 能穿过 shadow 边界；拿不到时退回 target（会被重定向成宿主）。
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+    const clickedInside = path.length > 0
+      ? path.includes(elements.speedWrap)
+      : event.target instanceof Node && elements.host.contains(event.target);
+
+    if (clickedInside) {
+      return;
+    }
+
+    this.closeSpeedMenu(false);
+    // 点页面别处一定是鼠标操作：焦点若留在控制条里，它就永远不消失。
+    this.releaseFocusToPage();
   }
 
   private readonly syncProgress = () => {
@@ -270,6 +661,8 @@ export class FullscreenControls {
     elements.progress.value = hasDuration ? String(shown) : '0';
     elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(shown / duration) * 100}%` : '0%');
     elements.time.textContent = `${formatTime(hasDuration ? shown : current)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
+    // 读屏念裸数字（"108"）毫无意义 —— 它得念成 "1:48 / 30:00"。
+    elements.progress.setAttribute('aria-valuetext', elements.time.textContent);
   };
 
   /** 跳转落地：清除 pendingSeek 并回到真实位置渲染。 */
@@ -316,7 +709,8 @@ export class FullscreenControls {
     const clamped = hasDuration ? Math.min(Math.max(target, 0), duration) : 0;
     elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(clamped / duration) * 100}%` : '0%');
     elements.time.textContent = `${formatTime(clamped)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
-  };
+    elements.progress.setAttribute('aria-valuetext', elements.time.textContent);
+  }
 
   private readonly syncPlayState = () => {
     const elements = this.elements;
@@ -326,6 +720,12 @@ export class FullscreenControls {
 
     const playing = !this.video.paused;
     elements.playButton.innerHTML = playing ? ICONS.pause : ICONS.play;
+    // 图标会随状态变，可访问名也必须跟着变。
+    // 只换图标的话，读屏用户永远听到「播放/暂停」，分不清当前到底是哪一种。
+    elements.playButton.setAttribute(
+      'aria-label',
+      playing ? t('ctlPause', '暂停') : t('ctlPlay', '播放/暂停'),
+    );
   };
 
   private readonly syncSpeed = () => {
@@ -334,7 +734,21 @@ export class FullscreenControls {
       return;
     }
 
-    elements.speed.textContent = `${formatRate(this.video.playbackRate)}x`;
+    const rate = this.video.playbackRate;
+    elements.speed.textContent = `${formatRate(rate)}x`;
+    // 可访问名里带上倍率：按钮本身开了 aria-live，
+    // 名字一变读屏就会播报 —— 这是倍速变化的第二条播报通道，
+    // 与控制条在不在屏幕上无关。
+    elements.speed.setAttribute('aria-label', `${t('ctlSpeed', '播放速度')} ${formatRate(rate)}x`);
+
+    for (const item of this.speedMenuItems()) {
+      const value = Number(item.dataset.rate);
+      if (Number.isFinite(value) && Math.abs(value - rate) < 0.001) {
+        item.setAttribute('aria-current', 'true');
+      } else {
+        item.removeAttribute('aria-current');
+      }
+    }
   };
 
   private readonly syncVolume = () => {
@@ -343,10 +757,27 @@ export class FullscreenControls {
       return;
     }
 
-    const muted = this.video.muted || this.video.volume === 0;
+    const volume = this.video.volume;
+    const muted = this.video.muted || volume === 0;
+
     elements.muteButton.innerHTML = muted ? ICONS.muted : ICONS.volume;
-    elements.volume.value = String(muted ? 0 : this.video.volume);
-    elements.volume.style.setProperty('--vsc-progress', `${(muted ? 0 : this.video.volume) * 100}%`);
+    elements.muteButton.setAttribute(
+      'aria-label',
+      muted ? t('ctlUnmute', '取消静音') : t('ctlMute', '静音'),
+    );
+
+    // 滑块永远显示**真实音量**，静音只体现在喇叭图标上。
+    //
+    // 原来的写法在静音时把滑块拉到 0：用户看到的是「音量被调到 0 了」，
+    // 可 volume 其实还是 1 —— 一取消静音音量直接跳到满格，看起来像 bug。
+    // 原生播放器（YouTube 等）都是这么做的：静音是「暂时不出声」，
+    // 不是「把音量旋钮拧到底」。
+    elements.volume.value = String(volume);
+    elements.volume.style.setProperty('--vsc-progress', `${volume * 100}%`);
+    elements.volume.setAttribute(
+      'aria-valuetext',
+      this.video.muted ? t('ctlMuted', '已静音') : `${Math.round(volume * 100)}%`,
+    );
   };
 
   private show() {
@@ -355,7 +786,8 @@ export class FullscreenControls {
       return;
     }
 
-    elements.root.classList.add('vsc-ctl--visible');
+    elements.root.classList.add('bar--visible');
+    this.setSubtitleOffset(this.getSubtitleClearance());
     this.scheduleHide();
   }
 
@@ -366,23 +798,89 @@ export class FullscreenControls {
     }
   }
 
+  /**
+   * 焦点是否在控制条里。
+   *
+   * 焦点在 shadow tree 内部时，document.activeElement 会被重定向成宿主节点，
+   * 所以判宿主就够了（Node.contains 包含自身）。
+   */
+  private hasFocusInside(): boolean {
+    const elements = this.elements;
+    if (!elements) {
+      return false;
+    }
+
+    const active = document.activeElement;
+    return active !== null && elements.host.contains(active);
+  }
+
   private scheduleHide() {
     this.cancelHide();
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
+
       if (this.draggingProgress) {
         this.scheduleHide();
         return;
       }
-      this.elements?.root.classList.remove('vsc-ctl--visible');
+
+      // 菜单开着时控制条不能消失：菜单是控制条的一部分，
+      // 控制条一藏，菜单也跟着没了。
+      if (this.menuOpen) {
+        this.scheduleHide();
+        return;
+      }
+
+      // 焦点在控制条里时不隐藏。
+      // opacity: 0 + visibility: hidden 的元素如果还拿着焦点，
+      // 键盘用户盯着屏幕什么也看不到，只能盲按。
+      if (this.hasFocusInside()) {
+        this.scheduleHide();
+        return;
+      }
+
+      this.elements?.root.classList.remove('bar--visible');
+      // 控制条藏了，字幕立刻回到它原本的位置。
+      this.setSubtitleOffset(0);
     }, IDLE_HIDE_DELAY);
   }
 
+  /**
+   * 把焦点送进控制条。
+   *
+   * ⚠️ 只在「用户明确要用键盘操作控制条」时调用。
+   * 不要在每次进入全屏时无条件调用：焦点一旦落在控制条里，
+   * scheduleHide() 就会一直把它算作「用户正在操作」，控制条将不再自动隐藏
+   * （这正是本方法存在的意义，但也是无条件调用会踩的坑）。
+   */
+  focusFirst() {
+    const elements = this.elements;
+    if (!elements) {
+      return;
+    }
+
+    // 记下原焦点，unmount 时还回原处。
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !elements.host.contains(active)) {
+      this.previousFocus = active;
+    }
+
+    elements.playButton.focus({ preventScroll: true });
+  }
+
   unmount() {
-    this.cancelHide();
     this.releaseSeekPin();
+    // 顺序有讲究：closeSpeedMenu 内部会 show()，那会重新排一个 idle 计时器。
+    // 必须在它之后再 cancelHide，否则控制条拆了还留着一个待触发的定时器。
+    this.closeSpeedMenu(false);
+    this.cancelHide();
+    // 退出全屏前把字幕的位移撤销：字幕要原样回到站点 DOM。
+    this.setSubtitleOffset(0);
+    this.subtitleLayers = [];
     window.removeEventListener('pointermove', this.boundPointerMove, true);
     window.removeEventListener('pointerup', this.boundHandlePointerUp, true);
+    window.removeEventListener('keydown', this.boundHandleKeyWake, true);
+    document.removeEventListener('pointerdown', this.boundHandleDocumentPointerDown, true);
 
     this.video.removeEventListener('timeupdate', this.syncProgress);
     this.video.removeEventListener('durationchange', this.syncProgress);
@@ -396,7 +894,16 @@ export class FullscreenControls {
     // 否则退出全屏后站点自己的点击监听器会和这个残留监听器双重切换。
     this.video.removeEventListener('click', this.boundHandleVideoClick);
 
-    this.elements?.root.remove();
+    // 宿主移除后焦点会掉到 body：如果焦点本来在控制条里，
+    // 还回 focusFirst() 之前的位置，键盘用户不至于凭空丢失位置。
+    const restoreTarget = this.previousFocus;
+    this.previousFocus = null;
+    if (restoreTarget?.isConnected && this.elements?.host.contains(document.activeElement)) {
+      restoreTarget.focus({ preventScroll: true });
+    }
+
+    // 摘掉整个宿主：shadow root 随之消失，内部元素一并清理。
+    this.elements?.host.remove();
     this.elements = null;
   }
 }

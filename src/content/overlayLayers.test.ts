@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { findOverlayLayers, hasBlockingOverlay } from './overlayLayers';
+import { findOverlayLayers } from './overlayLayers';
 
 /**
  * jsdom 不做布局：getBoundingClientRect 与 getComputedStyle 的定位值
@@ -183,16 +183,41 @@ describe('findOverlayLayers', () => {
     expect(ids).not.toContain('vsc-controls');
   });
 
-  it('hasBlockingOverlay 对纯视频页面返回 false', () => {
-    const { video } = setup([]);
-    expect(hasBlockingOverlay(video)).toBe(false);
-  });
+  it('忽略我们自己的接管提示节点', () => {
+    // 回归（6.0.9）：接管提示挂在 body 上，而 body 里的顶层 <video> 恰好也是
+    // body 的直接子节点 —— 两者成了兄弟。
+    //
+    // 提示挪到视频**左下角**（为了不再压住调速胶囊）之后，它的墨水重心正好
+    // 落在视频下半部分、宽度不到视频的 70%、只有一行 —— 字幕判据的每一条都满足，
+    // 于是它被判成「字幕」并被搬进全屏 overlay。
+    //
+    // 后果不是「位置怪一点」，而是接管提示被搬走了：它在 overlay 里跟着满屏视频走，
+    // 退出全屏又被塞回 body，而且 z-index 被抬到字幕那一档、压在真字幕上面。
+    //
+    // 早先提示贴左上角时侥幸没触发（重心在视频上半部分），所以这个洞一直没人看见。
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+    // 视频用真实播放器尺寸（320×180），不是测试里那个 1000×600 的大矩形。
+    //
+    // ⚠️ 尺寸是这条用例的关键：接管提示 154×26 在 1000×600 的视频上覆盖率只有
+    // 0.0067，会被 MIN_COVERAGE（0.02）先挡掉 —— 那样即使排除清单里漏了它，
+    // 断言也照样通过，守卫就成了假的。320×180 上覆盖率是 0.07，才真的走到字幕判据。
+    stubRect(video, { top: 0, left: 0, right: 320, bottom: 180, width: 320, height: 180 });
+    stubStyle(video, {});
 
-  it('hasBlockingOverlay 对有字幕的页面返回 true', () => {
-    const { video } = setup([
-      { rect: { top: 480, left: 200, right: 800, bottom: 560, width: 600, height: 80 } },
-    ]);
-    expect(hasBlockingOverlay(video)).toBe(true);
+    const notice = document.createElement('div');
+    notice.id = 'vsc-takeover-notice';
+    // 贴视频左下角：窄、矮、重心在下半部分 —— 完全符合字幕判据。
+    stubRect(notice, {
+      top: 140, left: 16, right: 170, bottom: 166, width: 154, height: 26,
+    });
+    stubStyle(notice, {});
+    video.parentElement?.appendChild(notice);
+
+    const ids = findOverlayLayers(video).map((layer) => layer.element.id);
+    expect(ids).not.toContain('vsc-takeover-notice');
   });
 
   it('视频本身不可见时不返回任何层', () => {

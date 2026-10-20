@@ -1,4 +1,4 @@
-import { t } from '../shared/i18n';
+import { currentLocale, t } from '../shared/i18n';
 import {
   formatShortcut,
   isBrowserReservedShortcut,
@@ -10,6 +10,7 @@ import {
   SHORTCUT_DEFINITIONS,
   type ShortcutSettings,
 } from '../shared/types';
+import { themeCss } from './options-theme';
 
 const TEXTS: Record<keyof ShortcutSettings, { label: string; description: string }> = {
   increaseSpeed: { label: 'actionIncrease', description: 'actionIncreaseDesc' },
@@ -22,8 +23,8 @@ const TEXTS: Record<keyof ShortcutSettings, { label: string; description: string
 };
 
 const FALLBACKS: Record<string, string> = {
-  optTitle: '快捷键',
-  optSubtitle: '每个动作都可以改键。留空表示禁用该动作，保存后已打开的页面会立即生效。',
+  optSubtitle: '快捷键',
+  optLead: '每个动作都可以改键。留空表示禁用该动作，保存后已打开的页面会立即生效。',
   optSave: '保存',
   optReset: '恢复默认',
   optPressKey: '按下按键',
@@ -32,6 +33,11 @@ const FALLBACKS: Record<string, string> = {
   optDuplicate: '有按键被重复绑定，每个动作必须不同',
   optReserved: '与浏览器快捷键冲突，可能被浏览器优先处理',
   optFixDuplicate: '请先修正重复的按键',
+  optProductName: 'Video Speed Controller — Fullscreen & Keys',
+  optPageTitle: 'Video Speed Controller — Fullscreen & Keys',
+  optPrivacy: '隐私政策',
+  optRepository: '源码仓库',
+  optVersion: '版本',
   actionIncrease: '加速',
   actionIncreaseDesc: '加快播放速度（+0.1，长按连续）',
   actionDecrease: '减速',
@@ -50,176 +56,91 @@ const FALLBACKS: Record<string, string> = {
 
 const tr = (key: string): string => t(key, FALLBACKS[key] ?? key);
 
-const styles = `
-:root {
-  color-scheme: light;
-}
+/** 隐私政策与仓库地址。仓库公开，链接对用户可点。 */
+const PRIVACY_URL =
+  'https://github.com/hibernate-pano/chrome-plugin-video-manager/blob/main/PRIVACY.md';
+const REPO_URL = 'https://github.com/hibernate-pano/chrome-plugin-video-manager';
 
-body {
-  margin: 0;
-  background: #f5f6f8;
-  color: #1e2430;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-.vsc {
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 56px 24px 64px;
-}
-
-.vsc__title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.vsc__subtitle {
-  margin: 10px 0 0;
-  max-width: 46ch;
-  font-size: 14px;
-  line-height: 1.65;
-  color: #5b6473;
-}
-
-.vsc__card {
-  margin-top: 28px;
-  border: 1px solid #e3e6ea;
-  border-radius: 16px;
-  background: #ffffff;
-  overflow: hidden;
-}
-
-.vsc__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 20px;
-  border-bottom: 1px solid #eef0f2;
-}
-
-.vsc__row:last-child {
-  border-bottom: none;
-}
-
-.vsc__row-label {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.vsc__row-desc {
-  margin: 3px 0 0;
-  font-size: 12.5px;
-  color: #737d8c;
-}
-
-.vsc__key {
-  flex: none;
-  width: 168px;
-  padding: 9px 12px;
-  border: 1px solid #d6dae0;
-  border-radius: 10px;
-  background: #fbfbfc;
-  color: #1e2430;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: center;
-  cursor: pointer;
-}
-
-.vsc__key:focus-visible {
-  outline: 2px solid #0f766e;
-  outline-offset: 2px;
-}
-
-.vsc__key.vsc--conflict {
-  border-color: #d97706;
-  background: #fffbeb;
-  color: #b45309;
-}
-
-.vsc__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 22px;
-}
-
-.vsc__status {
-  margin-right: auto;
-  font-size: 13px;
-  color: #737d8c;
-  min-height: 18px;
-}
-
-.vsc__status.vsc--error {
-  color: #b45309;
-}
-
-.vsc__button {
-  padding: 9px 16px;
-  border: 1px solid #d6dae0;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #1e2430;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.vsc__button:hover {
-  border-color: #b9bfc8;
-}
-
-.vsc__button--primary {
-  border-color: #0f766e;
-  background: #0f766e;
-  color: #ffffff;
-}
-
-.vsc__button--primary:hover {
-  background: #115e59;
-  border-color: #115e59;
-}
-
-@media (max-width: 560px) {
-  .vsc__row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
+/**
+ * 扩展版本号。
+ *
+ * 唯一的事实源是 manifest.json —— settings.ts 里那句「package.json 与 manifest.json
+ * 的 version 一致」已经由 scripts/ci-workflow.test.ts 锁住，所以这里读 manifest
+ * 不会引入第二个可能过期的数字。读不到时（比如单测里没有 chrome mock）显示 '—'，
+ * 而不是硬编码一个会随发布过期的版本号。
+ */
+const readVersion = (): string => {
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.getManifest) {
+      return chrome.runtime.getManifest().version;
+    }
+  } catch {
+    // 读不到就显示占位符。
   }
+  return '—';
+};
 
-  .vsc__key {
-    width: auto;
-  }
-}
-`;
+/**
+ * 把文档语言对齐到**实际渲染**的语言。
+ *
+ * 界面文案走 chrome.i18n，Chrome 挑了哪个 `_locales` 目录，就渲染哪种语言。
+ * `<html lang>` 必须与之一致，否则屏幕阅读器会用错误的语音朗读 ——
+ * 而且这类错误**没有任何视觉症状**。
+ *
+ * ⚠️ 这里**不能**用 `chrome.i18n.getUILanguage()`：它返回的是**浏览器界面语言**，
+ * 而 Chrome 选 locale 目录可能受**系统/地区设置**影响。两者可以不一致
+ * （macOS 上"系统中文 + Chrome 界面英文"是常见组合）。
+ * 实测那种情况下 getUILanguage() 给 "en-US"，但 getMessage() 返回的是中文 ——
+ * 拿前者去设 lang，就会得到 `lang="en-US"` 配一屏中文。
+ *
+ * 所以用 `currentLocale()`：它读 locale 文件里的语言标记键，
+ * 拿到的就是 Chrome **实际选中**的那个目录。
+ */
+const applyDocumentLanguage = (): void => {
+  document.documentElement.lang = currentLocale();
+};
+
+/**
+ * 设置标签页标题。
+ *
+ * 不能用 HTML 里的 `__MSG_xxx__`：那个占位符只在 manifest 与 _locales 参与打包的
+ * **资源文件**里生效，扩展页面（chrome-extension:// 下的 .html）里不会替换，
+ * 标签页上会直接显示字面量 "__MSG_optPageTitle__"。所以只能在这里用 JS 设。
+ */
+const applyDocumentTitle = (): void => {
+  document.title = tr('optPageTitle');
+};
 
 const root = document.getElementById('root');
 if (!root) {
   throw new Error('Options root missing');
 }
 
+applyDocumentLanguage();
+applyDocumentTitle();
+
 const style = document.createElement('style');
-style.textContent = styles;
+style.textContent = themeCss();
 document.head.appendChild(style);
 
 root.innerHTML = `
   <main class="vsc">
-    <h1 class="vsc__title">${tr('optTitle')}</h1>
+    <h1 class="vsc__title">${tr('optProductName')}</h1>
     <p class="vsc__subtitle">${tr('optSubtitle')}</p>
+    <p class="vsc__lead">${tr('optLead')}</p>
     <section class="vsc__card" id="rows"></section>
     <div class="vsc__actions">
       <span class="vsc__status" id="status" role="status" aria-live="polite"></span>
       <button type="button" class="vsc__button" id="reset">${tr('optReset')}</button>
       <button type="button" class="vsc__button vsc__button--primary" id="save">${tr('optSave')}</button>
     </div>
+    <footer class="vsc__footer">
+      <span class="vsc__version">${tr('optVersion')} ${readVersion()}</span>
+      <span class="vsc__sep" aria-hidden="true">·</span>
+      <a class="vsc__link" href="${PRIVACY_URL}" target="_blank" rel="noreferrer noopener">${tr('optPrivacy')}</a>
+      <span class="vsc__sep" aria-hidden="true">·</span>
+      <a class="vsc__link" href="${REPO_URL}" target="_blank" rel="noreferrer noopener">${tr('optRepository')}</a>
+    </footer>
   </main>
 `;
 
@@ -250,6 +171,26 @@ SHORTCUT_DEFINITIONS.forEach((definition) => {
   input.setAttribute('aria-labelledby', `label-${definition.id}`);
 
   input.addEventListener('keydown', (event) => {
+    // Tab / Enter 必须放行。
+    //
+    // 之前这里无条件 preventDefault()，把 Tab 也当成「用户想绑定的键」存了进去。
+    // 后果是纯键盘用户打开设置页就废了：焦点被永久困在第一个输入框，
+    // 按多少次 Tab 都到不了 Save 按钮 —— 而 Tab 是键盘用户**唯一**的导航手段。
+    //
+    // Enter 同样放行：它在表单里的语义是提交，虽然这里没有 <form>，
+    // 但吞掉它只会让用户以为自己按了没反应。
+    if (event.key === 'Tab' || event.key === 'Enter') {
+      return;
+    }
+
+    // Escape 放行并「取消编辑」：把输入框恢复成已保存绑定的样子，然后失焦。
+    // 用户按 Escape 的意图是「我改错了，撤销」，不是「我要把 Escape 绑到这个动作」。
+    if (event.key === 'Escape') {
+      input.value = formatShortcut(input.dataset.shortcut ?? '');
+      input.blur();
+      return;
+    }
+
     event.preventDefault();
     // Backspace / Delete 清空绑定 = 禁用该动作。
     if (event.key === 'Backspace' || event.key === 'Delete') {

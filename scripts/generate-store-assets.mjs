@@ -22,14 +22,14 @@ const LANGS = (langArg ? langArg.slice('--langs='.length) : 'en')
 
 const CAPTIONS = {
   en: {
-    fullscreen: 'Watch any web video fullscreen',
+    fullscreen: 'Watch web video fullscreen',
     controls: 'Auto-hiding controls, out of your way',
     speed: 'Fine-tune speed in 0.1x steps',
     options: '7 shortcuts you can rebind',
     freshSpeed: 'Never inherits a speed — always 1.0x',
   },
   zh_CN: {
-    fullscreen: '任意网页视频，一键全屏',
+    fullscreen: '网页视频，一键全屏',
     controls: '控制条自动隐藏，不打扰观看',
     speed: '0.1x 精细调速',
     options: '7 个快捷键，全部可改绑',
@@ -153,7 +153,15 @@ try {
         await page.mouse.move(640, 760);
         await page.waitForTimeout(200);
         const ctlVisible = await page.evaluate(
-          () => document.getElementById('vsc-controls')?.classList.contains('vsc-ctl--visible'),
+          () => {
+            // 控制条搬进 shadow root 之后，可见状态由**影子树里**的 bar 元素
+            // 用 `bar--visible` 标记 —— 宿主元素上不再有任何可见性 class。
+            // 旧写法查宿主上的 `vsc-ctl--visible`，那个 class 早就没了，
+            // 于是这条守卫恒为 false。
+            const host = document.getElementById('vsc-controls');
+            const bar = host?.shadowRoot?.querySelector('.bar');
+            return Boolean(bar?.classList.contains('bar--visible'));
+          },
         );
         if (!ctlVisible) throw new Error('fullscreen controls not visible');
         await addCaption(page, captions.fullscreen, 'top-center');
@@ -184,7 +192,15 @@ try {
         await page.mouse.move(320, 380);
         await page.waitForTimeout(200);
         const ctlVisible = await page.evaluate(
-          () => document.getElementById('vsc-controls')?.classList.contains('vsc-ctl--visible'),
+          () => {
+            // 控制条搬进 shadow root 之后，可见状态由**影子树里**的 bar 元素
+            // 用 `bar--visible` 标记 —— 宿主元素上不再有任何可见性 class。
+            // 旧写法查宿主上的 `vsc-ctl--visible`，那个 class 早就没了，
+            // 于是这条守卫恒为 false。
+            const host = document.getElementById('vsc-controls');
+            const bar = host?.shadowRoot?.querySelector('.bar');
+            return Boolean(bar?.classList.contains('bar--visible'));
+          },
         );
         if (!ctlVisible) throw new Error('fullscreen controls not visible (closeup)');
         await addCaption(page, captions.controls, 'top-center');
@@ -271,7 +287,17 @@ try {
         });
         await page.mouse.click(640, 360);
         await page.keyboard.press('f');
-        await page.waitForSelector('#vsc-controls', { state: 'visible' });
+        // ⚠️ 不能等 `#vsc-controls` 的 visible 状态：控制条搬进 shadow root 之后，
+        // **宿主元素**自己就是 visibility:hidden（可见性由影子树里的 bar 元素
+        // 用 `bar--visible` 标记）。等宿主的 visible 会永远超时 ——
+        // 此前这条正好卡死在这，截图脚本整个跑不完。
+        // 改成等宿主「已挂载」，可见性另由下面那条 bar--visible 守卫把关。
+        await page.waitForSelector('#vsc-controls', { state: 'attached' });
+        await page.waitForFunction(() => {
+          const host = document.getElementById('vsc-controls');
+          const bar = host?.shadowRoot?.querySelector('.bar');
+          return Boolean(bar?.classList.contains('bar--visible'));
+        });
         // 关键：不按 = / -，让控制条如实显示 1.0x —— 这正是「从不记忆」的样子。
         await page.waitForTimeout(200);
         const rate = await page.evaluate(

@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import ts from 'typescript';
 import { resolve } from 'node:path';
@@ -269,16 +270,32 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(specFiles.length, 'tests/e2e 下应当有 spec 文件').toBeGreaterThan(0);
 
     const playwrightConfig = readFileSync(resolve(repoRoot, 'playwright.config.js'), 'utf8');
-    const ignored = new Set(
+    const ignored = (
       (playwrightConfig.match(/testIgnore:\s*\[([^\]]*)\]/)?.[1] ?? '')
         .split(',')
         .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
-        .filter(Boolean),
+        .filter(Boolean)
     );
+
+    // testIgnore 里的条目可以是文件名，也可以是 glob（例如 '**/_*.spec.js'）。
+    // 只按「完全相等」判断的话，glob 形式的忽略项会被当成没写 ——
+    // 于是一次性排查脚本（探针）会重新被算成「CI 没跑的用例」，
+    // 守护本身失灵。
+    const isIgnored = (file: string) => ignored.some((entry) => {
+      if (!entry.includes('*')) {
+        return entry === file;
+      }
+
+      const pattern = entry
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*\//g, '(?:.*/)?')
+        .replace(/\*/g, '[^/]*');
+      return new RegExp(`^${pattern}$`).test(file);
+    });
 
     const script = pkg.scripts['test:e2e:ext'] ?? '';
     for (const file of specFiles) {
-      if (ignored.has(file)) continue;
+      if (isIgnored(file)) continue;
       expect(script, `${file} 没有被 test:e2e:ext 引用，CI 不会执行它`).toContain(file);
     }
   });
@@ -419,7 +436,6 @@ describe('版本号单一来源', () => {
         '商店上传的是包内 manifest，两处不一致会让线上版本与仓库版本错位',
     ).toBe(pkg.version);
   });
-
   it('release/ 下不应残留与当前版本无关的旧包被误当作发布候选', () => {
     // store-publish.mjs 的 findLatestZip() 只按文件名版本号取最大、不校验包内
     // manifest，且全脚本没有 confirm/readline/prompt —— 裸跑会直接发到生产。
@@ -494,5 +510,139 @@ describe('类型检查覆盖面', () => {
         `tsc 不会检查 src/${dir}，该目录下的类型错误不会被 CI 拦住`,
       ).toBe(true);
     }
+  });
+});
+
+describe('manifest 的 commands 与代码一致', () => {
+  /**
+   * 原生扩展命令的名字必须与代码里的常量**完全一致**。
+   *
+   * 对不上时的表现是最难查的一类：Chrome 不会报错、不会打日志，
+   * 命令只是**永远不触发** —— 用户按了快捷键，什么都没发生，
+   * 而扩展看起来完全正常。
+   *
+   * 这条测试把两个事实源锁在一起：manifest.json 的 commands 段，
+   * 与 src/shared/types.ts 里导出的命令名常量。
+   */
+  it('manifest 声明的每个命令都有对应的代码常量', () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8'),
+    ) as { commands?: Record<string, { description?: string; suggested_key?: unknown }> };
+
+    const commands = manifest.commands ?? {};
+    const source = readFileSync(resolve(repoRoot, 'src/shared/types.ts'), 'utf8');
+
+    Object.keys(commands).forEach((name) => {
+      expect(
+        source.includes(`'${name}'`),
+        `manifest 里声明了命令 "${name}"，但 src/shared/types.ts 里没有同名常量 —— ` +
+          '命令永远不会被触发，而且没有任何报错',
+      ).toBe(true);
+    });
+  });
+
+  it('命令的 description 用 __MSG_ 占位符且该 key 在两个 locale 里都存在', () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8'),
+    ) as { commands?: Record<string, { description?: string }> };
+
+    const locales = (['en', 'zh_CN'] as const).map((locale) => ({
+      locale,
+      messages: JSON.parse(
+        readFileSync(resolve(repoRoot, '_locales', locale, 'messages.json'), 'utf8'),
+      ) as Record<string, { message?: string }>,
+    }));
+
+    Object.entries(manifest.commands ?? {}).forEach(([name, command]) => {
+      const match = /^__MSG_(.+)__$/.exec(command.description ?? '');
+      expect(
+        match,
+        `命令 "${name}" 的 description 不是 __MSG_xxx__ 形式：` +
+          '直接写死英文的话，英文界面下会是一句没本地化的说明',
+      ).not.toBeNull();
+
+      const key = match?.[1] ?? '';
+      locales.forEach(({ locale, messages }) => {
+        expect(
+          messages[key]?.message,
+          `命令 "${name}" 的 description 引用了 ${key}，但 ${locale} 的 locale 文件里没有这个 key —— ` +
+            'Chrome 会拒绝加载带未知 __MSG_ 的扩展',
+        ).toBeTruthy();
+      });
+    });
+  });
+
+  it('快捷键用 Chrome 认的键名（逗号是 Comma，不是字面 ","）', () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8'),
+    ) as { commands?: Record<string, { suggested_key?: { default?: string; mac?: string } }> };
+
+    Object.entries(manifest.commands ?? {}).forEach(([name, command]) => {
+      const shortcut = command.suggested_key?.default;
+      if (!shortcut) {
+        return;
+      }
+
+      // 字面逗号会让 Chrome 报 "Invalid value for 'commands[1].default'"，
+      // 后果是**整个扩展加载失败** —— 不是"这个快捷键用不了"，是扩展装不上。
+      expect(
+        shortcut,
+        `命令 "${name}" 的快捷键 "${shortcut}" 里有字面逗号 —— ` +
+          '必须写成 Comma，否则 Chrome 会拒绝加载整个扩展',
+      ).not.toContain(',');
+
+      // Chrome 在 macOS 上会把 "Ctrl" 自动翻译成 "Command"（⌘）。
+      // 但 "default" 段里**不能**写 "Command" / "Option" —— 那会直接报错。
+      expect(
+        shortcut,
+        `命令 "${name}" 的快捷键写成了 "${shortcut}" —— ` +
+          '"default" 段里只能用 Ctrl / Alt / Shift，写 Command 或 Option 会让扩展加载失败',
+      ).not.toMatch(/(^|\+)(Command|Option)(\+|$)/);
+    });
+  });
+});
+
+describe('仓库卫生：被 .gitignore 忽略的文件不应还被 git 跟踪', () => {
+  /**
+   * 背景：`test-results/.last-run.json` 从 v4.1 起就一直被跟踪。
+   * 它是 Playwright 的运行产物（记录上次跑挂了哪条用例），每跑一次 E2E 就变一次。
+   *
+   * 为什么这是个问题：`.gitignore` 对**已跟踪**文件无效 —— 规则只在
+   * `git add` 时起作用。所以光在 .gitignore 里写 `test-results/` 完全没用，
+   * 必须 `git rm --cached` 把它从索引里摘掉。
+   *
+   * 而且这类文件在 diff 里是纯噪音：每次跑完 E2E，git status 就多一条改动，
+   * 让人误以为"我改了什么东西"。
+   */
+  it('git 索引里没有被 .gitignore 忽略的路径', () => {
+    // 用 `git check-ignore` 逐条问 git：这个被跟踪的文件是不是被忽略了？
+    // 是的话，说明它要么是历史遗留，要么是有人 `git add -f` 硬塞进来的。
+    const tracked = execFileSync('git', ['ls-files', '-z'], {
+      cwd: repoRoot,
+      encoding: 'buffer',
+    })
+      .toString('utf8')
+      .split('\0')
+      .filter(Boolean);
+
+    const ignored = execFileSync(
+      'git',
+      // -c = cached（已跟踪），-i = ignored（被忽略）。
+      // 两个必须一起给：单独的 -i 会报 "must be used with either -o or -c"。
+      ['ls-files', '-z', '-c', '-i', '--exclude-standard'],
+      { cwd: repoRoot, encoding: 'buffer' },
+    )
+      .toString('utf8')
+      .split('\0')
+      .filter(Boolean);
+
+    expect(
+      ignored,
+      '这些文件被 .gitignore 忽略，却仍在 git 索引里 —— ' +
+        '.gitignore 对已跟踪文件无效，需要 git rm --cached <path>',
+    ).toEqual([]);
+
+    // 防呆：确保上面那条命令真的跑出了东西，否则这条断言是空转的。
+    expect(tracked.length, 'git ls-files 应当列出仓库里的文件').toBeGreaterThan(0);
   });
 });

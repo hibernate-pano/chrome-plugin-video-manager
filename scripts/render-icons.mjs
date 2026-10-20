@@ -30,7 +30,7 @@ const TILE = `<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" v
 <circle cx="64" cy="70" r="10.5" fill="#ffffff"/>
 </g>
 <text x="220" y="192" text-anchor="middle" fill="#ffffff" font-family="-apple-system, 'Segoe UI', Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="-0.6">Video Speed Controller</text>
-<text x="220" y="222" text-anchor="middle" fill="#d9fbe7" font-family="-apple-system, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="500">Clean fullscreen for any web video</text>
+<text x="220" y="222" text-anchor="middle" fill="#d9fbe7" font-family="-apple-system, 'Segoe UI', Arial, sans-serif" font-size="15" font-weight="500">Clean fullscreen for web video</text>
 </svg>`;
 
 const browser = await chromium.launch();

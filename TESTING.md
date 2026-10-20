@@ -11,11 +11,12 @@
 ```bash
 pnpm test          # 单元测试 + 契约测试
 pnpm test:e2e      # 全部 Playwright（会先 pnpm build）
-pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
+pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 ```
 
 > `test:e2e:ext` 是 CI 实际执行的入口，包含 `real-extension` / `boundary` /
-> `fullscreen-regression` 三个文件。新增 spec 时**必须**加进它，否则 CI 永远不会执行。
+> `fullscreen-regression` / `subtitle-visibility` / `style-isolation` 五个文件。
+> 新增 spec 时**必须**加进它，否则 CI 永远不会执行。
 > `scripts/ci-workflow.test.ts` 会用文件系统核对这一点，漏加会直接报错。
 
 ## 当前覆盖范围
@@ -69,13 +70,15 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 
 配置文件：[playwright.config.js](./playwright.config.js)
 
-**三套用例的性质不同，不要混淆：**
+**五套用例的性质不同，不要混淆：**
 
 | 用例 | 是否加载扩展 | 覆盖 |
 |------|-------------|------|
 | `fullscreen-regression.spec.js` | ❌ 把 `dist/content.js` 当普通 `<script>` 注入页面 | 页面主世界里的全屏 overlay 行为、进出全屏后播放进度不丢 |
 | `real-extension.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 隔离世界、document_start 桥接、真实 `chrome.storage` |
 | `boundary.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 非正常文档与元素上的失败模式（见下） |
+| `subtitle-visibility.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 网页全屏里字幕**真的**看得见（6.0.8 号称修好、实测从未生效） |
+| `style-isolation.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 站点的 CSS 打不穿控制条（shadow root 隔离） |
 
 `fullscreen-regression.spec.js` 覆盖的还包括**点击语义的所有权**：网页全屏内
 左键点击视频画面要能切换播放/暂停（v6.0.4 的修复点）、右键不触发、退出全屏后
@@ -107,6 +110,30 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 > 内联脚本执行之前就返回。把辅助函数定义在 `<body>` 里会和这个等待形成竞态，
 > 要放在 `<head>` 并惰性取节点。
 
+`subtitle-visibility.spec.js` 守的是「字幕在网页全屏里真的看得见」这条承诺。
+6.0.8 的变更日志写着「字幕跟着视频一起进出全屏」，**实测它从来没生效过**，
+所以这套用例全部是 6.0.9 新写的。它覆盖：
+
+- 字幕在**像素上**真的可见（不被视频与控制条盖住）
+- 字幕容器不塌成 0 宽（否则站点字幕自己的 `left:0;right:0` 相对 0 宽包含块也是 0 宽）
+- 弹幕层不该被搬进全屏
+- 字幕参照物与**实际画面框**等大（不是与视口等大）
+- 视口变化后字幕参照物重新对齐（否则字幕会被推到画面外）
+- 退出全屏后字幕回到原位，且**站点自己的 `transform` 不被抹掉**
+
+`style-isolation.spec.js` 守的是「控制条搬进 shadow root，站点 CSS 打不穿」这条承诺。
+它用一个「有自己的设计系统」的站点（`div { font-family: Comic Sans !important }`、
+`button { all: unset !important }`、`input[type=range] { background: red !important }`）
+断言控制条渲染出来仍然正常：按钮没塌成 22×48、字体不是 Comic Sans、
+时间没被放大到 40px、进度条不是红色的 40px 方块。
+
+> ⚠️ **断言必须量实际渲染出来的样式**（computed style / 实际尺寸），
+> 而不是「元素上有没有某个 class」——后者在污染站点上照样通过。
+>
+> ⚠️ **查询要同时支持 shadow root 与 light DOM**（`host.shadowRoot?.querySelector(sel) ?? host.querySelector(sel)`）。
+> 否则做变异验证时（把控制条搬回 light DOM），断言会在「元素找不到」这一步就挂掉，
+> **掩盖掉后面真正要检验的样式断言**——看起来像守卫抓到了 bug，实际什么都没验证到。
+
 ## 写真实扩展用例时踩过的坑
 
 下面四条都是「目标行为其实是对的，用例却假通过 / 假失败」。改断言之前先看这里。
@@ -118,6 +145,16 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 > 所以真扩展用例**不能靠伪造媒体状态**来驱动，只能断言「DOM 上出现了什么」。
 > 需要精确控制 `currentTime` / `duration` 的断言请走 jsdom 单测，或走
 > `fullscreen-regression.spec.js`（它把 `dist/content.js` 当普通脚本注入主世界）。
+>
+> ⚠️ **这条隔离同样适用于原生 DOM 属性的 mock。** 曾试图用
+> `Object.defineProperty(video, 'videoWidth', { value: 640 })` 造一个 4:3 视频，
+> 用来验证「字幕参照物按画面框而不是按视口算」。结果**内容脚本读到的
+> `videoWidth` 仍然是 0** —— 扩展侧据此判定「还没有固有尺寸」并早退，
+> 参照物一直是 100%×100%。
+> **这类 mock 全部无效**，且失效方式是"看起来在测、其实那条分支根本没进"。
+> 要测画面框相关的路径，只能用**真的**媒体文件（见下面的 `fixtures/sd-4x3.ts`）。
+> 这次正是靠换成真 mp4，才发现真正的 bug 不在 4:3 判定上，而在
+> **视口变化后参照物不重算**（旧尺寸被钉住，字幕被推到画面外）。
 
 > ⚠️ **鼠标点击必须落在顶层文档，否则按键根本到不了内容脚本。**
 > 一旦点进 iframe，焦点就留在 iframe 里，之后 `page.keyboard.press` 只派发给
@@ -134,6 +171,17 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
 > 走 `frameOffset.topLevelOffset()`；用例断言提示位置时也要按
 > `iframe.top + 视频在 iframe 内的 top` 来算，别拿未换算的值去比。
 
+> ⚠️ **`chrome.i18n` 选哪个 locale 目录，不看 `getUILanguage()`。**
+> `getUILanguage()` 返回的是**浏览器界面语言**；Chrome 挑 `_locales` 下的目录
+> 受**系统/地区设置**影响。两者可以不一致（macOS 上"系统中文 + Chrome 界面英文"
+> 是常见组合）。实测在那种情况下 `getUILanguage()` 给 `en-US`，
+> `getMessage()` 返回的却是中文。
+> 后果是 `<html lang>` 与实际渲染内容错配 —— **没有任何视觉症状**，
+> 只有读屏用户会中招。
+> 扩展侧因此不猜 Chrome 的规则，而是读 locale 文件里的 `__vscLocale` 标记键
+> （见 `src/shared/i18n.ts` 的 `currentLocale()`）。
+> 写与语言相关的断言时，要同时断言 **lang 与实际渲染出的文案**，而不是只断言 lang。
+
 另外：**顶层文档里没有 video、只有 iframe 里有** 时，父文档的 registry 认不到
 子框架里的视频（`frameDocumentOf` 那条下钻路径没生效）。要构造「跨 document 的
 视频」场景，夹具得让点击落在顶层、同时保证视频本身可被选中，别假设父文档一定
@@ -148,6 +196,10 @@ pnpm test:e2e:ext  # CI 跑的那三套（会先 pnpm build）
   实际上它曾经就是这样（CDN 对本机 403、对 runner 放行）。
 - [tests/e2e/boundary.spec.js](./tests/e2e/boundary.spec.js): 影响边界回归守卫
 - [tests/e2e/real-extension.spec.js](./tests/e2e/real-extension.spec.js): 真加载扩展的用例，页面由路由拦截现造
+- [tests/e2e/subtitle-visibility.spec.js](./tests/e2e/subtitle-visibility.spec.js): 字幕可见性回归守卫
+- [tests/e2e/style-isolation.spec.js](./tests/e2e/style-isolation.spec.js): 站点 CSS 打不穿控制条
+- [tests/e2e/fixtures/sd-4x3.ts](./tests/e2e/fixtures/sd-4x3.ts): 一个**真的** 4:3（640×480）mp4，
+  以 base64 内联（2KB）。必须用真媒体：mock `videoWidth` 在隔离世界里无效（见上面的坑）。
 - [tests/e2e/iframe-outer.html](./tests/e2e/iframe-outer.html) + [iframe-inner.html](./tests/e2e/iframe-inner.html):
   真实 HTTP 的同源 iframe 夹具，用于「跨 document 的视频接管不了」这条路径。
   必须走文件而不是 `data:` URL，原因见上一节。
@@ -169,6 +221,45 @@ VSC_EXTENSION_DIR=/tmp/mutant-ext npx playwright test real-extension.spec.js
 > 看起来像守卫有效，实际什么都没验证到（这个坑真踩过一次）。
 > 变异这一套时只能直接改 `dist/content.js`，验证完再 `pnpm build` 从源码重建
 > —— 先备份原文件，别用 `git checkout` 之类的破坏性命令去还原。
+
+### 6.0.9 新增的两个坑
+
+> ⚠️ **两种写法同时存在会互相掩盖 bug，让用例变成假通过。**
+> 测「退出全屏后站点自己的 `transform` 不被抹掉」时，第一版夹具把站点的
+> `transform` 同时写在**内联 style** 和**样式表**里。变异（还原时退回
+> `removeProperty('transform')`）后用例**仍然通过** —— 因为删掉我们写的内联之后，
+> 样式表那条会接管，计算值照样对。
+> **拆成两个独立场景**（一个只写内联、一个只写样式表）后，变异才被抓住。
+> 判断标准很简单：**变异后用例必须失败**，没失败就说明断言没咬到东西。
+
+> ⚠️ **断言失败的位置必须是被检验的那一步。**
+> 测样式隔离时，如果断言写成「控制条必须住在 shadow root 里」并放在**最前面**，
+> 那么把控制条搬回 light DOM 的变异会在这一行就挂掉，**后面真正的样式断言
+> 一次都没跑** —— 用例是红的，但红的原因跟要检验的东西无关。
+> 所以查询要同时支持 shadow root 与 light DOM，让每个样式断言**各自独立**地
+> 咬住它要检验的东西（字体 → 字号 → 滑块高度 → 滑块背景色，四条依次暴露）。
+
+### 写不出会失败的测试，就不要留着当守卫
+
+给 `liveRegion.ts` 补单测时写了一条「destroy 之后待播的定时器不再复活节点」。
+变异验证时**它没有失败** —— 查下去发现，那条断言在物理上就不可观测：
+节点已经被 `remove()` 摘掉，定时器回调写进去的文本落在**游离节点**上，
+用户永远看不见。`destroy()` 里的 `clearTimeout` 是防御性的，但**没有任何
+用户可见的差异**。
+
+于是那条用例只能证明"没抛错"，证明不了它声称要守的东西 ——
+它是**假守卫**：让下一个人以为这里有保护。
+
+> ⚠️ **发现某条变异打不穿用例时，先问一句「它真的可观测吗」。**
+> 三种可能，处理方式不同：
+> 1. **断言写错了** → 改断言（多数情况）。
+> 2. **那段代码真的不可观测**（防御性代码、已经被上游保证的分支）
+>    → 老实承认：要么删掉那段代码，要么**不要声称**有测试覆盖它。
+>    留着一条永远为真的断言，比没有断言更糟 —— 它会让人误以为这里被守住了。
+> 3. **代码有真 bug，但症状被别处掩盖** → 那是另一个更值得修的问题。
+>
+> 判断标准始终是：**变异后用例必须失败**。这条不成立时，
+> 要么改用例，要么改代码 —— 不能就这么留着。
 
 ## 说明
 

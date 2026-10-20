@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "Video Speed Controller — Fullscreen & Keys",
-  "version": "6.0.8",
+  "version": "6.0.9",
   "description": "Minimal keyboard shortcuts and a clean page-fullscreen player for any HTML5 video",
   "permissions": [
     "storage"
@@ -32,10 +32,18 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Video Speed Controller",
+    "default_title": "Video Speed Controller — Fullscreen & Keys",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png"
+    }
+  },
+  "commands": {
+    "open-options": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Comma"
+      },
+      "description": "__MSG_commandOpenOptions__"
     }
   },
   "content_scripts": [
@@ -49,5 +57,7 @@
       "run_at": "document_start"
     }
   ],
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "minimum_chrome_version": "116",
+  "homepage_url": "https://github.com/hibernate-pano/chrome-plugin-video-manager"
 }

@@ -55,6 +55,7 @@ test-results/
 .claude/
 .kiro/
 .zcode/
+.workbuddy/
 
 # Store packages (build artifacts)
 dist.zip

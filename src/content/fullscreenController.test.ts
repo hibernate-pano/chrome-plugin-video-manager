@@ -400,6 +400,36 @@ describe('FullscreenController', () => {
     expect(writes).toEqual([42]);
     controller.exit();
   });
+
+  it('resumes playback on exit even if the user had paused earlier in the same session', () => {
+    // 早先 restoreIfLost 挂着 `!userPaused` 豁免，而 userPaused 一旦置真
+    // 就再也不复位。于是「用户在全屏里暂停过 → 站点在归还节点时把媒体弄停
+    // → 退出」，退出这步的补偿会被那条陈旧标记永久跳过，视频卡在暂停。
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+
+    const play = vi.fn(() => Promise.resolve());
+    Object.defineProperty(video, 'play', { value: play, configurable: true });
+    // 一旦离开全屏舞台（= 正在被归还给站点），站点把它弄停了。
+    Object.defineProperty(video, 'paused', {
+      get: () => video.parentElement?.id !== 'vsc-page-fullscreen-stage',
+      configurable: true,
+    });
+
+    expect(controller.enter(video)).toBe(true);
+    // 用户在全屏里暂停过一次 —— 旧实现就是在这里把 userPaused 永久置真。
+    video.dispatchEvent(new Event('pause'));
+    play.mockClear();
+
+    controller.exit();
+
+    // 退出时站点把媒体弄停了（快照拍的是「在播」），必须补一次 play。
+    expect(play).toHaveBeenCalled();
+  });
+
   describe('字幕等浮层', () => {
     it('进入全屏时把字幕层一起搬进 stage，且排在视频之后', () => {
       const { video, subtitle } = createPlayerWithSubtitle(SUBTITLE_RECT);
@@ -411,9 +441,19 @@ describe('FullscreenController', () => {
       expect(container).not.toBeNull();
       // 字幕必须跟着视频走：留在播放器容器里就等于留在原地、看不见了。
       expect(container?.contains(subtitle)).toBe(true);
-      // 顺序是关键：插在视频前面会被高 z-index 的视频盖住。
-      const children = Array.from(container?.children ?? []);
-      expect(children.indexOf(subtitle)).toBeGreaterThan(children.indexOf(video));
+
+      // 字幕住在字幕容器里 —— 它是字幕的定位参照物（bottom:% 相对画面框），
+      // 不是直接挂在 stage 上。
+      const host = container?.querySelector<HTMLElement>('[data-vsc-caption-host]');
+      expect(host).not.toBeNull();
+      expect(host?.contains(subtitle)).toBe(true);
+
+      // 层级是关键：视频是 2147483643，字幕必须比它高才不会被整个盖住。
+      // 光靠 DOM 顺序不够 —— 顺序只对同一层级的元素决定先后。
+      const videoZ = Number(video.style.zIndex);
+      const captionZ = Number(subtitle.style.getPropertyValue('z-index'));
+      expect(Number.isFinite(videoZ)).toBe(true);
+      expect(captionZ).toBeGreaterThan(videoZ);
       controller.exit();
     });
 
@@ -479,6 +519,72 @@ describe('FullscreenController', () => {
       controller.exit();
     });
 
+    it('字幕参照物与实际画面框等大（不是与视口等大）', () => {
+      const { video } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      // 4:3 的固有尺寸 —— 与视口比例不同，才会留黑边。
+      Object.defineProperty(video, 'videoWidth', { value: 640, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: 480, configurable: true });
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+
+      const host = stage()?.querySelector<HTMLElement>('[data-vsc-caption-host]');
+      expect(host).not.toBeNull();
+      // contain 之后：min(视口宽/640, 视口高/480)。
+      // jsdom 的 innerWidth/innerHeight 默认是 1024×768 → min(1.6, 1.6) = 1.6
+      // → 1024×768，正好铺满视口。用一个非 16:9 的固有比例来区分。
+      const expectedWidth = Math.min(1024 / 640, 768 / 480) * 640;
+      const expectedHeight = Math.min(1024 / 640, 768 / 480) * 480;
+      expect(host?.style.width).toBe(`${expectedWidth}px`);
+      expect(host?.style.height).toBe(`${expectedHeight}px`);
+      controller.exit();
+    });
+
+    it('视口变化后字幕参照物重新对齐', () => {
+      const { video } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      Object.defineProperty(video, 'videoWidth', { value: 640, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: 480, configurable: true });
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+      const host = stage()?.querySelector<HTMLElement>('[data-vsc-caption-host]');
+      const before = host?.style.width;
+
+      // 视口变了 —— 画面框跟着变，参照物必须跟着重新算。
+      // ⚠️ 之前这里只有 video 自己的 loadedmetadata/resize（媒体尺寸变化），
+      // 视口变化两者都不触发，参照物永远停在旧值上。
+      Object.defineProperty(window, 'innerWidth', { value: 800, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+
+      const after = host?.style.width;
+      expect(after, '视口变化后参照物宽度必须重算').not.toBe(before);
+      expect(after).toBe(`${Math.min(800 / 640, 800 / 480) * 640}px`);
+      controller.exit();
+    });
+
+    it('拿不到固有尺寸时退回铺满视口（而不是保留上一个视频的尺寸）', () => {
+      const { video } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      Object.defineProperty(video, 'videoWidth', { value: 640, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: 480, configurable: true });
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+      const host = stage()?.querySelector<HTMLElement>('[data-vsc-caption-host]');
+      expect(host?.style.width).not.toBe('100%');
+
+      // 换了源、元数据还没到 —— 固有尺寸重新变成 0。
+      Object.defineProperty(video, 'videoWidth', { value: 0, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: 0, configurable: true });
+      video.dispatchEvent(new Event('loadedmetadata'));
+
+      // 关键：不能只是 return —— 参照物会停留在**旧视频**的尺寸上，
+      // 那比"按视口算"更糟。
+      expect(host?.style.width).toBe('100%');
+      expect(host?.style.height).toBe('100%');
+      controller.exit();
+    });
+
     it('页面里只有字幕层被识别时不会误降级成 css-cover', () => {
       const { video } = createPlayerWithSubtitle(SUBTITLE_RECT);
       const controller = new FullscreenController();
@@ -487,6 +593,42 @@ describe('FullscreenController', () => {
 
       // 字幕搬成功了，就没有任何理由牺牲全屏效果。
       expect(stage()?.contains(video)).toBe(true);
+      controller.exit();
+    });
+
+    it('识别不出字幕层时也不降级 —— 降级并不能保住字幕', () => {
+      // 这条锁住一个曾经存在、后来被删掉的分支。
+      //
+      // 旧逻辑：字幕层一个都没识别出来就退回 css-cover「保住字幕」。
+      // 但这个前提是**假的**：css-cover 模式下视频同样是
+      // `position: fixed; z-index: 2147483643`，而站点字幕留在自己的容器里、
+      // z-index 是 auto —— 照样被视频整个盖住。降级不但保不住字幕，
+      // 还白白牺牲了「视频真的进了全屏」这件事。
+      //
+      // 更要命的是那个分支**恒不可达**：collectLayersToAttach 与
+      // shouldDegradeForOverlays 读的是同一份数据、同一个判据，
+      // 前者空 ⟺ 后者 some 为 false。
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      const overlay = document.createElement('div');
+      parent.append(video, overlay);
+      document.body.appendChild(parent);
+
+      video.getBoundingClientRect = () => ({
+        top: 0, left: 0, right: 1000, bottom: 600, width: 1000, height: 600, x: 0, y: 0,
+        toJSON: () => ({}),
+      } as DOMRect);
+      // 一个既不满足字幕判据、也覆盖不到视频的浮层：搬不动，也不该触发降级。
+      overlay.getBoundingClientRect = () => ({
+        top: 0, left: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0,
+        toJSON: () => ({}),
+      } as DOMRect);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+
+      expect(stage()?.contains(video)).toBe(true);
+      expect(video.classList.contains('vsc-page-fullscreen-video--reparent')).toBe(true);
       controller.exit();
     });
 
