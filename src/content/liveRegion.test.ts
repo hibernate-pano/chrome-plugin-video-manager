@@ -13,6 +13,43 @@ const REGION_ID = 'vsc-live-region';
 
 const region = () => document.getElementById(REGION_ID);
 
+/**
+ * 数 live region 被写了几次 —— 每次写入对应一次读屏播报。
+ *
+ * ⚠️ 必须**同步**地数：MutationObserver 的回调是微任务，
+ * 断言前若没把微任务排空，读到的会是 0 —— 那种断言永远不会红，
+ * 是一道假守卫。所以这里直接包住 `textContent` 的 setter。
+ *
+ * ⚠️ 为什么非要数「写入次数」而不是看最终文本：`announce()` 自己就是
+ * 「清空 → 50ms 后写回」，所以重播一次之后**最终文本和不重播完全一样**。
+ * 只有写入次数能区分「没播」与「播了又写回」。
+ */
+const countWrites = (run: () => void) => {
+  const descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+  if (!descriptor?.set) {
+    throw new Error('拿不到 textContent 的 setter');
+  }
+
+  let writes = 0;
+  Object.defineProperty(Node.prototype, 'textContent', {
+    ...descriptor,
+    set(this: Node, value: string) {
+      if (this instanceof HTMLElement && this.id === 'vsc-live-region') {
+        writes += 1;
+      }
+      descriptor.set!.call(this, value);
+    },
+  });
+
+  try {
+    run();
+  } finally {
+    Object.defineProperty(Node.prototype, 'textContent', descriptor);
+  }
+
+  return writes;
+};
+
 describe('liveRegion', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -137,39 +174,6 @@ describe('liveRegion', () => {
    * 队列会无界增长：用户松开键之后，读屏还在念一分钟前的 1.3 倍、1.4 倍。
    */
   describe('announceThrottled', () => {
-    /**
-     * 数 live region 被写了几次 —— 每次写入对应一次读屏播报。
-     *
-     * ⚠️ 必须**同步**地数：MutationObserver 的回调是微任务，
-     * 断言前若没把微任务排空，读到的会是 0 —— 那种断言永远不会红，
-     * 是一道假守卫。所以这里直接包住 `textContent` 的 setter。
-     */
-    const countWrites = (run: () => void) => {
-      const descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
-      if (!descriptor?.set) {
-        throw new Error('拿不到 textContent 的 setter');
-      }
-
-      let writes = 0;
-      Object.defineProperty(Node.prototype, 'textContent', {
-        ...descriptor,
-        set(this: Node, value: string) {
-          if (this instanceof HTMLElement && this.id === 'vsc-live-region') {
-            writes += 1;
-          }
-          descriptor.set!.call(this, value);
-        },
-      });
-
-      try {
-        run();
-      } finally {
-        Object.defineProperty(Node.prototype, 'textContent', descriptor);
-      }
-
-      return writes;
-    };
-
     it('单次播报立刻生效（轻点一下 `=` 的体验不变）', () => {
       announceThrottled('播放速度 1.1x');
 
@@ -209,6 +213,80 @@ describe('liveRegion', () => {
 
       vi.advanceTimersByTime(2000);
       expect(region()!.textContent).toBe('播放速度 1.1x');
+    });
+
+    it('值没变时不重复播报（写入次数不增加）', () => {
+      // ⚠️ 只看最终 textContent 区分不了「没播」与「播了又写回」：
+      // announce() 自己就是「清空 → 延迟后写回」，重播一次之后最终文本
+      // 与不重播**完全一样**。只有写入次数能区分。
+      const writes = countWrites(() => {
+        announceThrottled('播放速度 1.1x');
+        announceThrottled('播放速度 1.1x');
+        vi.advanceTimersByTime(2000);
+      });
+
+      // 第一次播报写一次；第二个 1.1x 是同一个值，不该再写。
+      // 变异验证：删掉 `pending === lastThrottledText` 那半个条件 → 3 次写入。
+      expect(writes, '同一个值不该被重复播报').toBe(1);
+    });
+
+    it('节流窗口到期后，紧跟着的那次播报仍然走节流（不插播）', () => {
+      // 关键：窗口到期那一刻起算**新的** 1 秒窗口。
+      // 若节流回调没有更新 lastThrottledAt，`now - lastThrottledAt` 还是
+      // 旧窗口的长度 → 下一条会被当成「间隔够了」而**立刻**播报，
+      // 读屏用户连着听两句。
+      announceThrottled('播放速度 1.1x'); // 立刻播
+      vi.advanceTimersByTime(200);
+      announceThrottled('播放速度 1.2x'); // 攒下，等窗口结束
+
+      vi.advanceTimersByTime(1000); // 窗口到期 → 播报 1.2x
+      expect(region()!.textContent).toBe('播放速度 1.2x');
+
+      const writes = countWrites(() => {
+        announceThrottled('播放速度 1.3x');
+      });
+
+      expect(region()!.textContent, '新窗口里的第一条不该立刻播').toBe('播放速度 1.2x');
+      expect(writes, '新窗口里的第一条不该写进 live region').toBe(0);
+    });
+
+    it('一个节流窗口里只挂一个计时器', () => {
+      // 窗口内连着按 7 次，若每次都挂一个计时器，就会攒出 7 个回调同时落地。
+      // 它们最终只会播一条（第一个回调把 pending 取走，其余拿到 null），
+      // 所以**写入次数**区分不出来 —— 只有「挂了几个计时器」能区分。
+      const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+
+      announceThrottled('播放速度 1.1x'); // 立刻播（文本不同，不会再挂重播计时器）
+      setTimeoutSpy.mockClear();
+
+      for (let i = 2; i <= 8; i += 1) {
+        announceThrottled(`播放速度 ${(1 + i * 0.1).toFixed(1)}x`);
+        vi.advanceTimersByTime(120);
+      }
+
+      expect(setTimeoutSpy, '一个窗口里只该挂一个节流计时器').toHaveBeenCalledTimes(1);
+    });
+
+    it('立即播报时要把攒着的那条作废（不能补播过期值）', () => {
+      // 场景：窗口末尾的那一次调速走了「立刻播报」分支，
+      // 而上一条还攒在 pending 里。若不作废，窗口到期的定时器会把那条
+      // **过期**的值再播一遍 —— 用户听到的是自己早就调掉的倍速。
+      const t0 = Date.now();
+      announceThrottled('播放速度 1.1x'); // 立刻播
+
+      vi.advanceTimersByTime(200);
+      announceThrottled('播放速度 1.2x'); // 攒下，计时器挂在窗口末尾
+
+      // 只挪时钟、不跑定时器：让「立刻播报」分支先于那个计时器落地。
+      vi.setSystemTime(t0 + 1000);
+      announceThrottled('播放速度 1.3x'); // elapsed == 1000 → 立刻播报分支
+      expect(region()!.textContent).toBe('播放速度 1.3x');
+
+      // 现在让那个还挂着的计时器落地。
+      vi.runAllTimers();
+
+      // 过期的那条不该被补播。
+      expect(region()!.textContent, '过期值不能盖住最新值').toBe('播放速度 1.3x');
     });
   });
 });

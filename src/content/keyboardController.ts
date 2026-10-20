@@ -10,6 +10,8 @@ import {
   type PersistedSettings,
   type ShortcutSettings,
 } from '../shared/types';
+// 只取类型，不引入运行时依赖：keyboardController 不需要 registry 的任何实现。
+import type { WatchedTarget } from './videoRegistry';
 
 /**
  * 快捷键动作。**与 ShortcutSettings 的键一一对应** —— 所以
@@ -20,18 +22,21 @@ type ShortcutAction = keyof ShortcutSettings;
 interface KeyboardControllerOptions {
   getSettings: () => PersistedSettings;
   /**
-   * 「用户此刻正在看的视频」——快捷键只对它生效。
+   * 「用户此刻正在看的视频」+ **它能吃下哪些键**——快捷键只对它生效。
    *
    * 与 getCurrentVideo() 的区别是**契约**不同：
    * - getCurrentVideo()：页面上最可能是目标的视频（用于工具栏图标这类显式操作）
-   * - getWatchedVideo()：用户此刻正在看的视频；**没有明确目标时返回 null**，
+   * - getWatchedTarget()：用户此刻正在看的视频；**没有明确目标时返回 null**，
    *   此时快捷键必须完全穿透给页面。
    *
    * 以前两者是同一个函数，于是只要页面上存在任何 <video>，空格/方向键就在
    * **整页**生效 —— 用户在读长文（页面里嵌了个静音预览视频），按空格翻页
    * 结果视频跳了。这是唯一会让人直接卸载的问题。
+   *
+   * `permission` 是**部分接管**：'no-space' 表示这个视频可以被调速/seek/全屏，
+   * 但**空格必须还给页面**（用户要翻页）。判据见 videoRegistry 的 resolvePermission。
    */
-  getWatchedVideo: () => HTMLVideoElement | null;
+  getWatchedTarget: () => WatchedTarget | null;
   isFullscreenActive: () => boolean;
   /** 吞键前的可行性判断：跨 document 的视频进入全屏必然失败，不能吞掉按键。 */
   canToggleFullscreen: (video: HTMLVideoElement | null) => boolean;
@@ -540,11 +545,28 @@ export class KeyboardController {
 
     // 快捷键只作用于「用户此刻正在看的视频」。
     // 没有明确目标就**完全穿透**给页面 —— 宁可不接管，也不要接管错对象。
-    const video = this.options.getWatchedVideo();
-    if (!video) {
+    const target = this.options.getWatchedTarget();
+    if (!target) {
       this.holdOwner = null;
       return false;
     }
+
+    // 「这个视频能吃下哪些键」不是「一个视频接不接受接管」——它可以是**部分**接受。
+    //
+    // 空格在页面上首先是「往下翻页」。用户在一篇长文里按空格，期望的是翻页，
+    // 而不是暂停页面里某个预览视频。所以注册表会把这种视频标成 'no-space'：
+    // 其余键（调速、seek、全屏）照常作用在它身上，**只有空格还给页面**。
+    //
+    // ⚠️ 必须在这里（解析出目标之后、执行动作之前）判，不能在更早的地方：
+    // 早判会把整个视频连同其它键一起放掉，那就退回到「什么都不接管」了。
+    if (target.permission === 'no-space' && action === 'togglePlay') {
+      // 放行 → holdOwner 保持为空 → 长按空格时后续的 repeat 事件也不会被我们吞掉
+      // （repeat 分支要求 holdOwner === action 才拦），页面照常滚动。
+      this.holdOwner = null;
+      return false;
+    }
+
+    const video = target.video;
 
     if (action === 'seekBack') {
       // 直播流根本没法 seek：吞掉键只会让用户看到「按了 → 什么都没发生」。

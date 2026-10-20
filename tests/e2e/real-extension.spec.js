@@ -426,6 +426,27 @@ test.describe('反馈：不让用户面对静默失败', () => {
       expect(text).not.toContain('Space');
 
       // 已经展示过 -> 落盘；重新加载后不该再出现。
+      //
+      // ⚠️ 6.1.0 起 flag 的落盘判据是「**用户读过了**」，不是「弹出来了」：
+      // 提示出现之后还要再等一段阅读窗口（中途没被打断）才写 flag。
+      // 这是 P0 修的那件事 —— 原来「弹出来就写」，于是用户在长文页面上
+      // 被一个**看不见**的视频烧掉了这辈子唯一的一次提示。
+      //
+      // 所以这里必须**等它真的落盘**再刷新：刷新会打断阅读窗口，
+      // 用户还没来得及读，那唯一一次机会就不该被消耗掉（这正是新行为）。
+      const worker = ext.context.serviceWorkers()[0];
+      await expect
+        .poll(
+          () => worker.evaluate(() => new Promise((resolve) => {
+            chrome.storage.local.get(
+              'vsc-first-run-hint-shown',
+              (result) => resolve(result['vsc-first-run-hint-shown'] === true),
+            );
+          })),
+          { timeout: 15_000 },
+        )
+        .toBe(true);
+
       await page.reload();
       await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
       await page.evaluate(() => document.getElementById('v1').dispatchEvent(new Event('play')));

@@ -92,6 +92,16 @@ describe('background 工具栏标题', () => {
     );
   });
 
+  it('把当前倍速写进 storage.session（service worker 被回收后还能认出来）', () => {
+    // 内存 Map 跟 service worker 一起没了，storage.session 活得比它久。
+    // 不写进去的话，回收之后这个标签页「改过速没有」就再也认不出来了。
+    //
+    // ⚠️ 期望值必须是**字面量**：拿 rateStorageKey 拼出来是重言式。
+    report(7, 1.5);
+
+    expect(harness.storageSet).toHaveBeenCalledWith({ 'vsc-tab-rate:7': 1.5 });
+  });
+
   it('1.0x 时恢复成默认标题，而不是显示「1x」', () => {
     report(7, 1.5);
     report(7, 1);
@@ -118,8 +128,33 @@ describe('background 工具栏标题', () => {
   });
 
   it('只认倍速上报，别的消息一概不碰', () => {
-    harness.messages[0]?.({ type: 'vsc-toggle-fullscreen' }, { tab: { id: 7 } });
+    // ⚠️ 这条必须发**带数字 rate 的别的类型**消息。
+    // 早先这里发的是 `{ type: 'vsc-toggle-fullscreen' }`（不带 rate），
+    // 于是被 `typeof rate !== 'number'` 那一半先挡下 —— type 校验一次都没跑到，
+    // 把 `type !== SPEED_REPORT_MESSAGE` 整半删掉测试照样绿。
+    harness.messages[0]?.({ type: 'vsc-toggle-fullscreen', rate: 1.5 }, { tab: { id: 7 } });
+    harness.messages[0]?.({ type: 'something-else', rate: 1.5 }, { tab: { id: 7 } });
+    // rate 不是数字：同样不碰。
     harness.messages[0]?.({ type: SPEED_REPORT_MESSAGE, rate: '1.5' }, { tab: { id: 7 } });
+
+    expect(harness.setTitle).not.toHaveBeenCalled();
+  });
+
+  it('rate 不是有限数字时不碰（NaN / Infinity 不是倍速）', () => {
+    harness.messages[0]?.({ type: SPEED_REPORT_MESSAGE, rate: Number.NaN }, { tab: { id: 7 } });
+    harness.messages[0]?.({ type: SPEED_REPORT_MESSAGE, rate: Infinity }, { tab: { id: 7 } });
+
+    expect(harness.setTitle).not.toHaveBeenCalled();
+  });
+
+  it('消息不是对象时不碰，也不抛错', () => {
+    // 别的扩展 / 页面脚本可以往 runtime.onMessage 里塞任何东西。
+    // `const { type, rate } = null` 会直接抛 TypeError，把整个 worker 带崩。
+    expect(() => {
+      harness.messages[0]?.(null, { tab: { id: 7 } });
+      harness.messages[0]?.('vsc-speed-report', { tab: { id: 7 } });
+      harness.messages[0]?.(undefined, { tab: { id: 7 } });
+    }).not.toThrow();
 
     expect(harness.setTitle).not.toHaveBeenCalled();
   });

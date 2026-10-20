@@ -72,14 +72,14 @@ Video Speed Controller 把网页里的视频变成一个干净的全屏播放器
 鼠标也能调速：全屏控制条上的倍速可以点开，列出 0.5x 到 4x 的常用档位（含 0.5x 这个慢看档），点一下就切过去。键盘侧仍是 = / - 的 ±0.1 微调，两种方式互不干扰。
 播放控制：空格播放或暂停，左右方向键后退或前进 5 秒。
 只接管你正在看的那个视频：页面上有多个视频时，扩展只对正在播、或者你刚刚点过/操作过的那个生效；分不清是哪一个时它会让路，把按键还给页面，而不是替你猜一个。
-快捷键由你决定：全部 7 个动作都能在设置页改绑，留空即禁用该动作。重复绑定会在保存前被拦下，与浏览器保留键冲突的绑定会被标出。
+快捷键由你决定：全部 7 个动作都能在设置页改绑，留空即禁用该动作。重复绑定、以及浏览器自己占用的键（如 Ctrl+Shift+I），都会在保存前被拦下 —— 存下去也永远不会生效的绑定，不如不让你存。
 点击工具栏图标即可切换当前标签页的网页全屏；鼠标悬停在图标上时，提示里会显示这个标签页当前的倍速。
 
 怎么用
 安装后无需任何配置即可使用。需要改键时按 Ctrl+Shift+, 打开设置页（macOS 上是 ⌘⇧,），点一下想改的那一行，直接按新键即可；也可以右键扩展图标选择「选项」。设置页支持简体中文与 English。
 
 适用范围
-只控制视频，不控制纯音频。跨域 iframe 里的播放器无法接管（同一网站的 iframe 可以）。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
+只控制视频，不控制纯音频。同源 iframe 里的视频会被接管（能调速、能快进），但搬不进网页全屏，焦点在 iframe 内部时快捷键也按不到；跨域 iframe 里的视频完全接管不了。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
 
 隐私
 不收集任何个人数据，也不向开发者发送任何数据。你的快捷键设置保存在 Chrome 的同步扩展存储中，因此会跟随你的 Chrome 账号。扩展不保存你的浏览记录，也不跨设备同步你的倍速——倍速只留在当前这个标签页里，关掉浏览器就没了。它只在页面上查找并控制视频元素。
@@ -96,14 +96,14 @@ Playback speed: press = to speed up and - to slow down, in 0.1x steps; hold eith
 Mouse speed control too: on the fullscreen control bar, the speed label opens a list of common steps from 0.5x to 4x (including 0.5x for slow viewing); pick one and it applies. The keyboard side stays = / - for ±0.1 fine steps, and the two never fight each other.
 Playback control: Space plays or pauses. Left and Right arrows skip back or forward 5 seconds.
 It only takes over the video you are watching: on a page with several videos, the extension acts on the one that is playing, or the one you just interacted with; when it cannot tell which one you mean, it steps aside and hands the keys back to the page instead of guessing.
-Shortcuts you control: all seven actions can be rebound on the options page, and any of them can be left empty to disable it. Duplicate bindings are caught before you save, and shortcuts the browser reserves are flagged.
+Shortcuts you control: all seven actions can be rebound on the options page, and any of them can be left empty to disable it. Duplicate bindings and shortcuts the browser reserves (such as Ctrl+Shift+I) are both blocked before you save — a binding that could never fire is worse than no binding at all.
 Click the toolbar icon to toggle page fullscreen for the current tab; hover over the icon and the tooltip tells you the rate that tab is running at.
 
 How to use
 Works out of the box with no setup. To rebind a key, press Ctrl+Shift+, to open the options page (⇧⌘, on macOS), click the row you want, and press the new key; you can also right-click the extension icon and choose "Options". The options page is available in English and Simplified Chinese.
 
 Scope
-Controls video only, not audio-only players. Players inside cross-origin iframes cannot be taken over (same-site iframes can). Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
+Controls video only, not audio-only players. Videos inside same-origin iframes are taken over (they can be sped up and skipped), but they cannot be moved into the page-fullscreen player, and keyboard shortcuts do not reach them while focus is inside the iframe; videos inside cross-origin iframes cannot be taken over at all. Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
 
 Privacy
 No personal data is collected, and nothing is sent to the developer. Your shortcut settings are stored in Chrome's synced extension storage, so they follow your Chrome account. The extension keeps no record of which sites you visit, and your playback rate never leaves the tab it belongs to — it is gone once you close the browser. It only looks for and controls video elements on the pages you visit.
@@ -400,7 +400,7 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 ### Known Issues / Limitations
 
 - 只控制 `video`，不控制纯 `audio`（会在 listing 里如实写明）
-- 跨域 iframe 内的视频无法直接接管
+- 跨域 iframe 内的视频完全无法接管；同源 iframe 内的视频能调速，但搬不进网页全屏，焦点在 iframe 内部时快捷键也按不到
 - DRM 受保护内容无法接管
 - 极少数据点会退回更简单的布局模式（CSS cover）
 - **弹幕不会被搬进全屏**：扩展按「字幕 / 弹幕」的形态区分两者，只搬字幕。

@@ -40,6 +40,21 @@ const CAPTIONS = {
 // 从 _locales/<lang>/messages.json 取真实文案交给页面里的 chrome.i18n stub，
 // 让 options 设置页渲染成对应语言，而不是回落到内置的中文 FALLBACKS。
 // 不处理 placeholder；取不到的 key 让 getMessage 返回空串即可。
+
+/**
+ * 扩展版本号（来自构建产物里的 manifest.json）。
+ *
+ * 设置页的页脚要显示它，而截图用的 chrome stub 必须提供 getManifest() ——
+ * 少了它，页脚就是 "Version —"，截图上那行字看着像渲染坏了。
+ */
+const manifestVersion = (() => {
+  try {
+    const manifest = JSON.parse(readFileSync(resolve(distDir, 'manifest.json'), 'utf8'));
+    return manifest.version ?? '';
+  } catch {
+    return '';
+  }
+})();
 const loadMessages = (locale) => {
   try {
     const raw = readFileSync(resolve(root, '_locales', locale, 'messages.json'), 'utf8');
@@ -66,6 +81,11 @@ const CAPTION_ID = 'vsc-store-caption';
 /**
  * 截图前注入一句标题覆盖层。控制条固定在底部、调速小胶囊固定在左上角，
  * 所以标题只放在 top-center（避开胶囊、压住控制条上方）或 bottom-center（避开控制条）。
+ *
+ * 还有一个 top-left：设置页那一屏的**左右两侧各有一条 320px 宽的空白**，
+ * 而「Restore defaults / Save」按钮与页脚都在中间那条内容列里 ——
+ * 标题放进左侧空白，就谁也压不住。
+ * （此前用 bottom-center 时它正好盖住「Restore defaults」按钮。）
  */
 const addCaption = async (page, text, placement) => {
   await page.evaluate(
@@ -75,16 +95,18 @@ const addCaption = async (page, text, placement) => {
       el.id = id;
       el.textContent = message;
       const isBottom = position === 'bottom-center';
+      const isLeft = position === 'top-left';
       el.style.cssText = [
         'position:fixed',
-        'left:50%',
-        'transform:translateX(-50%)',
-        isBottom ? 'bottom:24px' : 'top:40px',
+        isLeft ? 'left:24px' : 'left:50%',
+        isLeft ? 'top:24px' : 'transform:translateX(-50%)',
+        isBottom ? 'bottom:24px' : isLeft ? '' : 'top:40px',
         'z-index:2147483647',
         'pointer-events:none',
         'box-sizing:border-box',
-        'max-width:calc(100vw - 32px)',
-        'white-space:nowrap',
+        // 左侧那条空白只有 320px 宽，标题必须能换行才不会压到内容列。
+        isLeft ? 'max-width:236px' : 'max-width:calc(100vw - 32px)',
+        isLeft ? 'white-space:normal' : 'white-space:nowrap',
         'padding:0.48em 1em',
         'border-radius:999px',
         'background:rgba(3,7,18,0.8)',
@@ -92,11 +114,11 @@ const addCaption = async (page, text, placement) => {
         'box-shadow:0 20px 60px rgba(0,0,0,0.45)',
         'color:#ffffff',
         "font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",
-        'font-size:clamp(20px, 3.4vw, 32px)',
+        isLeft ? 'font-size:24px' : 'font-size:clamp(20px, 3.4vw, 32px)',
         'font-weight:700',
         'letter-spacing:-0.01em',
         'line-height:1.15',
-        'text-align:center',
+        isLeft ? 'text-align:left' : 'text-align:center',
       ].join(';');
       document.body.appendChild(el);
     },
@@ -240,17 +262,37 @@ try {
     {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       try {
-        await context.addInitScript((msgs) => {
+        await context.addInitScript((payload) => {
           window.chrome = {
-            i18n: { getMessage: (key) => msgs[key] ?? '' },
-            runtime: { lastError: null },
+            i18n: {
+              /**
+               * ⚠️ 这个 stub 必须**照样替换位置占位符**。
+               * 真实的 chrome.i18n.getMessage(key, substitutions) 会把文案里的
+               * $1..$9 换成传入的值；stub 之前只返回原文，于是设置页那行
+               * 「按 $1 打开设置页」在截图上露出字面量 "$1"。
+               */
+              getMessage: (key, substitutions) => {
+                const raw = payload.messages[key] ?? '';
+                if (!raw) return '';
+                return raw.replace(/\$([1-9])(?!\d)/g, (match, index) => {
+                  const value = substitutions?.[Number(index) - 1];
+                  return value === undefined ? match : value;
+                });
+              },
+            },
+            runtime: {
+              lastError: null,
+              // ⚠️ 少了 getManifest，设置页读不到版本号 ——
+              // 页脚会显示成 "Version —"，截图上那行字看着像渲染坏了。
+              getManifest: () => ({ version: payload.version }),
+            },
             storage: {
               sync: { get: (_k, cb) => cb({}), set: (_o, cb) => cb?.(), remove: (_k, cb) => cb?.() },
               local: { get: (_k, cb) => cb({}), set: (_o, cb) => cb?.(), remove: (_k, cb) => cb?.() },
               onChanged: { addListener: () => {}, removeListener: () => {} },
             },
           };
-        }, messages);
+        }, { messages, version: manifestVersion });
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', (e) => errors.push(e.message.slice(0, 120)));
@@ -258,7 +300,8 @@ try {
         await page.waitForTimeout(400);
         const rows = await page.evaluate(() => document.querySelectorAll('.vsc__row').length);
         if (rows < 7) throw new Error('options page did not render 7 rows: ' + errors.join('; '));
-        await addCaption(page, captions.options, 'bottom-center');
+        // 标题放**左侧空白**：bottom-center 会正好盖住「Restore defaults」。
+        await addCaption(page, captions.options, 'top-left');
         await page.screenshot({ path: outPath('store-options', locale) });
         console.log(`${label('store-options', locale)} done (rows=${rows}, locale=${locale})`);
       } finally {

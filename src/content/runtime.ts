@@ -52,7 +52,10 @@ export class ContentRuntime {
     getSettings: () => this.settings,
     // 快捷键只作用于「用户此刻正在看的视频」；没有明确目标就完全穿透。
     // 显式操作（点工具栏图标）走 getCurrentVideo()，那是另一套契约。
-    getWatchedVideo: () => this.registry.getWatchedVideo(),
+    //
+    // ⚠️ 这里给的是 **target**（视频 + 它能吃下哪些键），不是光一个视频：
+    // 注册表会标出「这个视频可以调速，但空格必须还给页面翻页」这类**部分接管**。
+    getWatchedTarget: () => this.registry.getWatchedTarget(),
     // 菜单开着时对键盘控制器谎报「不在全屏」。
     // 键盘控制器在 window 捕获阶段处理 Escape 并 stopImmediatePropagation，
     // 菜单根本收不到 —— 谎报一下，它就跳过 Escape 分支，让 Escape 落到菜单上

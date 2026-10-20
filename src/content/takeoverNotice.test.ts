@@ -1,8 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TakeoverNotice } from './takeoverNotice';
-import { NOTICE_INSET, NOTICE_ROW_HEIGHT } from './runtimeStyles';
 
 const NOTICE_ID = 'vsc-takeover-notice';
+
+/**
+ * 胶囊那一行的下边缘（视口坐标）：内缩 16px + 那一行本身 46px = 62px。
+ *
+ * ⚠️ 这里必须是**字面量**。
+ * 之前这条用例拿 NOTICE_INSET / NOTICE_ROW_HEIGHT 这些**被测常量**算出期望值 ——
+ * 常量一改，期望值跟着一起变，断言恒成立（把 NOTICE_ROW_HEIGHT 改成 0
+ * 测试照样绿）。那是重言式，不是守卫。
+ *
+ * 62 = 16 + 46 这两个数的来历写在 runtimeStyles.ts 的常量注释里：
+ * 16px 是页面级提示与视频边缘的距离，46px 是胶囊那一行的高度
+ * （14px 字号 × line-height 1.4 + 上下各 5px 内边距）。
+ */
+const PILL_ROW_BOTTOM = 62;
+
+/** 提示自身的最大高度（最坏的两行），runtimeStyles.ts 里写的是 44px。 */
+const NOTICE_MAX_HEIGHT = 44;
 
 const mockRect = (element: HTMLElement, width: number, height: number, top = 0, left = 0) => {
   Object.defineProperty(element, 'getBoundingClientRect', {
@@ -66,8 +82,8 @@ describe('TakeoverNotice', () => {
     notice.show(video);
 
     const root = document.getElementById(NOTICE_ID)!;
-    // 左边缘仍与视频左边缘对齐（同一个内缩）。
-    expect(root.style.left).toBe(`${200 + NOTICE_INSET}px`);
+    // 左边缘仍与视频左边缘对齐（同一个内缩 16px）：200 + 16 = 216px。
+    expect(root.style.left).toBe('216px');
     // 下边缘贴视频下边缘再往上收 16px：视口高 768 - (460 - 16) = 324px。
     expect(root.style.bottom).toBe('324px');
     // 关键：**不能**再是 top 定位 —— top 与 bottom 同时给会让元素被拉高。
@@ -85,14 +101,17 @@ describe('TakeoverNotice', () => {
     notice.show(video);
 
     const root = document.getElementById(NOTICE_ID)!;
-    const pillRowBottom = 0 + NOTICE_INSET + NOTICE_ROW_HEIGHT;
-    const limit = 768 - pillRowBottom - 44;
-    // 视频下边缘给的位置比这个上限低（视频太矮），所以必须被上限顶住。
-    expect(parseFloat(root.style.bottom)).toBeLessThanOrEqual(limit);
     // 胶囊那一行的下边缘在 62px 处；提示的下边缘必须低于它，
     // 也就是提示的上边缘在 62px 以下 —— 两者不重叠。
+    const limit = 768 - PILL_ROW_BOTTOM - NOTICE_MAX_HEIGHT;
+    // 视频下边缘给的位置比这个上限低（视频太矮），所以必须被上限顶住。
+    expect(parseFloat(root.style.bottom)).toBeLessThanOrEqual(limit);
+    // 确切值：768 - 62 - 44 = 662px。
+    // 只写 toBeLessThanOrEqual 是不够的 —— 把 NOTICE_ROW_HEIGHT 改成 0
+    // 之后这个上限会跟着变大，断言照样成立；写死确切值才咬得住。
+    expect(root.style.bottom).toBe('662px');
     const noticeTop = 768 - parseFloat(root.style.bottom) - 26;
-    expect(noticeTop).toBeGreaterThanOrEqual(pillRowBottom);
+    expect(noticeTop).toBeGreaterThanOrEqual(PILL_ROW_BOTTOM);
   });
 
   it('adds the iframe offset when the video lives in a same-origin iframe', () => {
@@ -115,7 +134,8 @@ describe('TakeoverNotice', () => {
     // 视口高 768 → bottom = 768 - 564 = 204px。
     // 未换算会是 768 - (180-16) = 604px，正是"掉到屏幕角落"的表现。
     expect(root.style.bottom).toBe('204px');
-    expect(root.style.left).toBe(`${50 + NOTICE_INSET}px`);
+    // 左边缘 = iframe 左边缘 50 + 内缩 16 = 66px。
+    expect(root.style.left).toBe('66px');
   });
 
   it('falls back to the viewport bottom-left when the video is scrolled off', () => {

@@ -43,12 +43,15 @@ const ratioOf = (palette: Palette, fg: keyof Palette, bg: keyof Palette) =>
   round(contrastRatio(palette[fg], palette[bg]));
 
 /**
- * 文字对比度：正文 ≥ 4.5:1，次要文字 ≥ 3:1。
+ * 文字对比度：正文 ≥ 4.5:1，次要文字 ≥ 3:1，弱化说明 ≥ 5:1。
  *
- * 分档的依据是简报里的口径（正文 4.5 / 次要 3），不是「WCAG AA 全绿」——
- * 简报同时要求「浅色模式的观感必须和现在一致」，而 6.0.8 的弱化说明文字
- * （#737d8c on #f5f6f8）实测只有 3.85:1。把它提到 4.5:1 必须改浅色的观感，
- * 那是简报明确禁止的。所以浅色的弱化档按 ≥3:1 验收，并在报告里如实记下差距。
+ * ⚠️ 弱化说明这一档在 6.1.0 之前是 ≥3:1 —— 依据是当时的简报
+ * 「浅色模式的观感必须和现在一致」，而 6.0.8 的弱化说明文字
+ * （#737d8c on #f5f6f8）实测只有 3.85:1，连 AA 对正文的 4.5:1 都不到。
+ *
+ * 那段文字（每个动作下面那行说明）是**正文**：读者要靠它判断这个动作
+ * 会做什么，不是装饰。现在的口径是 5:1（三处底色都过），
+ * 对应浅色弱化档 #737d8c → #616976 的调深。
  */
 const TEXT_PAIRS: Array<{ label: string; fg: keyof Palette; bg: keyof Palette; min: number }> = [
   { label: '正文 / 页面底色', fg: 'text', bg: 'bg', min: 4.5 },
@@ -56,9 +59,9 @@ const TEXT_PAIRS: Array<{ label: string; fg: keyof Palette; bg: keyof Palette; m
   { label: '正文 / 输入框', fg: 'text', bg: 'fieldBg', min: 4.5 },
   { label: '次要说明 / 页面底色', fg: 'muted', bg: 'bg', min: 3 },
   { label: '次要说明 / 卡片', fg: 'muted', bg: 'surface', min: 3 },
-  { label: '弱化说明 / 页面底色', fg: 'mutedWeak', bg: 'bg', min: 3 },
-  { label: '弱化说明 / 卡片', fg: 'mutedWeak', bg: 'surface', min: 3 },
-  { label: '弱化说明 / 输入框', fg: 'mutedWeak', bg: 'fieldBg', min: 3 },
+  { label: '弱化说明 / 页面底色', fg: 'mutedWeak', bg: 'bg', min: 5 },
+  { label: '弱化说明 / 卡片', fg: 'mutedWeak', bg: 'surface', min: 5 },
+  { label: '弱化说明 / 输入框', fg: 'mutedWeak', bg: 'fieldBg', min: 5 },
   { label: '主按钮文字 / 主按钮底色', fg: 'accentText', bg: 'accent', min: 4.5 },
   { label: '主按钮悬停文字 / 悬停底色', fg: 'accentText', bg: 'accentHover', min: 4.5 },
   { label: '错误提示 / 页面底色', fg: 'dangerText', bg: 'bg', min: 4.5 },
@@ -114,16 +117,18 @@ describe('设置页配色对比度', () => {
     });
   });
 
-  it('浅色模式的观感与 6.0.8 完全一致', () => {
+  it('浅色模式的观感与 6.0.8 一致，只有弱化说明色被调深过', () => {
     // 逐个值锁死：深色模式是**新增**，不允许顺手改浅色的观感。
-    // 这些值就是 6.0.8 的 options/index.ts 里那套 CSS 的原值。
+    // 这些值就是 6.0.8 的 options/index.ts 里那套 CSS 的原值，
+    // 唯一例外是 mutedWeak —— 6.1.0 把它从 #737d8c 调深到 #616976，
+    // 因为它承载的是**正文**（每个动作的说明），4.17:1 连 AA 都不到。
     expect(LIGHT_PALETTE).toEqual({
       bg: '#f5f6f8',
       surface: '#ffffff',
       fieldBg: '#fbfbfc',
       text: '#1e2430',
       muted: '#5b6473',
-      mutedWeak: '#737d8c',
+      mutedWeak: '#616976',
       border: '#e3e6ea',
       divider: '#eef0f2',
       borderStrong: '#d6dae0',
@@ -136,6 +141,14 @@ describe('设置页配色对比度', () => {
       dangerText: '#b45309',
       dangerBorder: '#d97706',
     });
+  });
+
+  it('弱化说明色在三处底色上都达到 5:1（AA 正文线之上再留一点余量）', () => {
+    // 这条单独钉住：它曾经是 4.17:1（白底）/ 3.85:1（页面底色），
+    // 是一处**看得见的**可读性缺陷，不是审美偏好。
+    expect(contrastRatio(LIGHT_PALETTE.mutedWeak, LIGHT_PALETTE.surface)).toBeGreaterThanOrEqual(5);
+    expect(contrastRatio(LIGHT_PALETTE.mutedWeak, LIGHT_PALETTE.bg)).toBeGreaterThanOrEqual(5);
+    expect(contrastRatio(LIGHT_PALETTE.mutedWeak, LIGHT_PALETTE.fieldBg)).toBeGreaterThanOrEqual(5);
   });
 
   it('深色模式的强调色在深底上达标，且与浅色的强调色同族', () => {

@@ -12,7 +12,7 @@
     "description": "Reset button"
   },
   "optPressKey": {
-    "message": "Press a key",
+    "message": "Press the key to bind",
     "description": "Shortcut input placeholder"
   },
   "optSaved": {
@@ -28,12 +28,8 @@
     "description": "Duplicate shortcut error"
   },
   "optReserved": {
-    "message": "Conflicts with a browser shortcut; the browser may handle it first",
-    "description": "Reserved shortcut warning"
-  },
-  "optFixDuplicate": {
-    "message": "Fix the duplicate keys first",
-    "description": "Blocking save due to duplicates"
+    "message": "The browser already uses this key; pick another one",
+    "description": "Blocking error for a shortcut the browser reserves"
   },
   "actionIncrease": {
     "message": "Speed up",
@@ -132,11 +128,11 @@
     "description": "Fullscreen control speed button; the current rate is appended to it"
   },
   "hintFullscreen": {
-    "message": "Fullscreen",
+    "message": "Page fullscreen",
     "description": "First-run hint: fullscreen action label"
   },
   "hintSpeed": {
-    "message": "$1 / $2 speed",
+    "message": "$1 / $2 to change speed",
     "description": "First-run hint: speed step actions",
     "placeholders": {
       "up": {
@@ -199,5 +195,43 @@
   "noticeNoVideo": {
     "message": "There is no video on this page",
     "description": "Shown when the user clicks the toolbar icon on a page that has no video"
+  },
+  "extensionDescription": {
+    "message": "Minimal keyboard shortcuts and a clean page-fullscreen player for the video you are watching",
+    "description": "Extension description shown in the Chrome Web Store and chrome://extensions"
+  },
+  "optDisabled": {
+    "message": "Not bound (disabled)",
+    "description": "Placeholder shown when an action has no shortcut"
+  },
+  "optUnsaved": {
+    "message": "Unsaved changes",
+    "description": "Status line shown while the form differs from the saved shortcuts"
+  },
+  "optRestored": {
+    "message": "Defaults restored",
+    "description": "Status line shown after \"Restore defaults\" was written to storage"
+  },
+  "optSelfConflict": {
+    "message": "This key is one of the extension's own commands; pick another one",
+    "description": "Blocking error for a shortcut that collides with the extension's own command"
+  },
+  "optTipsToolbar": {
+    "message": "Click the toolbar icon to toggle page fullscreen",
+    "description": "Options page hint: the toolbar icon toggles fullscreen"
+  },
+  "optTipsOptions": {
+    "message": "Press $1 to open the settings page",
+    "description": "Options page hint: the shortcut that opens the settings page",
+    "placeholders": {
+      "shortcut": {
+        "content": "$1",
+        "example": "Ctrl+Shift+,"
+      }
+    }
+  },
+  "hintToolbar": {
+    "message": "Click the extension icon for page fullscreen",
+    "description": "First-run hint: the toolbar icon toggles page fullscreen"
   }
 }

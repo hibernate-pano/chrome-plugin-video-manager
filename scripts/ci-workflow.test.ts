@@ -452,6 +452,26 @@ describe('版本号单一来源', () => {
         .map((part) => Number(part))
         .every((part) => Number.isInteger(part) && part >= 0);
 
+    // ⚠️ 必须按**语义化版本**比，不能逐段比大小。
+    //
+    // 逐段比（`version.every((part, i) => part <= current[i])`）在
+    // 「6.0.3 vs 6.1.0」上判成「更高」—— 第三段 3 > 0 就得出结论，
+    // 而 6.0.3 明明**低于** 6.1.0。这个比较方式让每一次 minor 升级
+    // 都会把这条断言弄红（实测：版本提到 6.1.0 的当天就红了）。
+    //
+    // 正确的做法：逐段比，**第一段不同的**决定大小，后面的段不再参与。
+    const compare = (left: number[], right: number[]) => {
+      const length = Math.max(left.length, right.length);
+      for (let i = 0; i < length; i += 1) {
+        const a = left[i] ?? 0;
+        const b = right[i] ?? 0;
+        if (a !== b) {
+          return a - b;
+        }
+      }
+      return 0;
+    };
+
     const current = String(pkg.version).split('.').map(Number);
     for (const file of readdirSync(releaseDir)) {
       if (!file.toLowerCase().endsWith('.zip')) continue;
@@ -459,7 +479,7 @@ describe('版本号单一来源', () => {
       if (!matched) continue;
       const version = matched.slice(1, 4).map(Number);
       expect(
-        version.every((part, i) => part <= current[i]!),
+        compare(version, current) <= 0,
         `release/${file} 的版本高于 package.json(${pkg.version})，发布时会选中它`,
       ).toBe(true);
       if (parse(matched[0]!)) {

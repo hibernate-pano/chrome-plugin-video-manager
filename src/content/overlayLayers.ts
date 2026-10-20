@@ -76,6 +76,14 @@ const SUBTITLE_MAX_HEIGHT_RATIO = 0.3;
 /** 字幕最多两行：原文 + 译文。超过就是弹幕或列表。 */
 const SUBTITLE_MAX_LINES = 2;
 /**
+ * ⚠️ 这里数的是**视觉行数**，不是排版片段数。
+ *
+ * 早先用 Range 的矩形个数当行数：任何被行内标签包住的文字都会多出矩形，
+ * 于是 YouTube / B 站双语字幕的典型结构（每行包一个 span）被判成 4 行、
+ * 整块出局 —— 全屏里字幕彻底消失。见 measureInkBounds 的说明。
+ */
+
+/**
  * 字幕重心的纵向位置下限（相对视频顶部，0=顶部 1=底部）。
  *
  * 早先用"底边落在视频 55% 以下"，在真实页面上把字幕判成了非字幕：
@@ -135,8 +143,22 @@ const fitsWithinVideo = (layer: DOMRect, video: DOMRect) => {
  *   左侧字幕       → 墨水 80px（11%）
  *   弹幕容器       → 墨水 544px（76%），且散在 8 个不连续的行盒上
  *
- * 用 Range.getClientRects() 而不是逐个遍历子节点：它对文本节点、
- * 内联后代、伪元素都有效，且不碰 DOM。
+ * ⚠️ 只量**文本节点**，不量元素盒子。
+ *
+ * `Range.selectNodeContents(element).getClientRects()` 返回的是**排版片段**，
+ * 它把行内元素自己的盒子也算进来（实测 Chromium）：
+ *   `<span>行1</span><span>行2</span>`（span 是 display:block）
+ *     → 4 个矩形：2 个整宽的 span 盒子 + 2 个文字盒
+ *   `<span>行1<br>行2</span>`
+ *     → 3 个矩形：1 个横跨两行的 span 盒子 + 2 个文字盒
+ *   `文字<em>强调</em>`
+ *     → 3 个矩形：1 个文字盒 + 2 个 em 的盒子
+ * 后果有两个，都是致命的：
+ *   ① 「最多两行」的判据被撑爆 —— 双语字幕（每行一个 span）被判成 4 行，
+ *      于是被判成「不是字幕」，全屏里字幕彻底消失。
+ *   ② 整宽的 span 盒子把墨水**宽度**也撑成播放器的宽度，
+ *      「墨水不超过视频宽度的 70%」这条同样过不去。
+ * 逐个文本节点量就没有这两个问题：文字盒天然就是「内容」的度量。
  */
 export interface InkBounds {
   left: number;
@@ -145,21 +167,71 @@ export interface InkBounds {
   bottom: number;
   width: number;
   height: number;
-  /** 行盒数量：字幕通常 1–2 行，弹幕常有 8 行以上。 */
+  /** **视觉**行数：字幕通常 1–2 行，弹幕常有 8 行以上。 */
   lines: number;
 }
 
+/** NodeFilter.SHOW_TEXT —— 不依赖全局 NodeFilter，内容脚本里也能用。 */
+const SHOW_TEXT = 4;
+
+/**
+ * 数出**视觉行数**。
+ *
+ * ⚠️ 不能用矩形的个数当行数（理由见 InkBounds 的说明）。
+ *
+ * 做法：把文字盒按**顶部位置**聚类。同一视觉行里各文字盒的顶部只差几个
+ * 像素（字体不同、行内元素按基线对齐），而行与行之间至少差一个行高。
+ * 容差取「盒高中位数的一半」—— 盒高的中位数就是行高量级。
+ *
+ * 实测（720 宽的字幕容器）：
+ *   每行一个 span（display:block）→ 文字盒 2 个、顶部差 28px → 2 行 ✓
+ *   span 内含 <br>             → 文字盒 2 个、顶部差 28px → 2 行 ✓
+ *   单行 + 尾部强调 span       → 文字盒 2 个、顶部相同     → 1 行 ✓
+ *   8 行弹幕                  → 文字盒 8 个              → 8 行 ✓
+ */
+const countVisualLines = (boxes: DOMRect[]): number => {
+  const heights = boxes.map((box) => box.height).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
+  const tolerance = Math.max(2, medianHeight * 0.5);
+
+  const tops = boxes.map((box) => box.top).sort((a, b) => a - b);
+  let lines = 0;
+  let previous = Number.NEGATIVE_INFINITY;
+  for (const top of tops) {
+    if (top - previous > tolerance) {
+      lines += 1;
+    }
+    previous = top;
+  }
+
+  return lines;
+};
+
 const measureInkBounds = (element: HTMLElement): InkBounds | null => {
-  if (typeof document.createRange !== 'function') {
+  const doc = element.ownerDocument;
+  if (typeof doc.createRange !== 'function' || typeof doc.createTreeWalker !== 'function') {
     return null;
   }
 
-  let rects: DOMRect[];
+  const rects: DOMRect[] = [];
   try {
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    rects = Array.from(range.getClientRects());
-    range.detach?.();
+    // 只量文本节点：元素盒子（行内标签、整块换行的标签）不是文字，
+    // 还会把「容器铺满播放器宽度」的假象带进墨水宽高。
+    const walker = doc.createTreeWalker(element, SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      const text = node as Text;
+      // 纯空白文本节点没有矩形，提前跳过（省一次 Range）。
+      if (text.nodeValue && text.nodeValue.trim().length > 0) {
+        const range = doc.createRange();
+        range.selectNodeContents(text);
+        for (const rect of Array.from(range.getClientRects())) {
+          rects.push(rect);
+        }
+        range.detach?.();
+      }
+      node = walker.nextNode();
+    }
   } catch {
     return null;
   }
@@ -182,7 +254,7 @@ const measureInkBounds = (element: HTMLElement): InkBounds | null => {
     bottom,
     width: right - left,
     height: bottom - top,
-    lines: boxes.length,
+    lines: countVisualLines(boxes),
   };
 };
 
@@ -192,7 +264,7 @@ const measureInkBounds = (element: HTMLElement): InkBounds | null => {
  * 判据全部基于**内容**而不是容器：
  * - 墨水宽度不超过视频宽度的 70%（字幕是几行短句，弹幕是满屏散字）
  * - 墨水高度不超过视频高度的 30%
- * - 行盒不超过 2 行（原文 + 译文）
+ * - **视觉**行数不超过 2 行（原文 + 译文）
  * - 墨水重心落在视频下半部分
  *
  * 量不到墨水时退回**容器**判据。这条退路只在两种情况下生效：

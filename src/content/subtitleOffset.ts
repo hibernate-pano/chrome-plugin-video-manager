@@ -49,7 +49,25 @@ interface OriginalTransform {
   inlineTransform: string;
   /** 内联 transform 的优先级（'' 或 'important'）。 */
   inlinePriority: string;
+  /** 站点自己写的内联 transition（原样）。 */
+  inlineTransition: string;
+  /** 内联 transition 的优先级。 */
+  inlineTransitionPriority: string;
 }
+
+/**
+ * 我们加位移时挂上去的过渡。
+ *
+ * 控制条淡入淡出是 180ms，字幕跟着一起挪才不会「跳」。
+ * 只写 transform 这一条属性：站点自己的其它过渡（淡入淡出等）不受影响。
+ *
+ * ⚠️ 用普通优先级（不是 !important）：站点的样式表里若写了
+ * `transition: all .3s`，它会盖住我们这条 —— 那也没关系，
+ * 站点自己的过渡时长通常也在 200–300ms 量级。
+ * 但我们**不能**用 !important：那样会把站点整条 transition 顶掉，
+ * 站点字幕的淡入动画会瞬间跳完。
+ */
+const OFFSET_TRANSITION = 'transform 180ms ease';
 
 const originals = new Map<HTMLElement, OriginalTransform>();
 
@@ -88,6 +106,8 @@ export const setSubtitleOffset = (element: HTMLElement, pixels: number): void =>
       base: computedTransform(element),
       inlineTransform: element.style.getPropertyValue('transform'),
       inlinePriority: element.style.getPropertyPriority('transform'),
+      inlineTransition: element.style.getPropertyValue('transition'),
+      inlineTransitionPriority: element.style.getPropertyPriority('transition'),
     });
   }
 
@@ -100,6 +120,9 @@ export const setSubtitleOffset = (element: HTMLElement, pixels: number): void =>
   const offset = `translateY(-${Math.round(pixels)}px)`;
   const combined = base === 'none' ? offset : `${base} ${offset}`;
   element.style.setProperty('transform', combined, 'important');
+
+  // 过渡只挂在 transform 上：字幕跟着控制条一起淡入淡出，而不是「啪」地跳一下。
+  element.style.setProperty('transition', OFFSET_TRANSITION);
 };
 
 /**
@@ -125,6 +148,18 @@ export const restoreSubtitleOffset = (element: HTMLElement): void => {
   } else {
     // 站点本来就没有内联 transform：整个属性删掉，让样式表重新接管。
     element.style.removeProperty('transform');
+  }
+
+  // 我们挂上去的过渡也要撤：站点自己写的原样写回，没写就把属性删掉，
+  // 让样式表重新接管（否则站点的淡入动画会变成我们给的 180ms）。
+  if (original.inlineTransition) {
+    element.style.setProperty(
+      'transition',
+      original.inlineTransition,
+      original.inlineTransitionPriority,
+    );
+  } else {
+    element.style.removeProperty('transition');
   }
 };
 

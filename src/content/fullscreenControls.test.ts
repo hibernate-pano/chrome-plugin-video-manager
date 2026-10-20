@@ -138,13 +138,13 @@ describe('FullscreenControls', () => {
 
   it('toggles play/pause through the button and reflects video events', () => {
     mount();
-    // 初始 playing -> 图标是暂停。
-    expect($('play').innerHTML).toContain('M7 5h3.5');
+    // 初始 playing -> 显示暂停图标。
+    expect($('play').classList.contains('is-playing')).toBe(true);
 
     $('play').click();
     expect(video.pause).toHaveBeenCalledTimes(1);
     video.dispatchEvent(new Event('pause'));
-    expect($('play').innerHTML).toContain('M8 5.5v13');
+    expect($('play').classList.contains('is-playing')).toBe(false);
   });
 
   it('toggles play/pause when the video surface is left-clicked', () => {
@@ -157,11 +157,11 @@ describe('FullscreenControls', () => {
 
     // 暂停中 -> 单击继续，图标随真实状态走（同步靠 media 事件，不是靠 play() 调用）。
     video.dispatchEvent(new Event('pause'));
-    expect($('play').innerHTML).toContain('M8 5.5v13');
+    expect($('play').classList.contains('is-playing')).toBe(false);
     clickVideo({ button: 0 });
     expect(video.play).toHaveBeenCalledTimes(1);
     video.dispatchEvent(new Event('play'));
-    expect($('play').innerHTML).toContain('M7 5h3.5');
+    expect($('play').classList.contains('is-playing')).toBe(true);
   });
 
   it('wakes the control bar when the video surface is clicked', () => {
@@ -537,5 +537,157 @@ describe('FullscreenControls', () => {
     // 真实浏览器里 muted 一变就会派发 volumechange，UI 同步挂在这个事件上。
     video.dispatchEvent(new Event('volumechange'));
     expect($<HTMLInputElement>('volume').value).toBe('1');
+  });
+
+  // ================================================================
+  // 本轮修复的回归守卫
+  //
+  // 每条都对着一个**具体症状**写，症状在改动前都能复现。
+  // ================================================================
+
+  it('换播放/静音图标时不重写按钮的 DOM', () => {
+    mount();
+    const play = $('play');
+    const mute = $('mute');
+    const playBefore = play.innerHTML;
+    const muteBefore = mute.innerHTML;
+
+    // 两个图标一直都在 DOM 里，靠 class 切换显示哪一个。
+    expect(play.querySelectorAll('svg')).toHaveLength(2);
+    expect(mute.querySelectorAll('svg')).toHaveLength(2);
+
+    // ⚠️ 绝不能用 innerHTML 换图标：实测 Chromium，光标下的元素被替换之后，
+    // 浏览器会在**光标不动**的情况下重新派发 mouseover/mouseenter，
+    // 控制条的 mouseenter 处理器随即取消待触发的隐藏计时器 ——
+    // 而光标没动就没有 pointermove 来重新计时，控制条从此永远不再自动隐藏。
+    video.pause();
+    video.dispatchEvent(new Event('pause'));
+    expect(play.classList.contains('is-playing')).toBe(false);
+    expect(play.innerHTML).toBe(playBefore);
+
+    video.play();
+    video.dispatchEvent(new Event('play'));
+    expect(play.classList.contains('is-playing')).toBe(true);
+    expect(play.innerHTML).toBe(playBefore);
+
+    video.muted = true;
+    video.dispatchEvent(new Event('volumechange'));
+    expect(mute.classList.contains('is-muted')).toBe(true);
+    expect(mute.innerHTML).toBe(muteBefore);
+  });
+
+  it('指针移入控制条时重新计时，而不是取消隐藏', () => {
+    mount();
+    const bar = shadowRoot()?.querySelector('.bar');
+
+    // mouseenter 的语义是「重新开始算 3 秒」，不是「保持可见」。
+    // 取消计时器的话，光标不动就没有 pointermove 来重新计时，
+    // 控制条从此永远不再自动隐藏。
+    bar?.dispatchEvent(new MouseEvent('mouseenter'));
+
+    vi.advanceTimersByTime(2999);
+    expect(bar?.classList.contains('bar--visible')).toBe(true);
+    vi.advanceTimersByTime(2);
+    expect(bar?.classList.contains('bar--visible')).toBe(false);
+  });
+
+  it('键盘调滑块时焦点不丢（长按方向键才有效）', () => {
+    mount();
+    const progress = $<HTMLInputElement>('progress');
+    progress.focus();
+    expect(shadowRoot()?.activeElement).toBe(progress);
+
+    // 键盘操作滑块同样会触发 change，但**不能**因此把焦点甩掉：
+    // 焦点一丢，按键重复就断了（实测长按方向键 1.2 秒只前进 0.1 秒），
+    // 焦点环也会消失。
+    progress.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    progress.dispatchEvent(new Event('change'));
+
+    expect(shadowRoot()?.activeElement).toBe(progress);
+  });
+
+  it('指针拖完滑块后仍然放掉焦点（控制条要能重新自动隐藏）', () => {
+    mount();
+    const progress = $<HTMLInputElement>('progress');
+    progress.focus();
+    expect(shadowRoot()?.activeElement).toBe(progress);
+
+    progress.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    progress.dispatchEvent(new Event('change'));
+
+    expect(shadowRoot()?.activeElement).not.toBe(progress);
+  });
+
+  it('进度条与音量滑块的步长与全局快捷键一致', () => {
+    mount();
+
+    // 全局快进是 5 秒（shared/types.ts 的 SEEK_STEP_SECONDS）：
+    // 早先进度条的步长是 0.1 秒，同一个产品里两套步长。
+    expect($<HTMLInputElement>('progress').getAttribute('step')).toBe('5');
+    // 音量：1% 太小，长按方向键几乎看不出变化。
+    expect($<HTMLInputElement>('volume').getAttribute('step')).toBe('0.05');
+  });
+
+  it('PageUp/PageDown 按固定秒数跳，不是范围的 10%', () => {
+    // 两小时的视频：原生 range 的 PageUp 是范围的 10% = 720 秒（12 分钟）。
+    Object.defineProperty(video, 'duration', { get: () => 7200, configurable: true });
+    mount();
+    const progress = $<HTMLInputElement>('progress');
+    progress.value = '0';
+
+    progress.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
+    expect(Number(progress.value)).toBe(30);
+    expect(video.currentTime).toBe(30);
+
+    progress.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+    expect(Number(progress.value)).toBe(0);
+  });
+
+  it('时间标签拆成「当前时间」与「总时长」两段', () => {
+    mount();
+
+    // 合在一起时宽度会随播放进度变化（"0:00" → "59:59" → "1:00:00"），
+    // 它就坐在进度条左边 —— 宽度一变，进度条被挤得忽宽忽窄，整个控制条横抖。
+    const now = $('time-now');
+    const total = $('time-total');
+    expect(now.textContent).toBe('0:30');
+    expect(total.textContent).toBe('2:00');
+    expect($('time').textContent).toBe('0:30 / 2:00');
+  });
+
+  it('按字幕的实际位置把它抬到控制条上方，控制条藏了又落回去', () => {
+    const controls = mount();
+
+    // jsdom 没有布局引擎：视口高度、控制条高度与字幕几何都得手动给。
+    Object.defineProperty(window, 'innerHeight', { value: 720, configurable: true });
+    const root = shadowRoot()?.querySelector('.bar');
+    Object.defineProperty(root, 'offsetHeight', { value: 66, configurable: true });
+
+    // 字幕贴在视口最底边（底边 720，视口高 720）。
+    const caption = document.createElement('div');
+    document.body.appendChild(caption);
+    caption.getBoundingClientRect = () => new DOMRect(0, 664, 100, 56);
+
+    controls.setSubtitleLayers([
+      {
+        element: caption,
+        kind: 'subtitle',
+        rect: new DOMRect(0, 664, 100, 56),
+        ink: null,
+        originalParent: null,
+        originalNextSibling: null,
+        originalZIndex: '',
+      },
+    ]);
+
+    // 控制条顶边 = 720 - 66 = 654；字幕底边 720 → 要抬 720 - 654 + 4(间隙) = 70。
+    // 早先这里是「控制条高度 × 0.7 = 46px」写死的：字幕离画面底边远近不同，
+    // 固定抬 46px 对 bottom: 4% 的字幕是浪费，对 bottom: 0 的字幕却**不够**
+    // （实测字幕底边 674、控制条顶边 654，重叠 20px，最后一行被压暗）。
+    expect(caption.style.transform).toContain('translateY(-70px)');
+
+    // 控制条藏了，字幕回到它原本的位置。
+    vi.advanceTimersByTime(3000);
+    expect(caption.style.transform).toBe('');
   });
 });

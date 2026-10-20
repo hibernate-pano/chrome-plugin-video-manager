@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpeedToast, formatRate } from './speedToast';
+import { destroyLiveRegion } from './liveRegion';
 import { FULLSCREEN_OVERLAY_ID } from './runtimeStyles';
 
 describe('formatRate', () => {
@@ -36,6 +37,9 @@ describe('SpeedToast', () => {
   });
 
   afterEach(() => {
+    // liveRegion 的模块级状态（上次播报时间、待播文本）必须清干净，
+    // 否则下一条播报会被上一条卡进节流窗口里 —— 那是跨用例的泄漏。
+    destroyLiveRegion();
     vi.useRealTimers();
   });
 
@@ -260,6 +264,21 @@ describe('SpeedToast', () => {
     // 文字颜色必须显式写死：runtimeStyles 里那条 color 规则管的是胶囊形态，
     // 角标形态要靠自己保证颜色就是算过对比度的那个值。
     expect(pill().style.color).toBe('rgb(248, 250, 252)');
+    // 「很淡」靠**尺寸**实现：12px 的角标不该被人改成 20px 的大字。
+    expect(pill().style.fontSize).toBe('12px');
+    // 角标是「从看不见直接切到完全不透明」，过渡会让它在半透明的中途
+    // 状态上停留 160ms —— 那正是要消灭的低对比度状态。
+    expect(pill().style.transition).toBe('none');
+    toast.destroy();
+  });
+
+  it('胶囊与角标都是 aria-hidden 的（播报走独立的 live region）', () => {
+    // 视觉节点保留 aria-hidden，避免某些读屏器在 DOM 变化时把贴片再念一遍 ——
+    // 播报已经由 live region 负责了。
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    expect(pill().getAttribute('aria-hidden')).toBe('true');
     toast.destroy();
   });
 
@@ -437,5 +456,125 @@ describe('SpeedToast', () => {
     await exitFullscreenViaControls();
     vi.advanceTimersByTime(5000);
     expect(document.getElementById('vsc-speed-toast')).toBeNull();
+  });
+
+  /* --- 读屏播报通道 --- */
+
+  it('必须通过 live region 播报倍速（它是产品唯一的读屏反馈通道）', () => {
+    // 胶囊本身是 aria-hidden 的纯视觉元素，读屏用户从中得不到任何信息。
+    // liveRegion.ts 的注释写着这是产品**唯一**对读屏用户可用的反馈路径 ——
+    // 删掉 announceThrottled(...) 这一行，读屏用户按了 `=` 之后
+    // 得不到任何确认，而且**没有任何视觉症状**（胶囊照样显示）。
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    const region = document.getElementById('vsc-live-region');
+    expect(region, '必须有 live region').not.toBeNull();
+    expect(region!.textContent).toContain('1.5');
+    toast.destroy();
+  });
+
+  /* --- 自愈 --- */
+
+  it('节点被站点摘掉后能自愈重建', () => {
+    // 站点会主动清理不认识的外来 DOM 节点。root 被摘走后若继续复用
+    // 游离引用，胶囊会**静默失效** —— 失效时没有任何视觉线索。
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    const first = document.getElementById('vsc-speed-toast')!;
+    first.remove();
+
+    toast.show(1.25, video);
+
+    const rebuilt = document.getElementById('vsc-speed-toast');
+    expect(rebuilt, '应当重建提示节点').not.toBeNull();
+    expect(rebuilt, '不能继续复用那个被摘掉的游离节点').not.toBe(first);
+    expect(rebuilt!.isConnected).toBe(true);
+    expect(rebuilt!.textContent).toBe('1.25x');
+    toast.destroy();
+  });
+
+  /* --- 位置跟随 --- */
+
+  it('角标常驻期间跟着页面滚动', () => {
+    // 角标贴在视频角落，页面一滚它就该跟着挪 —— 否则它会留在旧坐标上，
+    // 变成一块飘在页面上的小字。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 视频往下滚 200px：顶边从 100 变成 300 → 提示的 top = 300 + 16 = 316px。
+    mockRect(video, 640, 360, 300, 200);
+    window.dispatchEvent(new Event('scroll'));
+
+    expect(pill().style.top).toBe('316px');
+    toast.destroy();
+  });
+
+  it('视频滚出视口上方时，提示钳在视口左上角', () => {
+    // 视频顶部滚出屏幕时，提示必须钳到 (16,16) —— 否则它跟着视频跑出屏幕，
+    // 用户按了键什么都没看见。
+    markPlaying();
+    mockRect(video, 640, 360, -100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+
+    expect(pill().style.top).toBe('16px');
+    toast.destroy();
+  });
+
+  it('角标收起之后不再跟着页面跑', () => {
+    // hideBadge() 把 scroll / resize 监听摘掉：提示已经看不见了，
+    // 再跟着页面重定位是白干活（还会把坐标改坏 —— 角标下次回来时
+    // 用的是被改过的旧坐标）。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 视频暂停 = 用户不再需要这个角标 → 角标被彻底放弃。
+    video.dispatchEvent(new Event('pause'));
+    expect(pill().classList.contains('vsc-visible')).toBe(false);
+
+    const before = pill().style.top;
+    mockRect(video, 640, 360, 300, 200);
+    window.dispatchEvent(new Event('scroll'));
+
+    expect(pill().style.top, '收起之后不该再跟着页面跑').toBe(before);
+    toast.destroy();
+  });
+
+  /* --- 时长 --- */
+
+  it('胶囊在 900ms 后淡出', () => {
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    vi.advanceTimersByTime(899);
+    expect(pill().classList.contains('vsc-visible'), '900ms 之前还在').toBe(true);
+
+    vi.advanceTimersByTime(2);
+    expect(pill().classList.contains('vsc-visible'), '900ms 之后淡出').toBe(false);
+    toast.destroy();
+  });
+
+  it('角标在胶囊淡出 3 秒之后才出现', () => {
+    // 「用户 3 秒内没有再操作」—— 从这次调速算起 3 秒。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    vi.advanceTimersByTime(900 + 2999);
+    expect(pill().classList.contains('vsc-visible'), '3 秒之前不该出现角标').toBe(false);
+
+    vi.advanceTimersByTime(2);
+    expect(pill().classList.contains('vsc-visible'), '3 秒之后出现角标').toBe(true);
+    toast.destroy();
   });
 });

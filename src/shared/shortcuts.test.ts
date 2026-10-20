@@ -77,6 +77,78 @@ describe('normalizeShortcutSettings', () => {
   });
 });
 
+/**
+ * 修饰键必须**逐个**对上。
+ *
+ * 之前这里只有一条涉及修饰键的断言（ctrl），而 ctrl 的判断恰好把用例挡住了 ——
+ * 把 `event.altKey === modifiers.has('alt')` 与
+ * `event.metaKey === modifiers.has('meta')` 整半删掉，测试照样全绿。
+ *
+ * 少了这两半的后果：绑定 `k`（加速）会在用户按 Alt+k 或 Cmd+k 时也触发，
+ * 而这些组合往往属于浏览器 / 系统（Alt+Tab、Cmd+K 打开地址栏）。
+ */
+describe('matchesShortcut 的修饰键逐个比对', () => {
+  it('绑定没写 alt 时，按住 Alt 不算命中', () => {
+    const withAlt = new KeyboardEvent('keydown', { key: 'k', altKey: true });
+
+    expect(matchesShortcut(withAlt, 'k')).toBe(false);
+    expect(matchesShortcut(withAlt, 'ctrl+k')).toBe(false);
+  });
+
+  it('绑定没写 meta 时，按住 Meta 不算命中', () => {
+    const withMeta = new KeyboardEvent('keydown', { key: 'k', metaKey: true });
+
+    expect(matchesShortcut(withMeta, 'k')).toBe(false);
+  });
+
+  it('绑定写了 meta 时，不按 Meta 不算命中', () => {
+    const plain = new KeyboardEvent('keydown', { key: 'k' });
+
+    expect(matchesShortcut(plain, 'meta+k')).toBe(false);
+  });
+
+  it('绑定写了 ctrl+alt 时，缺 alt 不算命中', () => {
+    // 只按 Ctrl 不按 Alt：两条组合键不能互相顶替。
+    const ctrlOnly = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true });
+
+    expect(matchesShortcut(ctrlOnly, 'ctrl+alt+k')).toBe(false);
+  });
+
+  it('绑定写了 ctrl+alt 时，alt 到位才算命中', () => {
+    const both = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, altKey: true });
+
+    expect(matchesShortcut(both, 'ctrl+alt+k')).toBe(true);
+  });
+});
+
+/**
+ * 归一化里的几处边界。
+ *
+ * 这些都是「改坏了没人拦」的口子：归一化是设置页与匹配之间唯一的翻译层，
+ * 它一旦判错，用户在界面上看到「已保存」的绑定却永远触发不了。
+ */
+describe('normalizeShortcut 的边界', () => {
+  it('四个修饰键的组合也要认（剥 4 层，不是 3 层）', () => {
+    // 剥离深度从 4 改成 3 的话，最后一个修饰键会留在主键里，
+    // 而主键里带着 '+' → 整条绑定被判非法（归一化成空串）。
+    expect(normalizeShortcut('ctrl+alt+shift+meta+k')).toBe('ctrl+alt+shift+meta+k');
+  });
+
+  it('control / os 是被认可的修饰键写法（不能被判非法）', () => {
+    // 修饰键前缀里认 'control' / 'os'：老绑定里可能有这些写法。
+    // 判非法的话，用户的绑定会被静默丢成空串 —— 界面上还显示着，
+    // 按键却永远不触发。
+    expect(normalizeShortcut('control+k')).not.toBe('');
+    expect(normalizeShortcut('os+k')).not.toBe('');
+  });
+
+  it('单字符主键统一转小写', () => {
+    // Caps Lock 打开时 event.key 是大写 'K'，绑定 'k' 仍要能命中。
+    expect(normalizeShortcut('K')).toBe('k');
+    expect(matchesShortcut(new KeyboardEvent('keydown', { key: 'K' }), 'k')).toBe(true);
+  });
+});
+
 describe('keyboardEventToShortcut', () => {
   it('captures space and modifier combinations', () => {
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: ' ' }))).toBe(' ');
@@ -90,6 +162,19 @@ describe('keyboardEventToShortcut', () => {
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true }))).toBeNull();
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Alt', altKey: true }))).toBeNull();
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true }))).toBeNull();
+  });
+
+  it('修饰键的顺序固定（ctrl → alt → shift → meta）', () => {
+    // 顺序变了，同一个物理按键组合就会存成不同的绑定串 ——
+    // 用户在设置页里改了键、再打开就发现对不上了。
+    const all = new KeyboardEvent('keydown', {
+      key: 'k',
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+      metaKey: true,
+    });
+    expect(keyboardEventToShortcut(all)).toBe('ctrl+alt+shift+meta+k');
   });
 });
 

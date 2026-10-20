@@ -92,7 +92,7 @@ describe('KeyboardController', () => {
     controller = new KeyboardController({
       getSettings: () => settings,
       // 默认「用户正在看的视频」就是那个 video；测「没有明确目标」那条时置 null。
-      getWatchedVideo: () => video,
+      getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
       isFullscreenActive: () => fullscreenActive,
       canToggleFullscreen,
       toggleFullscreen,
@@ -256,7 +256,7 @@ describe('KeyboardController', () => {
   it('页面伪造的键盘事件被完全放行', () => {
     controller = new KeyboardController({
       getSettings: () => settings,
-      getWatchedVideo: () => video,
+      getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
       isFullscreenActive: () => false,
       canToggleFullscreen,
       toggleFullscreen,
@@ -285,7 +285,7 @@ describe('KeyboardController', () => {
     // keydown 可信、keyup 不可信 —— 于是能验证「不可信的 keyup 被忽略」。
     controller = new KeyboardController({
       getSettings: () => settings,
-      getWatchedVideo: () => video,
+      getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
       isFullscreenActive: () => false,
       canToggleFullscreen,
       toggleFullscreen,
@@ -323,7 +323,7 @@ describe('KeyboardController', () => {
   it('没有明确目标时，所有快捷键都穿透给页面', () => {
     controller = new KeyboardController({
       getSettings: () => settings,
-      getWatchedVideo: () => null,
+      getWatchedTarget: () => null,
       isFullscreenActive: () => false,
       canToggleFullscreen,
       toggleFullscreen,
@@ -674,7 +674,7 @@ describe('KeyboardController', () => {
       const toggle = vi.fn(() => true);
       controller = new KeyboardController({
         getSettings: () => settings,
-        getWatchedVideo: () => video,
+        getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
         isFullscreenActive: () => false,
         canToggleFullscreen,
         toggleFullscreen: toggle,
@@ -720,10 +720,10 @@ describe('KeyboardController', () => {
     });
 
     it('不是我们快捷键的键根本不查视频', () => {
-      const getWatchedVideo = vi.fn(() => video);
+      const getWatchedTarget = vi.fn(() => (video ? { video, permission: 'full' as const } : null));
       controller = new KeyboardController({
         getSettings: () => settings,
-        getWatchedVideo,
+        getWatchedTarget,
         isFullscreenActive: () => false,
         canToggleFullscreen,
         toggleFullscreen,
@@ -736,7 +736,7 @@ describe('KeyboardController', () => {
       expect(controller.handleKeyDown(keyEvent('a'))).toBe(false);
       expect(controller.handleKeyDown(keyEvent('F5'))).toBe(false);
       expect(controller.handleKeyDown(keyEvent('Tab'))).toBe(false);
-      expect(getWatchedVideo).not.toHaveBeenCalled();
+      expect(getWatchedTarget).not.toHaveBeenCalled();
     });
   });
 
@@ -835,5 +835,58 @@ describe('KeyboardController', () => {
     // 吞掉键 = 用户看到「按了 → 什么都没发生，页面也没滚动」。
     // 直播流没法 seek，所以把键放回页面。
     expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+  });
+
+  /**
+   * 「部分接管」：视频可以调速/seek/全屏，但**空格必须还给页面**。
+   *
+   * 空格在页面上首先是「往下翻页」。用户在一篇长文里按空格，期望的是翻页，
+   * 而不是暂停页面里某个预览视频。注册表把这种视频标成 'no-space'，
+   * 键盘控制器只对**这一个键**让路 —— 其余键照常归我们。
+   */
+  describe('部分接管（no-space）', () => {
+    /** 造一个「只能吃下除空格以外所有键」的目标。 */
+    const useNoSpaceTarget = () => {
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedTarget: () => (video ? { video, permission: 'no-space' } : null),
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        isTrustedEvent: () => true,
+      });
+    };
+
+    it('空格放行给页面（用户要翻页）', () => {
+      useNoSpaceTarget();
+
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+    });
+
+    it('放行空格的**同时**不吞掉长按的重复事件', () => {
+      // 放过一次之后，浏览器长按会持续派发 repeat 事件。
+      // 如果那时我们把键吞了，页面就滚不动了 —— 那是「让路让一半」。
+      useNoSpaceTarget();
+
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+      const repeated = keyEvent(' ');
+      Object.defineProperty(repeated, 'repeat', { value: true, configurable: true });
+      expect(controller.handleKeyDown(repeated)).toBe(false);
+    });
+
+    it('其余键照常归我们（调速、seek、全屏都不放行）', () => {
+      useNoSpaceTarget();
+
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+      expect(showSpeedFeedback).toHaveBeenCalled();
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(true);
+
+      expect(controller.handleKeyDown(keyEvent('f'))).toBe(true);
+      expect(lastToggledVideo).toBe(video);
+    });
   });
 });

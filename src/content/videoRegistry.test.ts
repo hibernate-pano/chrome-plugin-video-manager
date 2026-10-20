@@ -29,6 +29,11 @@ const mockPlaying = (element: HTMLElement) => {
   Object.defineProperty(element, 'readyState', { value: 4, configurable: true });
 };
 
+/** 把一个「正在播」的视频改回暂停（模拟用户按了空格）。 */
+const mockPaused = (element: HTMLElement) => {
+  Object.defineProperty(element, 'paused', { value: true, configurable: true });
+};
+
 /**
  * 建一个注册表，并把「事件可信」判据放宽为恒真。
  *
@@ -620,13 +625,21 @@ describe('VideoRegistry：用户正在看的视频', () => {
   it('装饰性自动播放视频（autoplay + 静音 + 无 controls）不算「正在看的」', () => {
     // 这就是「文章里嵌的静音预览」的形状：浏览器只允许静音自动播，
     // 所以它一定静音；站点没给它 controls，说明没打算让用户操作它。
-    // 哪怕它铺满整个视口，也不该被接管。
+    //
+    // ⚠️ 尺寸为什么是 480×270（占 1024×768 视口的 14%）：
+    // 「装饰」这条判据现在还要求**它不是页面主角**（占视口 < 60%）。
+    // 曾经这条用例把预览做成 1920×1080（比整个视口还大），断言
+    // 「哪怕铺满视口也不该被接管」—— 那条断言本身是错的：
+    // 站点的**主播放器**常常正是「autoplay + 无 controls + 占满大半个视口」
+    // 的形状（实测 iQiyi 首页：1353×671 / 1440×900 = 70.1%），
+    // 按那条断言，iQiyi 上整个扩展等于没装（按 = / Space / f 全部无反应）。
+    // 「占满大半个视口 = 页面主角」这条豁免另有用例守着。
     const registry = createRegistry();
     const preview = withLayout(appendVideo('preview'));
     preview.setAttribute('autoplay', '');
     preview.setAttribute('muted', '');
     mockPlaying(preview);
-    mockRect(preview, 1920, 1080, 0, 0);
+    mockRect(preview, 480, 270, 0, 0);
 
     expect(registry.getWatchedVideo(), '装饰性自动播放视频不该被接管').toBeNull();
 
@@ -701,14 +714,24 @@ describe('VideoRegistry：用户正在看的视频', () => {
   });
 
   it('竖屏短视频（9:16）在宽屏上也算「正在看的」', () => {
-    // 竖屏视频的宽天然小，「宽 ≥ 480」那条线永远过不了；
-    // 而 400×711 在 2560×1440 里只占 7.7%，比例线也过不了 ——
-    // 两条线都不过的话，用户看竖屏视频时快捷键完全失灵。
+    // 竖屏视频的宽天然小（405px），比例线在 2560×1440 上只有 7.7% ——
+    // 只看比例的话，用户看竖屏视频时快捷键完全失灵。
+    // 现在靠的是**绝对线**：405 ≥ 400、720 ≥ 225 → 够格。
+    //
+    // ⚠️ 曾经还有一条独立的「竖屏短边 ≥ 400」规则专门管这件事；
+    // 绝对线降到 400×225 之后它变成了恒被覆盖的重复规则，已删除。
+    // 这条用例现在守的是「竖屏视频在宽屏上照样被接管」这个**结果**。
     const registry = createRegistry();
     simulateViewport(2560, 1440);
 
     const vertical = withLayout(appendVideo('vertical'));
     mockRect(vertical, 405, 720, 0, 0);
+
+    // 前置条件：比例线单独不够（绝对线才是它过线的原因）。
+    expect(
+      (405 * 720) / (2560 * 1440),
+      '前置条件：405×720 在 2560×1440 里占 7.7%，低于相对线 10%',
+    ).toBeLessThan(0.1);
 
     expect(registry.getWatchedVideo()?.id).toBe('vertical');
 
@@ -936,11 +959,15 @@ describe('VideoRegistry：用户正在看的视频', () => {
     registry.stop();
   });
 
-  it('用户选过但已经暂停的小视频：10 秒窗口过了就不算「正在看的」', () => {
-    // 上面那条的**反向守卫**：区分两档靠的正是「还在播」这个条件。
+  it('用户显式点过、但已经暂停的小视频：60 秒内仍然算「正在看的」', () => {
+    // 「被选过」的新鲜度**独立于播放状态**。
     //
-    // 如果新加的那一档写成「用户选过就算」（不看播放状态），
-    // 那这条会挂 —— 它守住的是「窗口过期后，仅凭『选过』不足以接管」。
+    // 实测（课程页）：点侧边那个 320×180 的小窗 → `=` 命中小窗 ✓；
+    // 11 秒后再按 `=` → 目标却跳回了大播放器 ✗。
+    //
+    // 根因：原来只有两档 —— 「10 秒内选过」与「选过且还在播（60 秒）」。
+    // 被暂停的小窗**永远**不满足后者，于是 10 秒一过就彻底失灵。
+    // 现在多了一档「用户显式选过它（60 秒内，暂停也算）」。
     const registry = createRegistry();
     registry.start();
 
@@ -956,10 +983,25 @@ describe('VideoRegistry：用户正在看的视频', () => {
       now.mockReturnValue(base + 9_000);
       expect(registry.getWatchedVideo()?.id).toBe('paused');
 
-      now.mockReturnValue(base + 11_000);
+      // 16 秒：10 秒那一档已经过期，但「显式选过（60 秒）」这一档接手。
+      //
+      // ⚠️ 为什么不是 11 秒：快捷键路径的缓存有 5 秒有效期，
+      // +9 秒那次查询把结果缓存住了 —— 再往后 5 秒内的查询**直接返回缓存**，
+      // 根本没重新走判定。于是「11 秒」这个断言是**恒真的假守卫**
+      // （把 60 秒窗口改成 10 秒它照样绿）。
+      // +16 秒已经过了缓存期，判定真的重跑一遍。
+      // 真实浏览器里「11 秒」那个场景由 E2E 用例守。
+      now.mockReturnValue(base + 16_000);
+      expect(
+        registry.getWatchedVideo()?.id,
+        '用户显式点过、暂停着的小视频，十几秒后仍必须是被接管的目标',
+      ).toBe('paused');
+
+      // 60 秒窗口也过了 —— 它彻底掉出所有规则。
+      now.mockReturnValue(base + 61_000);
       expect(
         registry.getWatchedVideo(),
-        '暂停的小视频在窗口过期后不该被接管',
+        '60 秒之后不该再靠「用户选过」这一档',
       ).toBeNull();
     } finally {
       vi.restoreAllMocks();
@@ -1024,6 +1066,563 @@ describe('VideoRegistry：用户正在看的视频', () => {
     ).toBe('player');
 
     registry.setFullscreenVideo(null);
+    registry.stop();
+  });
+});
+
+/**
+ * 6.0.9 审计第二轮的接管规则修复。
+ *
+ * 这一组用例守的是「什么时候可以接管一个视频」这套判定本身。
+ * 上一轮把它写成了「autoplay 属性 + 没有 controls → 装饰」，
+ * 于是 iQiyi 首页的主播放器（实测 1353×671 / 1440×900 = 70.1%，
+ * autoplay + 无 controls）被判成装饰，**整页放弃接管** ——
+ * 实测按 `=` / `Space` / `f` 全部无反应，扩展等于没装。
+ *
+ * 现在的判据是**证据**而不是属性：
+ *   站点点名的主播放器 / 用户碰过它 / 它有原生 controls / 它不是页面主角
+ * —— 四条都不成立才判装饰。
+ */
+describe('VideoRegistry：接管规则（证据分层）', () => {
+  const VIEWPORT_WIDTH = 1024;
+  const VIEWPORT_HEIGHT = 768;
+
+  const simulateViewport = (width: number, height: number) => {
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      value: width,
+      configurable: true,
+    });
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      value: height,
+      configurable: true,
+    });
+    Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    simulateViewport(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+  });
+
+  afterEach(() => {
+    delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
+    delete (document.documentElement as unknown as Record<string, unknown>).clientHeight;
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    vi.restoreAllMocks();
+  });
+
+  const withLayout = (video: HTMLVideoElement) => {
+    video.style.display = 'block';
+    return video;
+  };
+
+  it('P0-1：占满大半个视口的 autoplay 无 controls 视频：那是页面主角，必须接管', () => {
+    // iQiyi 首页主播放器的真实形状（实测，真实 Chromium）：
+    //   <video class="full" autoplay muted>，1353×671，视口 1440×900 → 70.1%。
+    // 它与文章页里的装饰性预览在 DOM 上**一模一样**（autoplay + 无 controls），
+    // 唯一的区别就是它占满了大半个屏幕 —— 装饰性预览从来不会那样。
+    simulateViewport(1440, 900);
+
+    const registry = createRegistry();
+    const main = withLayout(appendVideo('main'));
+    main.setAttribute('autoplay', '');
+    main.setAttribute('muted', '');
+    mockPlaying(main);
+    mockRect(main, 1353, 671, 0, 0);
+
+    // 前置条件：确实过了「页面主角」那条线。
+    expect(
+      (1353 * 671) / (1440 * 900),
+      '前置条件：主播放器占视口 70.1%，应 ≥ 60%',
+    ).toBeGreaterThanOrEqual(0.6);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      'iQiyi 主播放器的形状必须被接管，否则扩展等于没装',
+    ).toBe('main');
+
+    registry.stop();
+  });
+
+  it('P0-1：站点点名的主播放器（爱奇艺）：又小又是 autoplay 无 controls 也要接管', () => {
+    // 上一条靠的是「占满视口」；这条靠的是**站点自己点名** ——
+    // 后者与尺寸无关，所以小尺寸也照样接管。
+    adapterHost.hostname = 'www.iqiyi.com';
+
+    const registry = createRegistry();
+    const container = document.createElement('div');
+    container.className = 'iq-player-cont';
+    const main = document.createElement('video');
+    main.id = 'main';
+    container.append(main);
+    document.body.append(container);
+
+    main.setAttribute('autoplay', '');
+    mockPlaying(main);
+    mockRect(main, 320, 180, 0, 0);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '站点点名的主播放器不该被当成装饰视频',
+    ).toBe('main');
+
+    registry.stop();
+  });
+
+  it('P0-2：shadow DOM 里的播放器必须被接管', () => {
+    // `Document.contains()` **不穿透 shadow tree** —— 用它判「还挂在文档里」
+    // 会把 shadow DOM 里的每一个 <video> 都判成「已从文档移除」。
+    //
+    // 实测（真实 Chromium）：960×540、带 controls 的 shadow-DOM 播放器 →
+    // 按 `=` / `ArrowRight` / `f` 三个键全部无效。
+    const registry = createRegistry();
+    registry.start();
+
+    const host = document.createElement('div');
+    document.body.append(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const video = document.createElement('video');
+    video.id = 'shadow-player';
+    shadow.append(video);
+    withLayout(video);
+    video.setAttribute('controls', '');
+    mockRect(video, 960, 540, 0, 0);
+
+    // 前置条件：旧判据（ownerDocument.contains）会把它误杀。
+    expect(
+      document.contains(video),
+      '前置条件：Document.contains 不穿透 shadow tree',
+    ).toBe(false);
+    expect(video.isConnected, '前置条件：原生 isConnected 对 shadow DOM 是对的').toBe(true);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      'shadow DOM 里的播放器必须能被接管',
+    ).toBe('shadow-player');
+
+    registry.stop();
+  });
+
+  it('P1-1：站点用 JS 启动的预览视频（没有 autoplay 属性）仍然不被接管', () => {
+    // 文章页里那种预览是站点用 `video.play()` 起的 —— DOM 上**没有**
+    // `autoplay` 属性。老判据把「有 autoplay 属性」当硬前提，于是它绕过了
+    // 装饰性判定，靠「可见 + 在视口 + 够大」被接管：
+    // 实测按 Space 键被吞（页面完全没收到，翻不了页），按 `=` 改成 1.1x，
+    // 按 `f` 被拉进全屏。
+    //
+    // 现在「站点自己开的」有两条证据：autoplay 属性，或**站点调 play()**。
+    const registry = createRegistry();
+    registry.start();
+
+    const preview = withLayout(appendVideo('preview'));
+    mockRect(preview, 900, 506, 0, 0);
+
+    // 站点自己把预览播起来了（没有任何用户手势做背景）。
+    preview.dispatchEvent(new Event('play', { bubbles: true }));
+
+    expect(
+      registry.getWatchedVideo(),
+      '站点用 JS 启动的预览视频不该被接管',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  it('P1-1：空格许可 —— 暂停着、没人开过、没有 controls 的视频，空格放行给页面', () => {
+    // 空格在页面上首先是「往下翻页」。用户在一篇长文里按空格，
+    // 期望的是翻页而不是暂停页面里某个预览视频。
+    const registry = createRegistry();
+    registry.start();
+
+    const preview = withLayout(appendVideo('preview'));
+    mockRect(preview, 900, 506, 0, 0);
+
+    const target = registry.getWatchedTarget();
+    expect(target?.video.id).toBe('preview');
+    expect(
+      target?.permission,
+      '暂停着、没人开过、无 controls 的视频不该抢空格键',
+    ).toBe('no-space');
+
+    registry.stop();
+  });
+
+  it('P1-1：空格许可 —— 站点主播放器 / 有 controls / 正在播 → 空格归我们', () => {
+    const registry = createRegistry();
+    registry.start();
+
+    const playing = withLayout(appendVideo('playing'));
+    mockPlaying(playing);
+    mockRect(playing, 900, 506, 0, 0);
+    expect(
+      registry.getWatchedTarget()?.permission,
+      '正在播的视频可以由空格接管',
+    ).toBe('full');
+
+    const withControls = withLayout(appendVideo('with-controls'));
+    withControls.setAttribute('controls', '');
+    mockRect(withControls, 900, 506, 0, 0);
+    expect(
+      registry.getWatchedTarget()?.permission,
+      '有原生 controls 的播放器可以由空格接管',
+    ).toBe('full');
+
+    registry.stop();
+  });
+
+  it('P1-3：键盘命中一个视频后，后续按键跟着它走', () => {
+    // 「正在播 +600」这一档会让目标**漂移**：用户刚用空格暂停了 A，
+    // A 立刻失去 600 分，还在播的 B 变成最高分，下一次按键就打到 B 身上。
+    //
+    // 实测：两个 600×338 同时在播 → `=` 命中 cam1 → 空格暂停 cam1 →
+    // `f` 却把 cam2 搬进了全屏；四个同时在播 → 连按 4 次空格依次暂停了四个。
+    const registry = createRegistry();
+    registry.start();
+
+    const cam1 = withLayout(appendVideo('cam1'));
+    const cam2 = withLayout(appendVideo('cam2'));
+    mockRect(cam1, 600, 338, 0, 0);
+    mockRect(cam2, 600, 338, 0, 400);
+    mockPlaying(cam1);
+    mockPlaying(cam2);
+
+    const base = Date.now();
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(base);
+      expect(registry.getWatchedVideo()?.id, '第一下应命中 cam1').toBe('cam1');
+
+      // 用户按空格把 cam1 暂停了 → 它失去「正在播 +600」。
+      mockPaused(cam1);
+
+      // 缓存有 5 秒有效期；时间往前推，让它过期后重新计算。
+      now.mockReturnValue(base + 6_000);
+      expect(
+        registry.getWatchedVideo()?.id,
+        '键盘刚命中过的视频必须继续当目标，不能漂到 cam2',
+      ).toBe('cam1');
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    registry.stop();
+  });
+
+  it('P1-4：用户选过、但已经滚走的视频不再被接管', () => {
+    // 竖屏 feed：点第 1 条 → 滚到第 2 条（第 1 条仍在后台播放、
+    // 可见度 0）。老规则里「选过 + 还在播（60 秒）」让旧视频长期霸占
+    // 「用户正在看的」身份，快捷键继续打在已经滚走的视频上。
+    const registry = createRegistry();
+    registry.start();
+
+    const first = withLayout(appendVideo('first'));
+    mockRect(first, 405, 720, 0, 0);
+    first.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+    // 用户滚到了下一条。
+    mockRect(first, 405, 720, 5000, 0);
+    const second = withLayout(appendVideo('second'));
+    mockRect(second, 405, 720, 0, 0);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '快捷键必须落在当前在视口里的那条视频上',
+    ).toBe('second');
+
+    registry.stop();
+  });
+
+  it('P2-1：站点主播放器完全滚出视口后，不再独占全部按键', () => {
+    // YouTube watch 页滚到 4000px（播放器 top = -1750）→ 按 `=` 改的是
+    // 看不见的主播放器。老规则第 2 层「站点点名的主播放器 → 直接短路」，
+    // 排在所有可见性判据之前。
+    adapterHost.hostname = 'www.youtube.com';
+
+    const registry = createRegistry();
+    const main = withLayout(appendVideo('main', 'html5-main-video'));
+    main.setAttribute('autoplay', '');
+    mockPlaying(main);
+    mockRect(main, 1280, 720, -1750, 0);
+
+    expect(
+      registry.getWatchedVideo(),
+      '主播放器滚出视口后不该再被接管',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  it('P2-2：站点自己播的小预览窗（占视口 15%）不被接管', () => {
+    // 真实 YouTube 搜索页 hover 出来的 YTD-VIDEO-PREVIEW（504×283），
+    // 老规则按「宽 ≥ 480 且高 ≥ 270」放行，于是它被接管并被拉进全屏，
+    // 真正的（0×0 的）主播放器被忽略。
+    const registry = createRegistry();
+    registry.start();
+
+    const preview = withLayout(appendVideo('preview'));
+    mockRect(preview, 504, 283, 0, 0);
+    preview.dispatchEvent(new Event('play', { bubbles: true }));
+
+    expect(
+      registry.getWatchedVideo(),
+      'hover 预览这种小窗不该被接管',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  it('P2-3：铺满全屏的竖屏 feed（autoplay + 无 controls）必须被接管', () => {
+    // 405×720 的竖屏短视频铺满整个视口（实测：按 = / ArrowRight / Space /
+    // f / 0 全部穿透给页面，倍速不变、无全屏）。
+    //
+    // 修法与 P0-1 同源：装饰性预览永远不会占满整屏。
+    simulateViewport(405, 720);
+
+    const registry = createRegistry();
+    const feed = withLayout(appendVideo('feed'));
+    feed.setAttribute('autoplay', '');
+    mockPlaying(feed);
+    mockRect(feed, 405, 720, 0, 0);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '铺满全屏的竖屏短视频必须被接管',
+    ).toBe('feed');
+
+    registry.stop();
+  });
+
+  it('P2-7：400×225 的小播放器够格被接管', () => {
+    // 站点自己的迷你播放器常常正好 400×225：绝对线（480×270）差得远，
+    // 相对线（10%）在 1280×720 里只占 9.8% —— 就差一点点，两条线都不过。
+    //
+    // ⚠️ 视口必须是 1280×720：换成 1024×768 的话 400×225 占 11.4%，
+    // 相对线单独就放行了，这条用例就**不再守绝对线** —— 把绝对线改回
+    // 480×270 它照样绿（守卫生了壳）。9.8% < 10% 时，只有绝对线能救它。
+    simulateViewport(1280, 720);
+    const registry = createRegistry();
+    const mini = withLayout(appendVideo('mini'));
+    mini.setAttribute('controls', '');
+    mockRect(mini, 400, 225, 0, 0);
+
+    // 前置条件：相对线单独不够，绝对线才是它过线的原因。
+    expect(
+      (400 * 225) / (1280 * 720),
+      '前置条件：400×225 在 1280×720 里占 9.8%，低于相对线 10%',
+    ).toBeLessThan(0.1);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '400×225 的播放器不该被尺寸线挡下来',
+    ).toBe('mini');
+
+    registry.stop();
+  });
+
+  it('P2-8：不是 YouTube 的域名拿不到 YouTube 的主播放器豁免', () => {
+    // siteAdapters 曾经用 `hostname.includes('youtube.com')` ——
+    // 于是 notyoutube.com 这类域名也拿到了 mainSelectors 豁免。
+    // 键盘控制器那边用的是严格后缀正则，两处不一致。
+    adapterHost.hostname = 'notyoutube.com';
+
+    const registry = createRegistry();
+    const video = withLayout(appendVideo('video', 'html5-main-video'));
+    video.setAttribute('autoplay', '');
+    mockPlaying(video);
+    mockRect(video, 240, 135, 0, 0);
+
+    expect(
+      registry.getWatchedVideo(),
+      '伪装成 YouTube 的域名不该拿到主播放器豁免',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  it('被我们接管的全屏视频（键盘还没碰过它）：controls 被我们自己弄掉也不算「装饰视频」', () => {
+    // 上一条走的是**键盘**路径（视频已经是键盘目标，于是「键盘命中过」
+    // 那条证据先把它保住了）。这条走**工具栏图标**那条路径 ——
+    // 用户点图标进全屏，键盘从来没碰过它。
+    //
+    // 于是「我们接管着的」这条豁免是**唯一**能救它的东西：
+    // 进全屏时我们把 video.controls = false（换成自制控制条），
+    // controls 属性被摘掉之后，它在 DOM 上就长得跟装饰性预览一模一样了。
+    // 没有这条豁免：进全屏后按 `=` 速度纹丝不动。
+    const registry = createRegistry();
+
+    const player = withLayout(appendVideo('player'));
+    player.setAttribute('autoplay', '');
+    mockPlaying(player);
+    mockRect(player, 800, 450, 0, 0);
+
+    // 我们接管它 → controls 属性被我们自己弄掉。
+    player.removeAttribute('controls');
+    registry.setFullscreenVideo(player);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '我们接管着的视频不该被误判成装饰视频（哪怕键盘还没碰过它）',
+    ).toBe('player');
+
+    registry.setFullscreenVideo(null);
+    registry.stop();
+  });
+
+  it('P1-3：键盘命中过的视频不会被当成装饰（站点后来自己播了它也一样）', () => {
+    // 没有原生 controls 的自定义播放器（不少站点自己画控制条），
+    // 站点一旦调 play() 把它播起来，「站点自己开的」那条证据就成立 ——
+    // 它会被判成「装饰性预览」而丢掉，可用户明明正在用快捷键调它。
+    //
+    // 这条证据必须单独记（keyboardTargetVideo），不能靠 userTouchedVideos
+    // 顺带提供 —— 后者的语义是「用户的手碰过它」。
+    const registry = createRegistry();
+    registry.start();
+
+    const custom = withLayout(appendVideo('custom'));
+    mockRect(custom, 800, 450, 0, 0);
+
+    // 用户按了 `=`：键盘命中它（此刻它暂停着、没人开过）。
+    expect(registry.getWatchedTarget()?.video.id).toBe('custom');
+
+    // 随后站点自己把它播了起来（没有任何用户手势做背景）。
+    custom.dispatchEvent(new Event('play', { bubbles: true }));
+
+    // ⚠️ 必须越过缓存有效期（5 秒）才会真的重新判定 ——
+    // 否则读到的是上一次查询的缓存，这条用例就成了恒真的假守卫。
+    const base = Date.now();
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(base + 6_000);
+      expect(
+        registry.getWatchedTarget()?.video.id,
+        '用户正在用快捷键操作的视频，不能因为站点自己播了它就被当成装饰丢掉',
+      ).toBe('custom');
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    registry.stop();
+  });
+
+  it('性能：连续调用只扫一次页面（缓存命中）', () => {
+    // 每次按键都全页扫一遍 DOM 代价不小（实测 3 万节点的页面单次约 3.2ms，
+    // 而扩展注入在 <all_urls>、长按加速时每 120ms 一次）。
+    const registry = createRegistry();
+    registry.start();
+
+    const video = withLayout(appendVideo('only'));
+    mockRect(video, 640, 360, 0, 0);
+
+    const querySelectorAll = vi.spyOn(document, 'querySelectorAll');
+    expect(registry.getWatchedVideo()?.id).toBe('only');
+    const scansAfterFirstCall = querySelectorAll.mock.calls.length;
+    expect(scansAfterFirstCall, '前置条件：第一次调用确实扫了页面').toBeGreaterThan(0);
+
+    for (let index = 0; index < 20; index += 1) {
+      expect(registry.getWatchedVideo()?.id).toBe('only');
+    }
+
+    expect(
+      querySelectorAll.mock.calls.length,
+      '缓存命中时不该再扫页面',
+    ).toBe(scansAfterFirstCall);
+
+    registry.stop();
+  });
+
+  it('性能：页面上没有视频时，null 结果也被缓存（不再重复扫描）', () => {
+    const registry = createRegistry();
+    registry.start();
+
+    const querySelectorAll = vi.spyOn(document, 'querySelectorAll');
+    expect(registry.getWatchedVideo()).toBeNull();
+    const scansAfterFirstCall = querySelectorAll.mock.calls.length;
+
+    for (let index = 0; index < 20; index += 1) {
+      expect(registry.getWatchedVideo()).toBeNull();
+    }
+
+    expect(
+      querySelectorAll.mock.calls.length,
+      '「页面上没有视频」是最常见的情况，必须缓存住',
+    ).toBe(scansAfterFirstCall);
+
+    registry.stop();
+  });
+
+  it('性能：视频出现之后能及时被发现（缓存必须失效）', async () => {
+    const registry = createRegistry();
+    registry.start();
+
+    expect(registry.getWatchedVideo()).toBeNull();
+
+    const late = withLayout(appendVideo('late'));
+    mockRect(late, 640, 360, 0, 0);
+
+    // MutationObserver 只置脏标记，等它这一轮微任务回调落地。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '缓存不能把新出现的视频挡住（否则按了键没反应）',
+    ).toBe('late');
+
+    registry.stop();
+  });
+
+  it('性能：shadow DOM 里的视频被摘掉之后也要及时被发现', async () => {
+    // ⚠️ 为什么这条不能省：MutationObserver 挂在 document.body 上、
+    // subtree: true —— 但 **shadow tree 是另一棵树**，document 上的观察器
+    // 收不到 shadow root 里的增删。于是「DOM 变更代次」不会前进，
+    // 缓存也不会失效 —— 唯一能认出「它已经被摘掉了」的是**存活检查**
+    // （命中缓存前重新确认目标还挂在文档里）。
+    //
+    // 少了这条，摘掉 shadow 里的视频之后，快捷键还会打在那个已经不在
+    // 页面上的视频上（按 `=` 没反应，因为视频节点已经没了）。
+    const registry = createRegistry();
+    registry.start();
+
+    const host = document.createElement('div');
+    document.body.append(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const video = document.createElement('video');
+    video.id = 'shadow-video';
+    shadow.append(video);
+    withLayout(video);
+    mockRect(video, 640, 360, 0, 0);
+
+    expect(registry.getWatchedVideo()?.id).toBe('shadow-video');
+
+    video.remove();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      registry.getWatchedVideo(),
+      '缓存不能返回一个已经被摘掉的视频',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  it('性能：视频消失之后能及时被发现（缓存必须失效）', async () => {
+    const registry = createRegistry();
+    registry.start();
+
+    const only = withLayout(appendVideo('only'));
+    mockRect(only, 640, 360, 0, 0);
+    expect(registry.getWatchedVideo()?.id).toBe('only');
+
+    only.remove();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      registry.getWatchedVideo(),
+      '缓存不能返回一个已经被摘掉的视频',
+    ).toBeNull();
+
     registry.stop();
   });
 });

@@ -10,7 +10,7 @@
     "message": "恢复默认"
   },
   "optPressKey": {
-    "message": "按下按键"
+    "message": "按下要绑定的键"
   },
   "optSaved": {
     "message": "已保存"
@@ -22,10 +22,8 @@
     "message": "有按键被重复绑定，每个动作必须不同"
   },
   "optReserved": {
-    "message": "与浏览器快捷键冲突，可能被浏览器优先处理"
-  },
-  "optFixDuplicate": {
-    "message": "请先修正重复的按键"
+    "message": "这个键被浏览器占用，换一个",
+    "description": "Blocking error for a shortcut the browser reserves"
   },
   "actionIncrease": {
     "message": "加速"
@@ -160,5 +158,43 @@
   },
   "noticeNoVideo": {
     "message": "这个页面里没有视频"
+  },
+  "extensionDescription": {
+    "message": "极简的键盘快捷键与干净的网页全屏播放器，只接管你正在看的那个视频",
+    "description": "Extension description shown in the Chrome Web Store and chrome://extensions"
+  },
+  "optDisabled": {
+    "message": "未绑定（已禁用）",
+    "description": "Placeholder shown when an action has no shortcut"
+  },
+  "optUnsaved": {
+    "message": "有未保存的更改",
+    "description": "Status line shown while the form differs from the saved shortcuts"
+  },
+  "optRestored": {
+    "message": "已恢复默认",
+    "description": "Status line shown after \"Restore defaults\" was written to storage"
+  },
+  "optSelfConflict": {
+    "message": "这个键是扩展自己的命令，换一个",
+    "description": "Blocking error for a shortcut that collides with the extension's own command"
+  },
+  "optTipsToolbar": {
+    "message": "点击工具栏图标可切换网页全屏",
+    "description": "Options page hint: the toolbar icon toggles fullscreen"
+  },
+  "optTipsOptions": {
+    "message": "按 $1 打开设置页",
+    "description": "Options page hint: the shortcut that opens the settings page",
+    "placeholders": {
+      "shortcut": {
+        "content": "$1",
+        "example": "Ctrl+Shift+,"
+      }
+    }
+  },
+  "hintToolbar": {
+    "message": "点扩展图标可进入网页全屏",
+    "description": "First-run hint: the toolbar icon toggles page fullscreen"
   }
 }

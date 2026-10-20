@@ -57,6 +57,14 @@ export const createChromeMock = (options: ChromeMockOptions = {}): ChromeMock =>
         manifest_version: 3,
         name: 'Video Speed Controller — Fullscreen & Keys',
         version: options.version ?? '0.0.0-test',
+        // 与 manifest.json 一致：设置页要拿它做**自冲突**检查
+        // （扩展自己的命令键不能同时绑给某个动作）。
+        commands: {
+          'open-options': {
+            suggested_key: { default: 'Ctrl+Shift+Comma' },
+            description: '__MSG_commandOpenOptions__',
+          },
+        },
       }),
     },
     // 设置页读 __vscLocale 这个语言标记键来对齐 <html lang>。

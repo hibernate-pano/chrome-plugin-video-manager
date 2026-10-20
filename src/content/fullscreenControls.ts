@@ -33,12 +33,56 @@ const SEEK_PIN_TIMEOUT = 3000;
  */
 const SPEED_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
+/**
+ * 进度条滑块的步长（秒）。
+ *
+ * 与全局快进快捷键一致（shared/types.ts 的 SEEK_STEP_SECONDS = 5）：
+ * 早先这里是 0.1，于是「聚焦进度条按方向键」只挪 0.1 秒，
+ * 而不聚焦时按同一个键却快进 5 秒 —— 同一个产品里两套步长。
+ */
+const PROGRESS_STEP_SECONDS = 5;
+
+/**
+ * PageUp / PageDown 在进度条上跳的秒数。
+ *
+ * ⚠️ 原生 range 控件的 PageUp/PageDown 是按**范围的百分比**跳的
+ * （实测 max=7200 时一次跳 720 秒 = 10%）—— 两小时的视频一次就跳 12 分钟，
+ * 完全不像「翻一页」。这里改成固定秒数。
+ */
+const PROGRESS_PAGE_SECONDS = 30;
+
+/**
+ * 音量滑块的步长。
+ *
+ * 0.01（1%）太小：长按方向键几乎看不出变化。0.05（5%）是常见的粒度。
+ */
+const VOLUME_STEP = 0.05;
+
+/**
+ * 字幕底边与控制条顶边之间至少留出的间隙（px）。
+ *
+ * 不是 0：贴着控制条上沿的字幕仍会被渐变的最上沿压到一点。
+ */
+const SUBTITLE_CLEARANCE_GAP = 4;
+
+/**
+ * 控制条的图标。
+ *
+ * ⚠️ 播放/暂停、静音/取消静音是**两个图标叠在一起**，靠 class 切换显示
+ * 哪一个 —— 不能用 innerHTML 换。
+ *
+ * 原因（实测 Chromium）：innerHTML 换掉按钮里的 SVG 后，光标下的元素变了，
+ * 浏览器会在**光标不动**的情况下重新派发 mouseover/mouseenter；
+ * 控制条的 mouseenter 处理器会取消待触发的隐藏计时器，
+ * 而光标没动就没有 pointermove 来重新计时 —— 控制条从此永远不再自动隐藏。
+ * （实测：点一次播放按钮，控制条再也不消失。）
+ */
 const ICONS = {
-  play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',
-  pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>',
-  volume: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l4 3V6L7 9z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a8.5 8.5 0 0 1 0 12"/></svg>',
-  muted: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l4 3V6L7 9z"/><path d="M16 10l5 5"/><path d="M21 10l-5 5"/></svg>',
-  exit: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4v6H4"/><path d="M14 4v6h6"/><path d="M10 20v-6H4"/><path d="M14 20v-6h6"/></svg>',
+  play: '<svg class="icon icon--play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>',
+  pause: '<svg class="icon icon--pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>',
+  volume: '<svg class="icon icon--volume" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l4 3V6L7 9z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 6a8.5 8.5 0 0 1 0 12"/></svg>',
+  muted: '<svg class="icon icon--muted" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l4 3V6L7 9z"/><path d="M16 10l5 5"/><path d="M21 10l-5 5"/></svg>',
+  exit: '<svg class="icon icon--exit" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4v6H4"/><path d="M14 4v6h6"/><path d="M10 20v-6H4"/><path d="M14 20v-6h6"/></svg>',
 };
 
 /** 秒 -> "1:05" / "1:02:03"；不可用时返回 "--:--"。 */
@@ -66,7 +110,12 @@ interface ControlsElements {
   exitButton: HTMLButtonElement;
   progress: HTMLInputElement;
   volume: HTMLInputElement;
+  /** 时间标签整体（"0:30 / 2:00"）。 */
   time: HTMLSpanElement;
+  /** 时间标签里的「当前时间」部分：宽度必须固定，否则控制条会横向抖动。 */
+  timeNow: HTMLSpanElement;
+  /** 时间标签里的「总时长」部分。 */
+  timeTotal: HTMLSpanElement;
   /** 倍速徽标：同时是档位菜单的触发器。 */
   speed: HTMLButtonElement;
   /** 倍速徽标外面那层（定位菜单用）。 */
@@ -118,13 +167,38 @@ export class FullscreenControls {
   private pendingSeekTimer: number | null = null;
   /** 档位菜单是否开着。开着时控制条不能因为 idle 计时器消失。 */
   private menuOpen = false;
+  /**
+   * 当前给字幕加的位移（px，向下为正）。
+   *
+   * 必须自己记着：字幕元素的 getBoundingClientRect() 里**已经含**了这份位移，
+   * 想知道字幕「自然位置」的底边就得把它加回去。
+   */
+  private subtitleOffset = 0;
+  /**
+   * 滑块上一次的变更是不是**键盘**驱动的。
+   *
+   * `change` 事件分不出来源（键盘调滑块同样会触发它），但「键盘驱动」
+   * 这件事可以自己听见：滑块上的 keydown 就是证据。
+   *
+   * 有了它，键盘用户每按一次方向键就不会被甩掉焦点 ——
+   * 没有焦点就没有按键重复（长按方向键只动一下），焦点环也会消失。
+   */
+  private sliderKeyboardDriven = false;
   /** focusFirst() 之前的焦点，unmount 时还回去。 */
   private previousFocus: HTMLElement | null = null;
   private readonly boundPointerMove = () => this.show();
   /** 任何按键都唤醒控制条 —— 纯键盘用户没有鼠标可动。 */
   private readonly boundHandleKeyWake = () => this.show();
   private readonly boundScheduleHide = () => this.scheduleHide();
-  private readonly boundKeepVisible = () => this.cancelHide();
+  /**
+   * 指针移入控制条：**重新计时**，不是取消计时。
+   *
+   * ⚠️ 这里不能是 cancelHide()：Chromium 在光标不动的情况下也会重新派发
+   * mouseenter（图标被 innerHTML 换掉之后光标下的元素变了），
+   * 一旦把待触发的计时器取消掉，光标不动就没有 pointermove 来重新计时 ——
+   * 控制条从此**永远**不再自动隐藏。
+   */
+  private readonly boundKeepVisible = () => this.scheduleHide();
   private readonly boundHandlePointerUp = () => {
     this.draggingProgress = false;
   };
@@ -184,16 +258,27 @@ export class FullscreenControls {
    * 用 `transform: translateY()` 而不是改布局属性：位移不影响布局，
    * 退出全屏时撤销 transform 即可完整还原。
    */
-  private setSubtitleOffset(pixels: number) {
-    for (const layer of this.subtitleLayers) {
+  /** 把位移写给一批字幕层。还原逻辑放在 subtitleOffset 里：它记得站点自己
+   * 写在字幕上的 transform，撤位移时**只撤我们加的那部分**。 */
+  private applySubtitleOffset(layers: OverlayLayer[], pixels: number) {
+    for (const layer of layers) {
       if (!layer.element.isConnected) {
         continue;
       }
 
-      // 还原逻辑放在 subtitleOffset 里：它记得站点自己写在字幕上的 transform，
-      // 撤位移时**只撤我们加的那部分**，不会把站点的位移一起抹掉。
       setSubtitleOffset(layer.element, pixels);
     }
+  }
+
+  private setSubtitleOffset(pixels: number) {
+    // 位移没变就别再写 DOM：写一次 transform 就让浏览器重排一次，
+    // 而 show() 是被 pointermove 驱动的（每秒能触发几十次）。
+    if (pixels === this.subtitleOffset) {
+      return;
+    }
+
+    this.subtitleOffset = pixels;
+    this.applySubtitleOffset(this.subtitleLayers, pixels);
   }
 
   /**
@@ -204,6 +289,12 @@ export class FullscreenControls {
    * 只存引用不生效的话，字幕会一直压在控制条底下。
    */
   setSubtitleLayers(layers: OverlayLayer[]) {
+    // 新层还没被我们位移过：先把旧层上的位移撤掉、记账归零，
+    // 「自然位置」的算法（rect.bottom + 当前位移）才成立。
+    if (this.subtitleLayers.length > 0) {
+      this.applySubtitleOffset(this.subtitleLayers, 0);
+    }
+    this.subtitleOffset = 0;
     this.subtitleLayers = layers;
 
     const root = this.elements?.root;
@@ -212,17 +303,70 @@ export class FullscreenControls {
     }
   }
 
-  /** 控制条可见时字幕需要上抬的高度（控制条高度 + 一点余量）。 */
-  private getSubtitleClearance(): number {
+  /**
+   * 控制条的上边缘（视口坐标）。
+   *
+   * ⚠️ 不用 getBoundingClientRect().top：控制条淡入时有 180ms 的
+   * translateY 过渡，动画进行中量到的是**动画中途**的位置，会差 8px。
+   * offsetHeight 与 innerHeight 给的是**布局值**，与动画无关。
+   */
+  private getBarTopEdge(): number {
     const root = this.elements?.root;
     if (!root) {
+      return Number.NaN;
+    }
+
+    // jsdom 没有布局引擎：offsetHeight 恒为 0 —— 此时没有可用的上边缘。
+    const height = root.offsetHeight;
+    if (!height) {
+      return Number.NaN;
+    }
+
+    return window.innerHeight - height;
+  }
+
+  /**
+   * 控制条可见时字幕需要上抬的高度。
+   *
+   * ⚠️ 不能用「控制条高度 × 固定系数」：字幕离画面底边的距离各不相同，
+   * 固定抬 46px 对「bottom: 4%」的字幕是浪费，对「bottom: 0」的字幕却**不够**
+   * —— 实测字幕底边 674、控制条顶边 654，重叠 20px，最后一行被压暗
+   * （rgb(209,207,207) vs rgb(255,253,253)）。
+   *
+   * 现在按**字幕的实际位置**算：量出字幕的自然底边，让它落在控制条顶边之上。
+   */
+  private getSubtitleClearance(): number {
+    const elements = this.elements;
+    if (!elements) {
       return 0;
     }
 
-    const rect = root.getBoundingClientRect();
-    // 控制条高度大约 70px（含渐变 padding）。实测字幕底边离画面底
-    // 约 40px，上抬这么多就够它露在控制条上方了。
-    return Math.max(0, Math.round(rect.height * 0.7));
+    const barTop = this.getBarTopEdge();
+    if (!Number.isFinite(barTop)) {
+      return 0;
+    }
+
+    let needed = 0;
+    for (const layer of this.subtitleLayers) {
+      if (!layer.element.isConnected) {
+        continue;
+      }
+
+      const rect = layer.element.getBoundingClientRect();
+      if (rect.height <= 0) {
+        continue;
+      }
+
+      // 当前 rect 里**已经含**了我们之前加的位移（向上 = 减去），
+      // 加回去才是字幕「自然位置」的底边。
+      const naturalBottom = rect.bottom + this.subtitleOffset;
+      const overlap = naturalBottom - barTop + SUBTITLE_CLEARANCE_GAP;
+      if (overlap > needed) {
+        needed = overlap;
+      }
+    }
+
+    return Math.round(needed);
   }
 
   mount() {
@@ -253,11 +397,11 @@ export class FullscreenControls {
     root.setAttribute('role', 'group');
     root.setAttribute('aria-label', t('ctlGroup', '视频播放控制'));
     root.innerHTML = `
-      <button type="button" class="button" data-role="play" aria-label="${t('ctlPlay', '播放/暂停')}">${ICONS.play}</button>
-      <span class="time" data-role="time">0:00 / 0:00</span>
-      <input type="range" class="range progress" data-role="progress" min="0" max="0" step="0.1" value="0" aria-label="${t('ctlProgress', '播放进度')}" />
-      <button type="button" class="button" data-role="mute" aria-label="${t('ctlMute', '静音')}">${ICONS.volume}</button>
-      <input type="range" class="range volume" data-role="volume" min="0" max="1" step="0.01" value="1" aria-label="${t('ctlVolume', '音量')}" />
+      <button type="button" class="button" data-role="play" aria-label="${t('ctlPlay', '播放/暂停')}">${ICONS.play}${ICONS.pause}</button>
+      <span class="time" data-role="time"><span class="time__now" data-role="time-now">0:00</span><span class="time__sep" data-role="time-sep"> / </span><span class="time__total" data-role="time-total">0:00</span></span>
+      <input type="range" class="range progress" data-role="progress" min="0" max="0" step="${PROGRESS_STEP_SECONDS}" value="0" aria-label="${t('ctlProgress', '播放进度')}" />
+      <button type="button" class="button" data-role="mute" aria-label="${t('ctlMute', '静音')}">${ICONS.volume}${ICONS.muted}</button>
+      <input type="range" class="range volume" data-role="volume" min="0" max="1" step="${VOLUME_STEP}" value="1" aria-label="${t('ctlVolume', '音量')}" />
       <span class="speed-wrap" data-role="speed-wrap">
         <button type="button" class="speed" data-role="speed" aria-haspopup="menu" aria-expanded="false" aria-live="polite" aria-label="${t('ctlSpeed', '播放速度')}">1x</button>
         <div class="speed-menu" data-role="speed-menu" role="menu" hidden aria-label="${t('ctlSpeed', '播放速度')}"></div>
@@ -280,6 +424,8 @@ export class FullscreenControls {
       progress: query<HTMLInputElement>('progress')!,
       volume: query<HTMLInputElement>('volume')!,
       time: query<HTMLSpanElement>('time')!,
+      timeNow: query<HTMLSpanElement>('time-now')!,
+      timeTotal: query<HTMLSpanElement>('time-total')!,
       speed: query<HTMLButtonElement>('speed')!,
       speedWrap: query<HTMLSpanElement>('speed-wrap')!,
       speedMenu: query<HTMLDivElement>('speed-menu')!,
@@ -308,16 +454,24 @@ export class FullscreenControls {
       elements.speedMenu.appendChild(item);
     }
 
-    elements.playButton.addEventListener('click', () => {
+    elements.playButton.addEventListener('click', (event) => {
       togglePlayback(this.video);
       // 失焦是有意为之：焦点留在按钮上，scheduleHide() 就会一直把控制条
       // 算作「用户正在操作」，它从此不再自动隐藏。
-      elements.playButton.blur();
+      //
+      // ⚠️ 只有**鼠标点击**才失焦（detail > 0）。键盘激活（Enter / 空格）
+      // 的 detail === 0 —— 那种情况下必须保住焦点，否则键盘用户每按一次
+      // 键就在控制条里「丢一次位置」。
+      if (event.detail !== 0) {
+        elements.playButton.blur();
+      }
       this.show();
     });
-    elements.muteButton.addEventListener('click', () => {
+    elements.muteButton.addEventListener('click', (event) => {
       this.video.muted = !this.video.muted;
-      elements.muteButton.blur();
+      if (event.detail !== 0) {
+        elements.muteButton.blur();
+      }
       this.show();
     });
     elements.exitButton.addEventListener('click', () => {
@@ -362,16 +516,11 @@ export class FullscreenControls {
       this.show();
     });
     elements.progress.addEventListener('change', () => {
-      const time = Number(elements.progress.value);
-      if (Number.isFinite(time)) {
-        // 记住提交的目标：跳转落地前 timeupdate 仍报旧 currentTime，
-        // 用它同步会把滑块拉回去（回弹）。pendingSeek 让滑块钉在目标位。
-        this.pinSeek(time);
-        this.video.currentTime = time;
-      }
-      this.draggingProgress = false;
+      this.commitProgressSeek();
+      this.releaseSliderFocus();
       this.show();
     });
+
     elements.volume.addEventListener('input', () => {
       const value = Number(elements.volume.value);
       if (Number.isFinite(value)) {
@@ -399,16 +548,55 @@ export class FullscreenControls {
     // 实测点过音量滑块 5 秒后控制条仍然可见。
     // 这直接违背产品最核心的承诺（「鼠标静止 3 秒后自动隐藏」），
     // 而且是**每个用户第一次拖滑块**就会遇到。
-    const releaseSliderFocus = () => {
-      this.releaseFocusToPage();
-      this.show();
-    };
-    elements.progress.addEventListener('change', releaseSliderFocus);
-    elements.volume.addEventListener('change', releaseSliderFocus);
+    //
+    // ⚠️ 但**键盘**驱动的变更必须保住焦点：甩掉焦点之后，按键重复就断了
+    // （实测长按方向键 1.2 秒只前进 0.1 秒），焦点环也会消失。
+    // 键盘与指针的区别我们自己听得见 —— 滑块上的 keydown 就是证据。
+    elements.volume.addEventListener('change', this.releaseSliderFocus);
     // change 在键盘操作滑块时也会触发；而鼠标拖动时 change 在松手时触发。
     // pointerup 兜住「拖到原值、change 不触发」的情况。
-    elements.progress.addEventListener('pointerup', releaseSliderFocus);
-    elements.volume.addEventListener('pointerup', releaseSliderFocus);
+    elements.progress.addEventListener('pointerup', this.releaseSliderFocus);
+    elements.volume.addEventListener('pointerup', this.releaseSliderFocus);
+
+    // 记录「这次交互是键盘还是指针」。
+    // pointerdown 会先于 change 发生；keydown 也先于它引发的 change。
+    const markKeyboardDriven = () => {
+      this.sliderKeyboardDriven = true;
+    };
+    const markPointerDriven = () => {
+      this.sliderKeyboardDriven = false;
+    };
+    elements.progress.addEventListener('keydown', markKeyboardDriven);
+    elements.volume.addEventListener('keydown', markKeyboardDriven);
+    elements.progress.addEventListener('pointerdown', markPointerDriven);
+    elements.volume.addEventListener('pointerdown', markPointerDriven);
+
+    // PageUp / PageDown：原生 range 是按**范围的 10%** 跳的
+    // （实测 max=7200 时一次跳 720 秒），两小时的视频一次就跳 12 分钟。
+    // 这里换成固定秒数，并把跳转一次提交掉。
+    elements.progress.addEventListener('keydown', (event) => {
+      if (event.key !== 'PageUp' && event.key !== 'PageDown') {
+        return;
+      }
+
+      const duration = this.video.duration;
+      if (!Number.isFinite(duration) || duration <= 0) {
+        return;
+      }
+
+      event.preventDefault();
+      const current = Number(elements.progress.value);
+      if (!Number.isFinite(current)) {
+        return;
+      }
+
+      const delta = event.key === 'PageUp' ? PROGRESS_PAGE_SECONDS : -PROGRESS_PAGE_SECONDS;
+      const next = Math.min(Math.max(current + delta, 0), duration);
+      elements.progress.value = String(next);
+      this.previewScrub();
+      this.commitProgressSeek();
+      this.show();
+    });
 
     root.addEventListener('mouseenter', this.boundKeepVisible);
     root.addEventListener('mouseleave', this.boundScheduleHide);
@@ -493,6 +681,20 @@ export class FullscreenControls {
     // 菜单收起后重新开始 idle 计时，否则控制条会一直挂着。
     this.show();
   }
+
+  /**
+   * 滑块变更之后处理焦点。
+   *
+   * 指针驱动（拖动、点定）→ 把焦点放掉，控制条才能重新自动隐藏。
+   * 键盘驱动 → **保住焦点**：焦点一丢，按键重复就断了
+   * （实测长按方向键 1.2 秒只前进 0.1 秒），焦点环也会消失。
+   */
+  private readonly releaseSliderFocus = () => {
+    if (!this.sliderKeyboardDriven) {
+      this.releaseFocusToPage();
+    }
+    this.show();
+  };
 
   /**
    * 把焦点从控制条里放掉，让它能重新自动隐藏。
@@ -660,10 +862,52 @@ export class FullscreenControls {
     const shown = this.pendingSeek !== null && hasDuration ? this.pendingSeek : Math.min(current, duration);
     elements.progress.value = hasDuration ? String(shown) : '0';
     elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(shown / duration) * 100}%` : '0%');
-    elements.time.textContent = `${formatTime(hasDuration ? shown : current)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
+    this.renderTimeLabel(
+      formatTime(hasDuration ? shown : current),
+      hasDuration ? formatTime(duration) : '--:--',
+    );
     // 读屏念裸数字（"108"）毫无意义 —— 它得念成 "1:48 / 30:00"。
     elements.progress.setAttribute('aria-valuetext', elements.time.textContent);
   };
+
+  /**
+   * 渲染时间标签。
+   *
+   * 「当前时间」与「总时长」分成两个元素：前者的宽度会随播放进度变化
+   * （"0:00" → "59:59" → "1:00:00"），两者挤在一个元素里的话，
+   * 整个控制条会跟着横向抖动（实测进度条宽度在 871.6px 与 851.7px 之间跳）。
+   * 分开之后给「当前时间」一个固定的 min-width，抖动就没有了。
+   */
+  private renderTimeLabel(current: string, total: string) {
+    const elements = this.elements;
+    if (!elements) {
+      return;
+    }
+
+    elements.timeNow.textContent = current;
+    elements.timeTotal.textContent = total;
+  }
+
+  /**
+   * 提交一次跳转：滑块当前的值就是目标时间。
+   *
+   * 拖动结束（change）与 PageUp/PageDown 都走这里，保证「一次操作一次跳转」。
+   */
+  private commitProgressSeek() {
+    const elements = this.elements;
+    if (!elements) {
+      return;
+    }
+
+    const time = Number(elements.progress.value);
+    if (Number.isFinite(time)) {
+      // 记住提交的目标：跳转落地前 timeupdate 仍报旧 currentTime，
+      // 用它同步会把滑块拉回去（回弹）。pendingSeek 让滑块钉在目标位。
+      this.pinSeek(time);
+      this.video.currentTime = time;
+    }
+    this.draggingProgress = false;
+  }
 
   /** 跳转落地：清除 pendingSeek 并回到真实位置渲染。 */
   private readonly handleSeeked = () => {
@@ -708,7 +952,10 @@ export class FullscreenControls {
     const target = Number(elements.progress.value);
     const clamped = hasDuration ? Math.min(Math.max(target, 0), duration) : 0;
     elements.progress.style.setProperty('--vsc-progress', hasDuration ? `${(clamped / duration) * 100}%` : '0%');
-    elements.time.textContent = `${formatTime(clamped)} / ${hasDuration ? formatTime(duration) : '--:--'}`;
+    this.renderTimeLabel(
+      formatTime(clamped),
+      hasDuration ? formatTime(duration) : '--:--',
+    );
     elements.progress.setAttribute('aria-valuetext', elements.time.textContent);
   }
 
@@ -719,7 +966,11 @@ export class FullscreenControls {
     }
 
     const playing = !this.video.paused;
-    elements.playButton.innerHTML = playing ? ICONS.pause : ICONS.play;
+    // ⚠️ 图标**不换 DOM**：两个 SVG 叠在一起，靠 class 切换显示哪一个。
+    // 用 innerHTML 换会让 Chromium 在光标下重新派发 mouseover/mouseenter，
+    // 控制条的 mouseenter 处理器随即取消隐藏计时器 —— 光标不动就没有
+    // pointermove 来重新计时，控制条从此永不自动隐藏（见 ICONS 的说明）。
+    elements.playButton.classList.toggle('is-playing', playing);
     // 图标会随状态变，可访问名也必须跟着变。
     // 只换图标的话，读屏用户永远听到「播放/暂停」，分不清当前到底是哪一种。
     elements.playButton.setAttribute(
@@ -760,7 +1011,7 @@ export class FullscreenControls {
     const volume = this.video.volume;
     const muted = this.video.muted || volume === 0;
 
-    elements.muteButton.innerHTML = muted ? ICONS.muted : ICONS.volume;
+    elements.muteButton.classList.toggle('is-muted', muted);
     elements.muteButton.setAttribute(
       'aria-label',
       muted ? t('ctlUnmute', '取消静音') : t('ctlMute', '静音'),

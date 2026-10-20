@@ -55,11 +55,23 @@ const CSS_VARS: Record<PaletteKey, string> = {
 };
 
 /**
- * 浅色调色板 —— **与 6.0.8 的观感逐像素一致**，一个值都没改。
+ * 浅色调色板 —— 与 6.0.8 的观感一致，**只有弱化说明色一档被调深**。
  *
  * 颜色不是随手挑的，每个值都有实测的对比度（见 options-theme.test.ts）：
  * 正文 14.38:1、次要说明 5.52:1、主按钮文字 5.47:1、危险文字 4.84:1。
  * 改任何一个值之前先跑那条测试。
+ *
+ * ── 弱化说明色为什么被调深（6.1.0）────────────────────────────────────
+ * 原值 #737d8c 在卡片白底上只有 4.17:1、在页面底色上只有 3.85:1 ——
+ * 都低于 WCAG AA 对正文要求的 4.5:1。这段文字（每个动作下面那行说明）
+ * 是**正文**而不是装饰，读者要靠它判断这个动作会做什么。
+ *
+ * 调深到 #616976：白底 5.54:1 / 页面底色 5.12:1 / 输入框底 5.36:1，
+ * 三处都过 5:1 这条线（比 AA 更宽，留一点余量）。
+ *
+ * ⚠️ 上限是「次要档」的对比度：弱化档必须**仍然弱于**次要档（5.52:1），
+ * 否则层级关系反了 —— 读者会以为可有可无的补充说明比正经说明更重要。
+ * 5.12 < 5.52，这条不变量由 options-theme.test.ts 守着。
  *
  * ── 品牌色决策（重要，别改）─────────────────────────────────────────
  * 品牌色家族 = **绿松石 teal-cyan**。三处界面的主色是同一个家族的三个明度，
@@ -80,7 +92,7 @@ export const LIGHT_PALETTE: Palette = {
   fieldBg: '#fbfbfc',
   text: '#1e2430',
   muted: '#5b6473',
-  mutedWeak: '#737d8c',
+  mutedWeak: '#616976',
   border: '#e3e6ea',
   divider: '#eef0f2',
   borderStrong: '#d6dae0',
@@ -165,10 +177,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * 上下留白被收紧过一轮：设置页要塞进 1280×800 的**一屏**里。
+ *
+ * 为什么要紧：页脚那行「版本 / 隐私政策 / 源码仓库」被挤到视口外时，
+ * 商店截图上就只剩半截字，看着像渲染坏了。而设置页的内容是固定的
+ * （标题 + 说明 + 7 行 + 按钮 + 页脚），高度只随文案长度变一点。
+ */
 .vsc {
   max-width: 640px;
   margin: 0 auto;
-  padding: 56px 24px 64px;
+  padding: 40px 24px 28px;
 }
 
 .vsc__title {
@@ -194,8 +213,28 @@ body {
   color: var(--vsc-muted);
 }
 
+/*
+ * 「工具栏图标 = 全屏」「Ctrl+Shift+, = 设置页」这两件事原来只写在
+ * README 与商店文案里 —— 产品内**一处都没有**。新用户打开设置页，
+ * 看不到自己还能从工具栏进全屏。这两行是补上那个缺口。
+ */
+.vsc__tips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--vsc-muted);
+}
+
+.vsc__tips-sep {
+  color: var(--vsc-border-strong);
+}
+
 .vsc__card {
-  margin-top: 28px;
+  margin-top: 20px;
   border: 1px solid var(--vsc-border);
   border-radius: 16px;
   background: var(--vsc-surface);
@@ -207,7 +246,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 16px 20px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--vsc-divider);
 }
 
@@ -229,7 +268,13 @@ body {
 
 .vsc__key {
   flex: none;
-  width: 168px;
+  /*
+   * 168px 装不下最长的绑定：Ctrl+Alt+Shift+Meta+PgDn 需要 188px 的内容宽度，
+   * 超出部分被 input 裁掉（实测 clientWidth 192 / scrollWidth 212）——
+   * 用户看到的是「Ctrl+Alt+Shift+Meta+…」，分不清自己绑了什么。
+   * 200px 让最长的绑定完整显示；再短就得靠 title 提示兜底了。
+   */
+  width: 200px;
   padding: 9px 12px;
   border: 1px solid var(--vsc-border-strong);
   border-radius: 10px;
@@ -287,6 +332,13 @@ body {
   border-color: var(--vsc-border-hover);
 }
 
+/*
+ * 「保存」按钮**永不置灰**。
+ *
+ * 没有未保存的改动时，它按下去只是把同样的值再写一遍，无害；
+ * 而一个灰掉的主按钮在商店截图上看着像「功能坏了」。
+ * 「现在有没有东西要存」由按钮文案上的「•」和状态栏那一行表达。
+ */
 .vsc__button--primary {
   border-color: var(--vsc-accent);
   background: var(--vsc-accent);

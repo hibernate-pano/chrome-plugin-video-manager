@@ -111,6 +111,31 @@ describe('t() 的占位符与回落', () => {
     }
   };
 
+  /**
+   * 一个**真的消费 substitutions** 的 chrome.i18n mock。
+   *
+   * ⚠️ 之前的 mock 全是 `getMessage: () => '...'` 这种实现 —— 根本不读
+   * substitutions 参数。于是「有 chrome.i18n 与没有 chrome.i18n 时渲染结果
+   * 必须一致」这条不变式在测试里是**假的**：真实 Chrome 拿到 undefined 时
+   * **不消费**位置占位符，界面上会露出字面量 `$1`
+   * （hintSpeed 的 locale 消息正是 "$1 / $2 调速"）。
+   */
+  const chromeI18nMock = (locale: 'en' | 'zh_CN') => {
+    const messages = readMessages(locale) as Record<string, { message?: string }>;
+
+    return (key: string, substitutions?: string[]) => {
+      const raw = messages[key]?.message ?? '';
+
+      // 真实 Chrome：没给 substitutions 时不消费位置占位符 ——
+      // 字面量 "$1" 会原样留在返回串里，然后被渲染到界面上。
+      if (substitutions === undefined) {
+        return raw;
+      }
+
+      return raw.replace(/\$([1-9])/g, (_match, index: string) => substitutions[Number(index) - 1] ?? '');
+    };
+  };
+
   it('没有 chrome.i18n 时回落到本地文案', () => {
     const original = (globalThis as Record<string, unknown>).chrome;
     (globalThis as Record<string, unknown>).chrome = {};
@@ -140,13 +165,10 @@ describe('t() 的占位符与回落', () => {
 
   it('按位置替换 $1 / $2', () => {
     // mock 模拟 Chrome 的行为：位置占位符由 Chrome 自己替换掉。
-    withChrome(
-      (_key: string, substitutions?: string[]) =>
-        '$1 / $2 调速'.replace('$1', substitutions?.[0] ?? '').replace('$2', substitutions?.[1] ?? ''),
-      () => {
-        expect(t('hintSpeed', '调速', ['=', '-'])).toBe('= / - 调速');
-      },
-    );
+    // 这里读的是**真实的 locale 文件** —— 消息文本改了，这条会跟着红。
+    withChrome(chromeI18nMock('zh_CN'), () => {
+      expect(t('hintSpeed', '$1 / $2 调速', ['=', '-'])).toBe('= / - 调速');
+    });
   });
 
   it('替换值里的 $ 不会被当成特殊替换序列', () => {
@@ -211,34 +233,123 @@ describe('t() 的占位符与回落', () => {
     // 这是本模块最重要的一条不变式：
     // locale 用 "$1 / $2"、调用点还留在旧写法 `.replace('{up}', x)` 时，
     // 两条路径都得渲染出「= / - 调速」，不能一边正常一边露出占位符。
+    //
+    // ⚠️ 这里的 chrome mock **真的消费 substitutions**（见 chromeI18nMock）。
+    // 早先的 mock 直接返回一串固定文本，于是这条断言恒成立 ——
+    // 把 deriveValues 里的具名 token 分支删掉（Chrome 于是拿不到替换值、
+    // 位置占位符原样留下）它照样绿。
     const fallback = '{up} / {down} 调速';
 
-    const withoutChrome = (() => {
-      const original = (globalThis as Record<string, unknown>).chrome;
-      (globalThis as Record<string, unknown>).chrome = {};
-      try {
-        return t('hintSpeed', fallback);
-      } finally {
-        (globalThis as Record<string, unknown>).chrome = original;
-      }
-    })();
+    const original = (globalThis as Record<string, unknown>).chrome;
+    (globalThis as Record<string, unknown>).chrome = {};
+    let withoutChrome = '';
+    try {
+      withoutChrome = t('hintSpeed', fallback);
+    } finally {
+      (globalThis as Record<string, unknown>).chrome = original;
+    }
 
     // Chrome 把 locale 的 "$1 / $2" 填成 token 本身（因为传进去的就是 token）。
-    const withI18n = (() => {
-      const original = (globalThis as Record<string, unknown>).chrome;
-      (globalThis as Record<string, unknown>).chrome = {
-        i18n: { getMessage: () => '{up} / {down} 调速' },
-      };
-      try {
-        return t('hintSpeed', fallback);
-      } finally {
-        (globalThis as Record<string, unknown>).chrome = original;
-      }
-    })();
+    let withI18n = '';
+    withChrome(chromeI18nMock('zh_CN'), () => {
+      withI18n = t('hintSpeed', fallback);
+    });
 
     expect(withI18n).toBe(withoutChrome);
     // 旧调用点后面对返回串做的 replace 依然有效。
     expect(withoutChrome.replace('{up}', '=').replace('{down}', '-')).toBe('= / - 调速');
+    // 而且**不能**露出字面量 $1 —— 那正是真实 Chrome 会给出的破绽。
+    expect(withI18n, '不能露出字面量 $1').not.toContain('$1');
+    expect(withI18n, '不能露出字面量 $2').not.toContain('$2');
+  });
+
+  it('Chrome 已经替过的位置占位符不被二次替换', () => {
+    // 替换值里恰好写着 "$2" 时，Chrome 会把它填进 $1 的位置，
+    // 返回串里就真的出现了 "$2"。这时候再替一次位置占位符就会把它当成
+    // 占位符替掉 —— 文案就乱了（"X / X 调速"）。
+    withChrome(chromeI18nMock('zh_CN'), () => {
+      expect(t('hintSpeed', '$1 / $2 调速', ['$2', 'X'])).toBe('$2 / X 调速');
+    });
+  });
+
+  it('替换值不够时，缺的那个占位符原样留着（不渲染成空串）', () => {
+    // 一片空白比文案错误更难排查：少传一个值就把占位符吃掉，
+    // 界面上会少掉一截内容却看不出哪里不对。
+    const original = (globalThis as Record<string, unknown>).chrome;
+    (globalThis as Record<string, unknown>).chrome = {};
+
+    try {
+      expect(t('k', '$1 / $2', ['='])).toBe('= / $2');
+    } finally {
+      (globalThis as Record<string, unknown>).chrome = original;
+    }
+  });
+
+  it('替换值最多传 9 个（Chrome 的上限）', () => {
+    // 超过 9 个时 Chrome 的 getMessage 直接返回 undefined。
+    let received: string[] | undefined;
+    withChrome(
+      (_key: string, substitutions?: string[]) => {
+        received = substitutions;
+        return 'x';
+      },
+      () => {
+        t('k', '$1', ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k']);
+      },
+    );
+
+    expect(received, '最多只能传 9 个替换值').toHaveLength(9);
+  });
+
+  it('$10 不是位置占位符（Chrome 只支持 $1..$9）', () => {
+    // "$10" 里的 "$1" 不能被当成位置占位符 ——
+    // 把它拆成 $1 + "0" 会给 Chrome 传进一个本不该有的替换值。
+    let received: string[] | undefined;
+    withChrome(
+      (_key: string, substitutions?: string[]) => {
+        received = substitutions;
+        return 'x';
+      },
+      () => {
+        t('k', '$10');
+      },
+    );
+
+    expect(received, '$10 不该被当成位置占位符').toBeUndefined();
+  });
+
+  it('位置占位符按最大编号算（$1 与 $3 → 传 3 个替换值）', () => {
+    // 数的是**最大编号**，不是出现了几个。
+    // 数错的话，Chrome 拿到的替换值个数不对，$3 会被填成空串。
+    let received: string[] | undefined;
+    withChrome(
+      (_key: string, substitutions?: string[]) => {
+        received = substitutions;
+        return 'x';
+      },
+      () => {
+        t('k', '$1 与 $3');
+      },
+    );
+
+    expect(received, '要传到 $3 就得有 3 个替换值').toHaveLength(3);
+  });
+
+  it('重复出现的具名 token 只占一个替换值', () => {
+    // 具名 token 按**出现顺序**对应替换值，且去重 ——
+    // 同一个 token 出现两次只该占一个位置，不然后面的 token 全错位。
+    let received: string[] | undefined;
+    withChrome(
+      (_key: string, substitutions?: string[]) => {
+        received = substitutions;
+        return 'x';
+      },
+      () => {
+        t('k', '{up} / {up}');
+      },
+    );
+
+    expect(received).toEqual(['{up}']);
   });
 });
 
