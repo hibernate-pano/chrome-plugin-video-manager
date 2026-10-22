@@ -402,7 +402,25 @@ const topLevelNoticePage = (hostile) => `<!DOCTYPE html>
 const takeoverInnerPage = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>vsc takeover inner</title>
 <style>html,body{margin:0;background:#fff} video{width:600px;height:338px;background:#000}</style>
-</head><body><video id="inner" muted playsinline></video></body></html>`;
+</head><body><video id="inner" muted playsinline preload="auto" src="${CLIP}"></video>
+<script>
+  // ⚠️ **必须有 src，而且必须真的播起来**（2026-10-22 加）。
+  //
+  // 原来这里是一个**没有源**的 <video>：readyState 恒为 0、永远暂停。
+  // 于是「接管不了」这件事有两种完全不同的含义，而内容脚本分得很清楚：
+  //   - 这一层**没有能播的视频** → 它什么都不说；
+  //   - 这一层**有视频，但接管不了** → 它说「视频在嵌入框里」。
+  // 这条用例要的是**后者**。
+  //
+  // 实测（真实 Chromium）：没有源的版本里，『f』落到哪个 frame 取决于
+  // 点击有没有把焦点送进嵌入框。焦点在顶层 → 有提示；
+  // 焦点在嵌入框里 → 顶层根本收不到这个键，提示不出现。两次跑结果不同，
+  // 而**产品两侧的行为都是对的** —— 那是**用例**的缺陷，不是产品的。
+  setTimeout(function () {
+    document.getElementById('inner').play().catch(function () {});
+  }, 300);
+</script>
+</body></html>`;
 
 /**
  * 顶层页面：视频**只**在 iframe 里 → 按 f 必然接管不了 → 给出一次性提示。
@@ -536,8 +554,22 @@ const captureTopLevelNotices = async (page, tokens) => {
 
 /** 接管提示：iframe 里的视频按 f → 提示出现在顶层文档。 */
 const captureTakeoverNotice = async (page) => {
-  // 焦点必须留在顶层文档，否则按键进不了顶层的内容脚本。
+  // ⚠️ 焦点必须**确实**留在顶层文档，否则这个键进不了顶层的内容脚本 ——
+  // 而「点一下 (200,100) 焦点就在顶层」是**假定**，不是事实（实测踩过）：
+  // 那一下的落点旁边就是嵌入框，浏览器有时会把焦点送进框里。
+  // 于是同一份页面跑两遍，一遍有提示、一遍没有，而产品两侧都对。
+  // 现在点完**核对**一次，不对就点回来。
   await page.mouse.click(200, 100);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          document.activeElement ? document.activeElement.tagName : '',
+        ),
+      { timeout: 5000, message: '点击之后焦点必须落在顶层文档里（不能落进嵌入框）' },
+    )
+    .not.toBe('IFRAME');
+
   await page.keyboard.press('f');
   await expect
     .poll(
