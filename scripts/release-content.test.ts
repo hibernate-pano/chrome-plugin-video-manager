@@ -388,6 +388,34 @@ describe('发布包承诺：商店文案与真实行为对得上', () => {
         'CWS 的拒审清单上绝对化表述（如 "any web video"）是一票否决项。',
     ).toBe(false);
   });
+
+  it('隐私政策里没有绝对化表述（它是商店直接链接的页面，审核员会点开看）', () => {
+    // ⚠️ 为什么隐私政策也要守：
+    // 它不是「我们自己写的说明」，而是**商店 listing 里那个链接指向的页面** ——
+    // 审核员点进去就会看到。而它同时也是给**用户**看的。
+    //
+    // 2026-10-22 实测：PRIVACY.md 里有两处
+    // 「在**任意**网站上的视频上工作」/「work on **any** video」——
+    // 与已经从 manifest description 与 Single Purpose 里删掉的 `any` 同一个毛病，
+    // 只是这个页面当时没跟上。
+    //
+    // ⚠️ 判据只查**绝对化**的那两处，不是「全文不许有 any」——
+    // 「does not collect, transmit, or share any user data」里的 `any`
+    // 是正常用法（否定句），删掉反而读不通。
+    const privacy = readFileSync(resolve(repoRoot, 'PRIVACY.md'), 'utf8');
+
+    // 英文侧：work on **any** video / any video
+    expect(
+      /work(?:s)? on\s+\*{0,2}any\*{0,2}\s+(?:web\s+)?video/i.test(privacy),
+      '隐私政策里仍有「work on any video」这类绝对化表述',
+    ).toBe(false);
+
+    // 中文侧：在**任意**网站上的视频上工作
+    expect(
+      /在\*{0,2}任意\*{0,2}网站/.test(privacy),
+      '隐私政策里仍有「在任意网站上」这类绝对化表述',
+    ).toBe(false);
+  });
 });
 
 /**

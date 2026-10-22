@@ -121,7 +121,7 @@ data may still exist on your device — update to remove it.
 
 ## 扩展对页面的访问 / What the Extension Reads on Pages
 
-扩展的权限范围是「所有网址」，这是为了在**任意**网站上的视频上工作
+扩展的权限范围是「所有网址」，这是为了在你观看的各个网站上的视频上工作
 （网课、会议录像、YouTube、B 站……）。权限宽，但读的东西极少：
 
 在页面上，扩展只做这几件事：
@@ -135,9 +135,9 @@ data may still exist on your device — update to remove it.
 扩展**不读取**页面的文字内容，不读取表单，不读取你输入的任何东西。
 被测量的字幕文本只用于计算它的**几何位置**（宽/高/行数），不会被保存或发送。
 
-The extension runs on all sites so it can work on **any** video — online
-courses, recorded meetings, YouTube, Bilibili, and so on. The permission is
-broad; what it reads is not.
+The extension runs on all sites so it can work on videos wherever you watch
+them — online courses, recorded meetings, YouTube, Bilibili, and so on. The
+permission is broad; what it reads is not.
 
 On a page, the extension only:
 
