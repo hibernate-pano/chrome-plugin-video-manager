@@ -2,7 +2,12 @@ import { FullscreenControls } from './fullscreenControls';
 import { FrameExpander } from './iframeExpansion';
 import { findOverlayLayers, OverlayLayer } from './overlayLayers';
 import { restoreSubtitleOffset } from './subtitleOffset';
-import { SUBTITLE_Z_INDEX, VIDEO_Z_INDEX } from './runtimeStyles';
+import {
+  isolateFullscreenOverlay,
+  setOverlayActive,
+  SUBTITLE_Z_INDEX,
+  VIDEO_Z_INDEX,
+} from './runtimeStyles';
 import { mountViewportRoot } from './viewportRoot';
 
 type FullscreenMode = 'reparent' | 'css-cover';
@@ -187,20 +192,33 @@ export class FullscreenController {
     }
 
     let overlay = document.getElementById(OVERLAY_ID);
+    const created = !overlay;
     if (!overlay) {
       overlay = document.createElement('div');
       overlay.id = OVERLAY_ID;
       overlay.innerHTML = `<div id="${STAGE_ID}"></div>`;
-      // ⚠️ 挂到 <html> 而不是 <body>：body 带 transform 时它会变成
-      // fixed 后代的包含块，背板就会铺成 body 那么高（而不是视口高），
-      // 视频与控制条全部落到屏外 —— 网页全屏直接报废。
-      // 详见 viewportRoot.ts。
-      mountViewportRoot(overlay);
     }
 
     const stage = overlay.querySelector(`#${STAGE_ID}`);
     if (!(stage instanceof HTMLElement)) {
       throw new Error('Fullscreen overlay stage missing');
+    }
+
+    // ⚠️ 隔离必须**在挂上页面之前**做完：背板与舞台都是挂在页面里的普通
+    // 节点，站点一条 `html > div { display: none !important }` 就能打掉它们
+    // （实测症状：视频回退成 css-cover、页面滚动锁死，却没有控制条与退出按钮）。
+    // 内联 !important 赢过任何作者 !important —— 机制见 runtimeStyles.ts。
+    //
+    // ⚠️ 每次都重做一遍（不只在新建时）：背板可能已经存在于 DOM 里
+    // （上一轮全屏的遗留），站点也可能已经改过它的内联样式。
+    isolateFullscreenOverlay(overlay, stage);
+
+    if (created) {
+      // ⚠️ 挂到 <html> 而不是 <body>：body 带 transform 时它会变成
+      // fixed 后代的包含块，背板就会铺成 body 那么高（而不是视口高），
+      // 视频与控制条全部落到屏外 —— 网页全屏直接报废。
+      // 详见 viewportRoot.ts。
+      mountViewportRoot(overlay);
     }
 
     return { overlay, stage };
@@ -648,10 +666,17 @@ export class FullscreenController {
     this.state.overlayLayers = [];
     this.restoreToOriginalSlot(video, plan);
     this.state.mode = 'css-cover';
-    // 摘掉 vsc-active 即彻底 display:none（runtimeStyles.ts:4-16），一个像素都不画。
+    // 摘掉 vsc-active 并把内联 display 写成 none，一个像素都不画。
     // overlay 此刻仍在 DOM 里（只有 exit 会 remove 它），不清掉就会留下一层
     // 98% 不透明的深色背板，把可能被页面祖先压住的视频整个盖住。
-    document.getElementById(OVERLAY_ID)?.classList.remove('vsc-active');
+    //
+    // ⚠️ display 必须**内联写**：样式表里的 `.vsc-active { display: block }`
+    // 只是普通作者声明，撤掉 class 未必能让背板真的消失
+    // （站点一条 `html > div { display: block !important }` 就能把它钉住）。
+    const overlayElement = document.getElementById(OVERLAY_ID);
+    if (overlayElement) {
+      setOverlayActive(overlayElement, false);
+    }
     this.applyCssCover(video);
     this.restoreIfLost(video, playbackSnapshot);
   }
@@ -749,7 +774,11 @@ export class FullscreenController {
       overlayLayers: layersToAttach,
     };
 
-    overlay.classList.add('vsc-active');
+    // ⚠️ class 与内联 display 必须**一起**切：class 只能改样式表里的规则，
+    // 而那是普通作者声明 —— 站点的 `html > div { display: none !important }`
+    // 赢。setOverlayActive 两者都管（class 是「此刻在全屏」的标记，
+    // 单测与 e2e 都按它判断）。
+    setOverlayActive(overlay, true);
     document.body.style.overflow = 'hidden';
     // 用我们自己的控制条取代浏览器原生控件：原生控件样式不可控，
     // 且在 reparent 后位置会跳（视频搬进了 overlay，原生 UI 不会跟过来）。

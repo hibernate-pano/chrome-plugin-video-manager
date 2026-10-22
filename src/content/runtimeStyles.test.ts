@@ -12,9 +12,13 @@ import {
   NOTICE_Z_INDEX,
   installRuntimeStyles,
   uninstallRuntimeStyles,
+  isolateFullscreenOverlay,
   isolateNotice,
+  OVERLAY_ISOLATION_STYLES,
   OVERLAY_Z_INDEX,
   setImportant,
+  setOverlayActive,
+  STAGE_ISOLATION_STYLES,
   STAGE_Z_INDEX,
   SUBTITLE_Z_INDEX,
   VIDEO_Z_INDEX,
@@ -402,6 +406,99 @@ describe('页面级提示的样式隔离', () => {
 
     expect(node.style.getPropertyValue('left')).toBe('42px');
     expect(node.style.getPropertyPriority('left')).toBe('important');
+  });
+});
+
+/**
+ * 网页全屏背板（连同舞台）的**样式隔离**。
+ *
+ * ⚠️ 这组用例守的是 6.2.0 的回归：挂载点从 `<body>` 换到了 `<html>`，
+ * 隔离策略却没跟着换 —— 背板与控制条宿主成了 `<html>` 的直接子节点，
+ * 而样式还留在注入的那份 `<style>` 里（**普通作者声明**）。
+ * 于是站点一条 `html > div { display: none !important }` 就能打掉它们：
+ * 视频回退成 css-cover、页面滚动锁死，却没有控制条也没有退出按钮。
+ *
+ * 真实浏览器里那件事由 tests/e2e/fullscreen-isolation.spec.js 量
+ * computed style 来验；这里守的是**机制** —— 我们写下去的必须是
+ * **带 !important 的内联声明**（级联里 style 属性高于任何选择器）。
+ */
+describe('网页全屏背板的样式隔离', () => {
+  const makeOverlay = () => {
+    const overlay = document.createElement('div');
+    const stage = document.createElement('div');
+    overlay.appendChild(stage);
+    return { overlay, stage };
+  };
+
+  it('隔离的第一层是 all: initial，且必须带 !important', () => {
+    const { overlay, stage } = makeOverlay();
+
+    isolateFullscreenOverlay(overlay, stage);
+
+    expect(overlay.style.getPropertyValue('all')).toBe('initial');
+    expect(overlay.style.getPropertyPriority('all')).toBe('important');
+    expect(stage.style.getPropertyValue('all')).toBe('initial');
+    expect(stage.style.getPropertyPriority('all')).toBe('important');
+  });
+
+  it('底座里的每一条属性都必须带 !important（少一条就重新被打穿）', () => {
+    const { overlay, stage } = makeOverlay();
+
+    isolateFullscreenOverlay(overlay, stage);
+
+    const missingOverlay = Object.keys(OVERLAY_ISOLATION_STYLES).filter(
+      (property) => overlay.style.getPropertyPriority(property) !== 'important',
+    );
+    expect(missingOverlay, '背板这些属性没有带 !important').toEqual([]);
+
+    const missingStage = Object.keys(STAGE_ISOLATION_STYLES).filter(
+      (property) => stage.style.getPropertyPriority(property) !== 'important',
+    );
+    expect(missingStage, '舞台这些属性没有带 !important').toEqual([]);
+  });
+
+  it('all 必须写在最前面（它是简写，会盖住后面写的长写）', () => {
+    const { overlay, stage } = makeOverlay();
+
+    isolateFullscreenOverlay(overlay, stage);
+
+    // all 在前、position 在后 → position 赢。
+    // 顺序反了的话，position 会被 all 打回 static（背板就不再固定定位了）。
+    expect(overlay.style.getPropertyValue('position')).toBe('fixed');
+    expect(stage.style.getPropertyValue('position')).toBe('absolute');
+    expect(stage.style.getPropertyValue('display')).toBe('flex');
+  });
+
+  it('隔离会盖掉节点上原有的内联样式（不能留站点的残留）', () => {
+    const { overlay, stage } = makeOverlay();
+    overlay.style.setProperty('display', 'none');
+    overlay.style.setProperty('background', 'rgb(255, 0, 0)');
+
+    isolateFullscreenOverlay(overlay, stage);
+
+    expect(overlay.style.getPropertyValue('background')).toBe('rgb(0, 0, 0)');
+    // 起始状态是「不显示」。
+    expect(overlay.style.getPropertyValue('display')).toBe('none');
+    expect(overlay.style.getPropertyPriority('display')).toBe('important');
+  });
+
+  it('显隐必须走内联：class 只管样式表，而样式表挡不住站点的 !important', () => {
+    const { overlay, stage } = makeOverlay();
+
+    isolateFullscreenOverlay(overlay, stage);
+    setOverlayActive(overlay, true);
+
+    // class 照旧是「此刻在全屏」的标记（单测与 e2e 都按它判断）。
+    expect(overlay.classList.contains('vsc-active')).toBe(true);
+    // 但真正生效的是内联的那一份。
+    expect(overlay.style.getPropertyValue('display')).toBe('block');
+    expect(overlay.style.getPropertyPriority('display')).toBe('important');
+
+    setOverlayActive(overlay, false);
+
+    expect(overlay.classList.contains('vsc-active')).toBe(false);
+    expect(overlay.style.getPropertyValue('display')).toBe('none');
+    expect(overlay.style.getPropertyPriority('display')).toBe('important');
   });
 });
 

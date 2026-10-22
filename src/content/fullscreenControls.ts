@@ -7,7 +7,7 @@ import {
   CONTROL_BAR_NARROW_PADDING,
   CONTROL_BAR_WIDE_PADDING,
 } from './controlBarLayout';
-import { controlsStyles } from './controlsStyles';
+import { controlsStyles, isolateControlsHost } from './controlsStyles';
 import { setSubtitleOffset } from './subtitleOffset';
 import type { OverlayLayer } from './overlayLayers';
 import { mountViewportRoot } from './viewportRoot';
@@ -469,6 +469,11 @@ export class FullscreenControls {
     // 这是唯一能挡住站点 `!important` 的结构性保证（见 controlsStyles.ts 的说明）。
     const host = document.createElement('div');
     host.id = CONTROLS_ID;
+    // ⚠️ 但 shadow root 只护住了**里面**：宿主自己仍是 light DOM 里的一个 div，
+    // 站点一条 `html > div { display: none !important }` 会**命中宿主本身**
+    // （实测症状：控制条与退出按钮整个消失，只剩 Escape 能退出全屏）。
+    // 所以宿主也要一份内联 !important 底座 —— 必须在挂上页面之前做完。
+    isolateControlsHost(host);
 
     const shadow = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');

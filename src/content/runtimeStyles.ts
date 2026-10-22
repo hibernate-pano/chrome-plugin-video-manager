@@ -265,6 +265,17 @@ export const LIVE_REGION_Z_INDEX = 2147483647;
 const styles = `
 /* --- Page fullscreen overlay --- */
 
+/*
+ * ⚠️ 这两条规则是**兜底**，不是生效的那一份。
+ *
+ * 背板与舞台真正的样式写在**内联 !important** 上
+ * （见本文件下半部分「网页全屏背板的样式隔离」）：
+ * 这里是**普通作者声明**，站点的 "html > div { display: none !important }"
+ * 赢过它 —— 而背板正是 <html> 的直接子节点（6.2.0 改了挂载点）。
+ * display 由 setOverlayActive() 按状态**内联**切换，
+ * class 只是「此刻处于网页全屏」的标记。
+ */
+
 #${FULLSCREEN_OVERLAY_ID} {
   position: fixed;
   inset: 0;
@@ -499,6 +510,64 @@ export const NOTICE_SHELL_STYLES: Record<string, string> = {
   transition: NOTICE_FADE,
 };
 
+/* ------------------------------------------------------------------ *
+ * 网页全屏背板的样式隔离
+ *
+ * ⚠️ 为什么背板也要内联隔离（6.2.0 回归的根因）：
+ *
+ * 6.2.0 把浮层从 `<body>` 挂到了 `<html>`（见 viewportRoot.ts）——
+ * **挂载点换了，隔离策略却没跟着换**：背板与控制条宿主的样式仍留在
+ * 注入的那份 `<style>` 里，而那是**普通作者声明**。
+ *
+ * 于是站点一条 `html > div { display: none !important }`
+ * （「只认我自己的顶层节点」是站点做框架布局时的常见写法）就能打掉它们：
+ * 背板没了 → 视频退化成 css-cover；控制条没了 → **连退出按钮都没有**，
+ * 用户只剩 Escape 能退出全屏。
+ *
+ * ⚠️ 而**内联 `!important` 在级联里高于任何作者 `!important`**
+ * （style 属性高于所有选择器），所以底座必须内联 ——
+ * 这与页面级提示（`isolateNotice`）用的是同一套机制，不另发明一套。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 背板的**内联隔离底座**（`all: initial` 之后逐条 important 写回）。
+ *
+ * 与样式表里那段 `#vsc-page-fullscreen-overlay { … }` 一一对应，
+ * 区别只有两点：这里是**内联**的，且 `display` 不在这里（它按状态切）。
+ */
+export const OVERLAY_ISOLATION_STYLES: Record<string, string> = {
+  position: 'fixed',
+  inset: '0',
+  'z-index': String(OVERLAY_Z_INDEX),
+  'box-sizing': 'border-box',
+  /**
+   * ⚠️ 写 `auto` 而不是 `100%`：`inset: 0` + `auto` 的几何与今天完全一致
+   * （铺满视口），而 `100%` 是按包含块算的 —— 页面带滚动条时可能比视口宽。
+   */
+  width: 'auto',
+  height: 'auto',
+  margin: '0',
+  padding: '0',
+  border: 'none',
+  background: '#000',
+};
+
+/**
+ * 舞台（背板里装视频的那一层）的**内联隔离底座**。
+ *
+ * ⚠️ 为什么它也要隔离：舞台是一个 `div`，而站点爱写 `div { … !important }`。
+ * 舞台没了 → 视频没了 → 全屏画面整个消失。
+ */
+export const STAGE_ISOLATION_STYLES: Record<string, string> = {
+  position: 'absolute',
+  inset: '0',
+  display: 'flex',
+  'align-items': 'center',
+  'justify-content': 'center',
+  overflow: 'hidden',
+  'z-index': String(STAGE_Z_INDEX),
+};
+
 /**
  * 写一条内联样式，**带 !important**。
  *
@@ -553,6 +622,46 @@ export const isolateNotice = (
   setImportant(element, 'all', 'initial');
   setImportantAll(element, NOTICE_SHELL_STYLES);
   setImportantAll(element, styles);
+};
+
+/**
+ * 把网页全屏背板（连同它里面的舞台）**隔离**起来。
+ *
+ * 与 `isolateNotice` 同一套机制：`all: initial !important` 起手，
+ * 再把我们要的每一条逐条 important 写回。
+ *
+ * ⚠️ 必须在**挂上页面之前**调用：站点的一条全局 CSS 随时可能命中它，
+ * 而背板是要铺满整个视口的，样式被打穿就没有「全屏」可言了。
+ *
+ * @param overlay 背板（#vsc-page-fullscreen-overlay）
+ * @param stage 舞台（#vsc-page-fullscreen-stage）
+ */
+export const isolateFullscreenOverlay = (overlay: HTMLElement, stage: HTMLElement): void => {
+  overlay.removeAttribute('style');
+  setImportant(overlay, 'all', 'initial');
+  setImportantAll(overlay, OVERLAY_ISOLATION_STYLES);
+  // 起始状态是「不显示」——与样式表里的 `display: none` 保持一致。
+  setImportant(overlay, 'display', 'none');
+
+  stage.removeAttribute('style');
+  setImportant(stage, 'all', 'initial');
+  setImportantAll(stage, STAGE_ISOLATION_STYLES);
+};
+
+/**
+ * 背板的显隐。
+ *
+ * ⚠️ `display` **必须**同时写内联：样式表里的 `.vsc-active { display: block }`
+ * 是普通作者声明，站点的 `html > div { display: none !important }` 赢 ——
+ * 实测症状是「视频回退成 css-cover、页面滚动锁死、却没有控制条也没有退出按钮」。
+ * 内联 `!important` 赢过任何作者 `!important`。
+ *
+ * class 照旧增删：它是「此刻处于网页全屏」的标记，
+ * 单测与 e2e 都按它判断（speedToast 的 isFullscreenActive() 也看它）。
+ */
+export const setOverlayActive = (overlay: HTMLElement, active: boolean): void => {
+  overlay.classList.toggle('vsc-active', active);
+  setImportant(overlay, 'display', active ? 'block' : 'none');
 };
 
 /**

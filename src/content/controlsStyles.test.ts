@@ -5,7 +5,8 @@ import {
   CONTROL_BAR_REQUIRED_WIDTHS,
   CONTROL_BAR_WIDE_PADDING,
 } from './controlBarLayout';
-import { controlsStyles } from './controlsStyles';
+import { CONTROLS_HOST_STYLES, controlsStyles, isolateControlsHost } from './controlsStyles';
+import { CONTROLS_Z_INDEX } from './runtimeStyles';
 
 /**
  * 全屏控制条的**断点**守卫。
@@ -368,5 +369,61 @@ describe('控制条的窄屏断点', () => {
     // 这条断言是 E5 这个 bug 的直接守卫。
     const widths = mediaBlocks(controlsStyles).map((block) => block.maxWidth);
     expect(widths).not.toContain(640);
+  });
+});
+
+/**
+ * 控制条**宿主**的样式隔离。
+ *
+ * ⚠️ shadow root 只护住里面的内容，护不住**宿主自己** ——
+ * 宿主是 light DOM 里的一个 div，站点的 `html > div { display: none !important }`
+ * 会命中它（实测症状：控制条与退出按钮整个消失，只剩 Escape 能退出全屏）。
+ *
+ * 挡它的是**内联 !important**：级联里 style 属性高于任何选择器，
+ * 于是内联的 !important 赢过任何作者 !important。
+ */
+describe('控制条宿主的样式隔离', () => {
+  it('宿主的第一层是 all: initial，且必须带 !important', () => {
+    const host = document.createElement('div');
+
+    isolateControlsHost(host);
+
+    expect(host.style.getPropertyValue('all')).toBe('initial');
+    expect(host.style.getPropertyPriority('all')).toBe('important');
+  });
+
+  it('宿主的每一条样式都必须带 !important（少一条就重新被打穿）', () => {
+    const host = document.createElement('div');
+
+    isolateControlsHost(host);
+
+    const missing = Object.keys(CONTROLS_HOST_STYLES).filter(
+      (property) => host.style.getPropertyPriority(property) !== 'important',
+    );
+    expect(missing, '这些属性没有带 !important').toEqual([]);
+  });
+
+  it('all 之后必须把宿主自己的样子整份写回（all 会把 :host 里的那些一并重置）', () => {
+    const host = document.createElement('div');
+
+    isolateControlsHost(host);
+
+    // position: fixed 没了 → 控制条不再贴着视口底边。
+    expect(host.style.getPropertyValue('position')).toBe('fixed');
+    // display 没了 → 整条控制条（连同里面的内容）一起消失。
+    expect(host.style.getPropertyValue('display')).toBe('block');
+    expect(host.style.getPropertyValue('z-index')).toBe(String(CONTROLS_Z_INDEX));
+  });
+
+  it(':host 规则与内联底座同源（不许各写一份）', () => {
+    // ⚠️ 两份各写一遍时，改了一处忘了另一处 = 隔离破功：
+    // 内联底座是「真正起作用的那份」，:host 只是兜底。
+    // 这里守住它们是**同一张表**生成的。
+    const hostRule = /:host\s*\{([^}]*)\}/.exec(stripComments(controlsStyles))?.[1] ?? '';
+
+    Object.entries(CONTROLS_HOST_STYLES).forEach(([property, value]) => {
+      expect(hostRule, `:host 规则里必须有 ${property}`).toContain(`${property}: ${value}`);
+    });
+    expect(hostRule, ':host 必须先 all: initial').toContain('all: initial');
   });
 });

@@ -102,6 +102,56 @@ describe('FullscreenController', () => {
     expect(video.classList.contains('vsc-page-fullscreen-video--css-cover')).toBe(false);
   });
 
+  it('isolates the backdrop and the controls host with inline !important (hostile site CSS cannot break through)', () => {
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+
+    expect(controller.enter(video)).toBe(true);
+
+    // ⚠️ 这条守的是 6.2.0 的回归：挂载点换到了 <html>，而背板与控制条宿主
+    // 成了 <html> 的直接子节点 —— 站点一条 `html > div { display: none !important }`
+    // 就能打掉它们（实测症状：没有控制条、没有退出按钮，只剩 Escape 能退出）。
+    //
+    // 挡它的是**内联 !important**（级联里 style 属性高于任何选择器），
+    // 所以这里断言的是「我们写下去的那份声明带不带 important」。
+    const overlay = document.getElementById('vsc-page-fullscreen-overlay') as HTMLElement;
+    expect(overlay, '背板必须存在').not.toBeNull();
+    expect(overlay.style.getPropertyValue('display'), '背板必须显形').toBe('block');
+    expect(overlay.style.getPropertyPriority('display'), '背板的 display 必须带 !important').toBe(
+      'important',
+    );
+    expect(overlay.style.getPropertyPriority('position'), '背板的 position 必须带 !important').toBe(
+      'important',
+    );
+    expect(overlay.style.getPropertyPriority('inset'), '背板的 inset 必须带 !important').toBe(
+      'important',
+    );
+    expect(overlay.style.getPropertyPriority('z-index'), '背板的 z-index 必须带 !important').toBe(
+      'important',
+    );
+
+    // 舞台也在背板里面：它是一个 div，站点的 `div { … !important }` 会命中它。
+    const stageElement = document.getElementById('vsc-page-fullscreen-stage') as HTMLElement;
+    expect(stageElement.style.getPropertyPriority('display'), '舞台的 display 必须带 !important').toBe(
+      'important',
+    );
+
+    const host = document.getElementById('vsc-controls') as HTMLElement;
+    expect(host, '控制条宿主必须存在').not.toBeNull();
+    expect(host.style.getPropertyValue('display'), '控制条宿主必须显形').toBe('block');
+    expect(host.style.getPropertyPriority('display'), '控制条宿主的 display 必须带 !important').toBe(
+      'important',
+    );
+    expect(host.style.getPropertyPriority('position'), '控制条宿主的 position 必须带 !important').toBe(
+      'important',
+    );
+
+    controller.exit();
+  });
+
   it('preserves the live playback position when exiting fullscreen', () => {
     const controller = new FullscreenController();
     const parent = document.createElement('div');
@@ -301,6 +351,10 @@ describe('FullscreenController', () => {
     expect(overlay).not.toBeNull();
     // 背板必须撤掉：css-cover 跨不过页面祖先的层叠上下文，留着只会盖住视频。
     expect(overlay?.classList.contains('vsc-active')).toBe(false);
+    // ⚠️ display 必须**内联**写成 none：样式表里的 `.vsc-active { display: block }`
+    // 只是普通作者声明，撤掉 class 未必能让背板真的消失。
+    expect(overlay?.style.getPropertyValue('display')).toBe('none');
+    expect(overlay?.style.getPropertyPriority('display')).toBe('important');
 
     // ⚠️ 必须收尾：这个控制器还「在全屏」（css-cover 模式）。
     // 不退出的话，它会带着 fullscreenchange 监听器活到后面的用例里，

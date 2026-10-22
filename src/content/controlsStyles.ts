@@ -32,7 +32,7 @@
  * 控制条的样式也不能再靠页面里的 <style> 生效 —— 所以这份样式必须自给自足。
  */
 
-import { CONTROLS_Z_INDEX } from './runtimeStyles';
+import { CONTROLS_Z_INDEX, setImportant, setImportantAll } from './runtimeStyles';
 import {
   CONTROL_BAR_BREAKPOINTS,
   CONTROL_BAR_NARROW_PADDING,
@@ -71,34 +71,81 @@ const TRACK_IDLE = 'rgba(255, 255, 255, 0.45)';
  */
 export { CONTROL_BAR_BREAKPOINTS, CONTROL_BAR_REQUIRED_WIDTHS } from './controlBarLayout';
 
-export const controlsStyles = `
-:host {
+/**
+ * 控制条宿主（#vsc-controls）**自身**的样式。
+ *
+ * ⚠️ 这份声明有**两个消费方**，必须同源（改一处忘了另一处 = 隔离破功）：
+ *
+ * 1. shadow tree 里的 `:host { … }` 规则；
+ * 2. 宿主元素上的**内联 !important** 隔离底座（真正起作用的那个）。
+ *
+ * ⚠️ 为什么宿主要内联隔离：宿主是 **light DOM 里**的元素（shadow root
+ * 装的是它的**内容**，不是它自己）。站点一条
+ * `html > div { display: none !important }` 会**命中宿主本身** ——
+ * 而 `:host { … }` 只是 shadow tree 里的普通声明，**作者 !important 赢过它**
+ * （实测：控制条整条消失，连退出按钮都没有，只剩 Escape 能退出）。
+ *
+ * 而**内联 !important 赢过任何作者 !important**（style 属性高于所有选择器），
+ * 所以底座必须内联 —— 与页面级提示、背板用的是同一套机制。
+ */
+export const CONTROLS_HOST_STYLES: Record<string, string> = {
+  position: 'fixed',
+  left: '0',
+  right: '0',
+  bottom: '0',
+  'z-index': String(CONTROLS_Z_INDEX),
+  display: 'block',
+  'box-sizing': 'border-box',
+  margin: '0',
+  padding: '0',
+  border: 'none',
+  background: 'none',
+  color: '#f1f5f9',
+  'font-family': FONT_STACK,
+  'font-size': '13px',
+  'font-style': 'normal',
+  'font-weight': 'normal',
+  'line-height': '1.4',
+  'text-align': 'left',
+  direction: 'ltr',
+  'letter-spacing': 'normal',
+  'word-spacing': 'normal',
+  'text-transform': 'none',
+  '-webkit-font-smoothing': 'antialiased',
+};
+
+/**
+ * shadow tree 里的 `:host` 规则 —— 由上面那份表生成，两边永远一致。
+ */
+const hostRule = `:host {
   /* all: initial 把 host 的继承属性也重置，挡住页面的 div { font-family: ... } */
   all: initial;
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: ${CONTROLS_Z_INDEX};
-  display: block;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  color: #f1f5f9;
-  font-family: ${FONT_STACK};
-  font-size: 13px;
-  font-style: normal;
-  font-weight: normal;
-  line-height: 1.4;
-  text-align: left;
-  direction: ltr;
-  letter-spacing: normal;
-  word-spacing: normal;
-  text-transform: none;
-  -webkit-font-smoothing: antialiased;
-}
+${Object.entries(CONTROLS_HOST_STYLES)
+  .map(([property, value]) => `  ${property}: ${value};`)
+  .join('\n')}
+}`;
+
+/**
+ * 把控制条宿主**隔离**起来。
+ *
+ * 与页面级提示（isolateNotice）、网页全屏背板（isolateFullscreenOverlay）
+ * 同一套机制：`all: initial !important` 起手，再逐条 important 写回。
+ *
+ * ⚠️ `all: initial` 会把 `:host` 规则里的 position / display 之类一并重置
+ * （`:host` 是普通声明，输给内联 important）—— 所以必须把
+ * `CONTROLS_HOST_STYLES` 整份逐条写回，一项都不能漏。
+ *
+ * ⚠️ 必须在**挂上页面之前**调用。
+ */
+export const isolateControlsHost = (host: HTMLElement): void => {
+  host.removeAttribute('style');
+  setImportant(host, 'all', 'initial');
+  setImportantAll(host, CONTROLS_HOST_STYLES);
+};
+
+export const controlsStyles = `
+${hostRule}
+
 
 .bar {
   position: fixed;
