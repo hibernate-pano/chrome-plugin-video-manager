@@ -26,6 +26,47 @@ export const PLUS_KEY = 'plus';
  */
 const MODIFIER_PREFIX = /^(ctrl|control|alt|shift|meta|os)\+(.*)$/i;
 
+/**
+ * Shift 变体字符 → 基础键字符。
+ *
+ * 美式键盘上**物理键**与**它打出来的字符**不是一对一：Shift+, 打出来的是
+ * `<`，但物理键还是那个逗号键（Shift 只是个修饰键）。
+ *
+ * 键盘事件给的是**带 Shift 的那个字符**（`event.key === '<'`），
+ * 而 Chrome 的 suggested_key 写的是**基础键名**（`"Comma"`）。
+ * 两套词不归一的话，同一个物理键被当成两个不同的绑定：
+ * 扩展自己声明的命令键（`Ctrl+Shift+Comma`）就检测不出来 ——
+ * 用户把动作绑上去，浏览器先打开设置页，那个动作一次都不会发生。
+ *
+ * ⚠️ 表里只放**确实由 Shift 产生**的那几个标点。
+ * 别把无关的键也塞进来：映射表一旦掺进「本来就不同的键」，
+ * 两个不同的绑定会被误判成同一个，用户会发现自己的两个快捷键莫名互相顶替。
+ *
+ * ⚠️ 归一是**单向**的（变体 → 基础键）。基础键不在表里，
+ * 查表落空就原样返回 —— 于是 `<` 与 `,` 落到同一个值上，
+ * 而 `,` 自己不会变成 `<`（否则同一个键在两次归一之间来回跳，
+ * 存进 storage 的绑定与比对时用的绑定就对不上了）。
+ */
+export const SHIFT_VARIANT_KEYS: Readonly<Record<string, string>> = {
+  '<': ',',
+  '>': '.',
+  '?': '/',
+  '|': '\\',
+  '"': "'",
+  '~': '`',
+};
+
+/**
+ * 主键归一：把 Shift 变体字符换回它的基础键。
+ *
+ * ⚠️ 必须与 `src/options/options-reserved.ts` 的 canonicalShortcut 用**同一张表** ——
+ * 那两套归一规则的形态不同（修饰键排序、Chrome 键名），但「同一个物理键的
+ * 两种写法必须归到同一个值」这条对两边一样成立。表只有一份，才不会一边改了
+ * 另一边没改（这个洞就是这么漏的）。
+ */
+export const normalizeShiftVariant = (value: string): string =>
+  SHIFT_VARIANT_KEYS[value] ?? value;
+
 const normalizeMainKey = (value: string) => {
   if (value === '' || value === ' ' || value === 'Space' || value === 'Spacebar') {
     return ' ';
@@ -37,11 +78,16 @@ const normalizeMainKey = (value: string) => {
     return PLUS_KEY;
   }
 
-  if (value.length === 1) {
-    return value.toLowerCase();
+  // ⚠️ Shift 变体要先归回基础键，再谈大小写：
+  // 物理键只有一个（逗号键），Shift 只是修饰键，
+  // 于是 'ctrl+shift+<' 与 'ctrl+shift+,' 必须是同一条绑定。
+  const base = normalizeShiftVariant(value);
+
+  if (base.length === 1) {
+    return base.toLowerCase();
   }
 
-  return value;
+  return base;
 };
 
 /**

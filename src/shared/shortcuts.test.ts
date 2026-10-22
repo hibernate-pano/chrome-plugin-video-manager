@@ -151,6 +151,68 @@ describe('normalizeShortcut 的边界', () => {
   });
 });
 
+/**
+ * Shift 变体字符。
+ *
+ * 背景：美式键盘上 Shift+, 打出来的是 `<`，**键盘事件给的正是 `<`**。
+ * 而 Chrome 的命令键写的是基础键（manifest 里的 `Ctrl+Shift+Comma`）。
+ * 两套词不归一的话，同一个物理键被当成两个不同的绑定 ——
+ * 扩展自己的命令键就检测不出来：用户把动作绑到 Ctrl+Shift+, 上，
+ * 浏览器先打开设置页，那个动作一次都不会发生。
+ *
+ * 归一必须是**双向**的：`,` 与 `<` 是同一个物理键（Shift 只是修饰键），
+ * 归一到同一个值才对。
+ */
+describe('Shift 变体字符的归一', () => {
+  const PAIRS: Array<[string, string]> = [
+    ['<', ','],
+    ['>', '.'],
+    ['?', '/'],
+    ['|', '\\'],
+    ['"', "'"],
+    ['~', '`'],
+  ];
+
+  it('带 Shift 的字符与基础字符归一到同一个值', () => {
+    PAIRS.forEach(([shifted, base]) => {
+      expect(normalizeShortcut(`ctrl+shift+${shifted}`), `${shifted} 没归到 ${base}`)
+        .toBe(normalizeShortcut(`ctrl+shift+${base}`));
+    });
+  });
+
+  it('归一到基础字符本身（不是两个都变成同一个怪字符）', () => {
+    expect(normalizeShortcut('ctrl+shift+<')).toBe('ctrl+shift+,');
+    expect(normalizeShortcut('ctrl+shift+>')).toBe('ctrl+shift+.');
+    expect(normalizeShortcut('ctrl+shift+?')).toBe('ctrl+shift+/');
+    expect(normalizeShortcut('ctrl+shift+|')).toBe('ctrl+shift+\\');
+    expect(normalizeShortcut('ctrl+shift+"')).toBe("ctrl+shift+'");
+    expect(normalizeShortcut('ctrl+shift+~')).toBe('ctrl+shift+`');
+  });
+
+  it('只归一确实由 Shift 产生的那些键', () => {
+    // 字母、数字、减号都不是 Shift 变体，不能被顺手改掉。
+    expect(normalizeShortcut('ctrl+shift+a')).toBe('ctrl+shift+a');
+    expect(normalizeShortcut('ctrl+shift+1')).toBe('ctrl+shift+1');
+    expect(normalizeShortcut('ctrl+shift+-')).toBe('ctrl+shift+-');
+    expect(normalizeShortcut('ctrl+shift+;')).toBe('ctrl+shift+;');
+  });
+
+  it('设置页按 Ctrl+Shift+, 收集到的就是基础键', () => {
+    // 变异打穿点：若归一只认基础键，按出来的那一档（`<`）就存成了另一条绑定。
+    const event = new KeyboardEvent('keydown', { key: '<', ctrlKey: true, shiftKey: true });
+    expect(keyboardEventToShortcut(event)).toBe('ctrl+shift+,');
+  });
+
+  it('归一之后仍然要求 Shift 到位', () => {
+    // 归一只解决「同一个键的两种写法」，不放宽「按没按 Shift」。
+    const withShift = new KeyboardEvent('keydown', { key: '<', ctrlKey: true, shiftKey: true });
+    const withoutShift = new KeyboardEvent('keydown', { key: ',', ctrlKey: true });
+
+    expect(matchesShortcut(withShift, 'ctrl+shift+,')).toBe(true);
+    expect(matchesShortcut(withoutShift, 'ctrl+shift+,')).toBe(false);
+  });
+});
+
 describe('keyboardEventToShortcut', () => {
   it('captures space and modifier combinations', () => {
     expect(keyboardEventToShortcut(new KeyboardEvent('keydown', { key: ' ' }))).toBe(' ');

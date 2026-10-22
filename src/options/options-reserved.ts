@@ -13,7 +13,7 @@
  * 所以这里对浏览器保留键一律**拒绝保存**。
  */
 
-import { isBrowserReservedShortcut as isSharedReserved } from '../shared/shortcuts';
+import { isBrowserReservedShortcut as isSharedReserved, normalizeShiftVariant } from '../shared/shortcuts';
 
 /** 修饰键的规范名（用于把 Chrome 的写法归一）。 */
 const MODIFIER_NAMES = new Set([
@@ -42,6 +42,7 @@ const CHROME_KEY_NAMES: Record<string, string> = {
   backslash: '\\',
   semicolon: ';',
   quote: "'",
+  backquote: '`',
   bracketleft: '[',
   bracketright: ']',
   minus: '-',
@@ -93,7 +94,20 @@ export const canonicalShortcut = (value: string): string => {
 
   const main = CHROME_KEY_NAMES[mainRaw] ?? mainRaw;
 
-  return [...modifiers, main].join('+');
+  // ⚠️ Shift 变体字符必须在这里归回**基础键**。
+  //
+  // 背景：物理按下 Ctrl+Shift+, 时，键盘事件给的 `event.key` 是 `<`
+  // （带 Shift 的逗号），而 manifest 里扩展自己的命令键写的是
+  // "Ctrl+Shift+Comma" —— 归一成 `ctrl+shift+,`。
+  // 两边不相等的话，扩展自己的命令键就检测不出来：用户把动作绑上去，
+  // 浏览器先处理命令（打开设置页），他要的动作一次都不会发生。
+  //
+  // 归一之后 `ctrl+shift+<` 与 `ctrl+shift+,` 是同一条绑定 ——
+  // 这正是要的效果：**同一个物理键只能算一条**。
+  //
+  // 表是 shared 那份（SHIFT_VARIANT_KEYS）：两套归一规则共用一张表，
+  // 免得「改了一边、另一边还漏着」。
+  return [...modifiers, normalizeShiftVariant(main)].join('+');
 };
 
 /**

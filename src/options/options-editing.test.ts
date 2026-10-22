@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SHORTCUTS, SHORTCUT_DEFINITIONS } from '../shared/types';
+import { normalizeShortcut } from '../shared/shortcuts';
 import { createChromeMock, flush } from './options-test-env';
 import { formatExtensionCommandLabel, formatShortcutLabel } from './options-platform';
-import { canonicalShortcut, isBrowserReservedShortcut } from './options-reserved';
+import {
+  canonicalShortcut,
+  isBrowserReservedShortcut,
+  isExtensionCommandShortcut,
+} from './options-reserved';
 
 /**
  * 设置页的「编辑 → 保存 → 撤销」这一整套行为。
@@ -262,6 +267,69 @@ describe('保留键清单', () => {
     expect(canonicalShortcut('Ctrl+Shift+Comma')).toBe('ctrl+shift+,');
     expect(canonicalShortcut('shift+ctrl+,')).toBe('ctrl+shift+,');
     expect(isBrowserReservedShortcut('Ctrl+Shift+Comma')).toBe(true);
+  });
+});
+
+/**
+ * Shift 变体字符：同一个物理键只能算**一条**绑定。
+ *
+ * 背景：美式键盘上 Shift+, 打出来的是 `<`，键盘事件给的正是 `<`；
+ * 而 manifest 里扩展自己的命令键写的是 "Ctrl+Shift+Comma"（归一成 `ctrl+shift+,`）。
+ * 两套词不归一的话，用户把动作绑到 Ctrl+Shift+, 上时，
+ * 自冲突检查比对的是 `ctrl+shift+<` 与 `ctrl+shift+,` —— 不相等，于是放行。
+ * 结果：浏览器先处理命令（打开设置页），用户绑的动作一次都不会发生。
+ */
+describe('Shift 变体字符：同一个物理键只能算一条绑定', () => {
+  beforeEach(() => {
+    // extensionCommandShortcuts() 要读 chrome.runtime.getManifest()。
+    createChromeMock();
+  });
+
+  it('canonicalShortcut 把带 Shift 的那一档归到基础键', () => {
+    const PAIRS: Array<[string, string]> = [
+      ['<', ','],
+      ['>', '.'],
+      ['?', '/'],
+      ['|', '\\'],
+      ['"', "'"],
+      ['~', '`'],
+    ];
+
+    PAIRS.forEach(([shifted, base]) => {
+      expect(canonicalShortcut(`ctrl+shift+${shifted}`), `${shifted} 没归到 ${base}`)
+        .toBe(canonicalShortcut(`ctrl+shift+${base}`));
+    });
+
+    expect(canonicalShortcut('ctrl+shift+<')).toBe('ctrl+shift+,');
+  });
+
+  it('扩展自己的命令键：按出来的那一档也要被认出来', () => {
+    // 变异打穿点：manifest 写的是 "Ctrl+Shift+Comma"，
+    // 用户在设置页按出来的是 '<' —— 不归一的话自冲突检查会漏掉它。
+    expect(isExtensionCommandShortcut('ctrl+shift+<')).toBe(true);
+    expect(isExtensionCommandShortcut('ctrl+shift+,')).toBe(true);
+    expect(isExtensionCommandShortcut('ctrl+shift+k')).toBe(false);
+  });
+
+  it('两套归一规则对同义键给出同一个答案', () => {
+    // canonicalShortcut（设置页这一份）与 normalizeShortcut（shared 那份）
+    // 形式不同是有原因的（修饰键排序、Chrome 键名），但**同义键必须一致** ——
+    // 否则「两份都查」里有哪一份漏掉，自冲突就还是漏。
+    const PAIRS: Array<[string, string]> = [
+      ['<', ','],
+      ['>', '.'],
+      ['?', '/'],
+      ['|', '\\'],
+      ['"', "'"],
+      ['~', '`'],
+    ];
+
+    PAIRS.forEach(([shifted, base]) => {
+      expect(canonicalShortcut(`ctrl+shift+${shifted}`), `${shifted} 两套规则不一致`)
+        .toBe(normalizeShortcut(`ctrl+shift+${shifted}`));
+      expect(canonicalShortcut(`ctrl+shift+${base}`), `${base} 两套规则不一致`)
+        .toBe(normalizeShortcut(`ctrl+shift+${base}`));
+    });
   });
 });
 
