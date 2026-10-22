@@ -22,17 +22,21 @@
       letter-spacing: 0.06em;
     }
     .player {
-      width: 960px;
+      /* 窄视口（2x 特写用 640×400）里要能整个看到画面，
+         否则特写截图只剩画面中间一条。 */
+      width: min(960px, 100vw);
       border-radius: 14px;
       overflow: hidden;
       background: #000;
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
     }
     video {
-      width: 960px;
-      height: 540px;
+      width: 100%;
+      aspect-ratio: 16 / 9;
       display: block;
-      background: linear-gradient(135deg, #14532d 0%, #052e16 45%, #0f172a 100%);
+      /* poster 是 16:9 的画面；铺到别的比例上时不要拉变形。 */
+      object-fit: cover;
+      background: linear-gradient(135deg, #141d3a 0%, #0c1226 55%, #080c1a 100%);
     }
 
   </style>
@@ -40,36 +44,102 @@
 <body>
   <p class="page-title" id="page-title"></p>
   <div class="player">
-    <!-- poster 用内联 SVG 渐变模拟"视频画面"：全屏时 background 被强制为黑，
-         只有 poster 能撑住画面内容，让商店截图不至于全黑。 -->
+    <!-- poster 用内联 SVG 画一张"课程幻灯片"：全屏时 background 被强制为黑，
+         只有 poster 能撑住画面内容，让商店截图不至于全黑。
+
+         ⚠️ 为什么是"幻灯片"而不是"渐变 + 一行居中的字"：
+         居中的大字在截图里和扩展自己画的东西（标题胶囊、控制条）长得一样，
+         用户分不清哪句是网页的、哪句是扩展的 —— 那是**产品的一部分**，
+         不能被误读。幻灯片有明确的排版结构（眉标 / 标题 / 要点），
+         一眼就知道那是"视频里的内容"。 -->
     <video id="demo-video"></video>
   </div>
 
-  <!-- 「不记忆速度」示意：两个视频都从 1.0x 开始。扩展本身无界面，
+  <!-- 「不记忆速度」示意：视频从 1.0x 开始。扩展本身无界面，
        这是为商店截图造的演示场景，不参与扩展运行逻辑。 -->
 
   <script>
-    // lang=zh_CN / scene=fresh-speed 由生成脚本通过 query 传入，默认英文、默认播放器场景。
+    // lang=zh_CN 由生成脚本通过 query 传入，默认英文。
     const params = new URLSearchParams(location.search);
     const lang = params.get('lang') === 'zh_CN' ? 'zh_CN' : 'en';
     document.documentElement.lang = lang;
 
     const COPY = {
       en: {
-        pageTitle: 'Example page \u00b7 Online course video',
-        poster: 'Online course \u00b7 Lesson 12',
+        pageTitle: 'Example page · Online course video',
+        eyebrow: 'MODULE 04 · LESSON 12',
+        title: 'Focus and Memory',
+        bullets: [
+          'Perception filters, it does not record',
+          'Recall edits what we think we saw',
+          'Spacing beats cramming',
+        ],
       },
       zh_CN: {
-        pageTitle: '\u793a\u4f8b\u9875\u9762 \u00b7 \u5728\u7ebf\u8bfe\u7a0b\u89c6\u9891',
-        poster: '\u5728\u7ebf\u8bfe\u7a0b \u00b7 \u7b2c 12 \u8bb2',
+        pageTitle: '示例页面 · 在线课程视频',
+        eyebrow: '第 04 单元 · 第 12 讲',
+        title: '注意力与记忆',
+        bullets: [
+          '知觉是过滤器，不是录像机',
+          '回忆会改写你以为看见的东西',
+          '间隔重复胜过临时抱佛脚',
+        ],
       },
     };
     const copy = COPY[lang];
 
     document.getElementById('page-title').textContent = copy.pageTitle;
 
-    const posterSvg = "<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%2314532d'/><stop offset='0.45' stop-color='%23052e16'/><stop offset='1' stop-color='%230f172a'/></linearGradient></defs><rect width='960' height='540' fill='url(%23g)'/><text x='480' y='270' fill='%2394a3b8' font-family='sans-serif' font-size='28' text-anchor='middle'>" + copy.poster + '</text></svg>';
-    document.getElementById('demo-video').setAttribute('poster', 'data:image/svg+xml;utf8,' + posterSvg);
+    // ⚠️ 版面分区是有讲究的，不能随手挪：
+    //   - 上边 150px 留给商店截图的标题胶囊；
+    //   - 左上角那一小块留给调速小胶囊（它贴在画面左上角）；
+    //   - 下边 160px 留给全屏控制条与倍速档位菜单；
+    //   - 文字块统一左对齐 —— 居中的大字会被误读成扩展画的字。
+    const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    const escapeXml = (value) => value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const bulletMarkup = copy.bullets
+      .map((text, index) => {
+        const y = 282 + index * 34;
+        return (
+          `<rect x="104" y="${y - 11}" width="7" height="7" rx="2" fill="#f5b544"/>` +
+          `<text x="130" y="${y}" font-family="${FONT}" font-size="20" fill="#c3cddd">${escapeXml(text)}</text>`
+        );
+      })
+      .join('');
+
+    const posterSvg = [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">`,
+      `<defs>`,
+      `<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">`,
+      `<stop offset="0" stop-color="#141d3a"/>`,
+      `<stop offset="0.55" stop-color="#0c1226"/>`,
+      `<stop offset="1" stop-color="#080c1a"/>`,
+      `</linearGradient>`,
+      `<radialGradient id="glow" cx="0.8" cy="0.16" r="0.6">`,
+      `<stop offset="0" stop-color="#f5b544" stop-opacity="0.22"/>`,
+      `<stop offset="1" stop-color="#f5b544" stop-opacity="0"/>`,
+      `</radialGradient>`,
+      `</defs>`,
+      `<rect width="960" height="540" fill="url(#bg)"/>`,
+      `<rect width="960" height="540" fill="url(#glow)"/>`,
+      `<text x="104" y="170" font-family="${FONT}" font-size="14" letter-spacing="2.6" fill="#f5b544">${escapeXml(copy.eyebrow)}</text>`,
+      `<text x="104" y="220" font-family="${FONT}" font-size="42" font-weight="700" fill="#f8fafc">${escapeXml(copy.title)}</text>`,
+      `<rect x="104" y="242" width="56" height="3" rx="1.5" fill="#f5b544"/>`,
+      bulletMarkup,
+      `</svg>`,
+    ].join('');
+
+    document.getElementById('demo-video')
+      .setAttribute('poster', 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(posterSvg));
+
+    // 供截图脚本做碰撞检测：poster 上「视频内容」那段文字的边界
+    // （poster 坐标系 0..960 / 0..540）。画在 SVG 里的东西页面上查不到，
+    // 所以由这里声明出来，脚本再按 object-fit: cover 换算到屏幕坐标。
+    document.body.dataset.posterText = JSON.stringify({ x: 100, y: 148, width: 410, height: 216 });
   </script>
   <!-- 模拟一个播放中的视频：让全屏控制条能显示真实进度/时间。 -->
   <script>

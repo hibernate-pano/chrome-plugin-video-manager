@@ -171,9 +171,9 @@ English
 | Store Icon [REQUIRED] | 128×128 PNG | ✅ Ready | `icons/icon128.png` |
 | Screenshot 1 [REQUIRED] | 1280×800 | ✅ Ready | `store-assets/output/store-fullscreen.png` |
 | Screenshot 2 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-controls.png` |
-| Screenshot 3 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-speed-toast.png` |
-| Screenshot 4 | 1280×800 | ✅ Ready | `store-assets/output/store-options.png` |
-| Screenshot 5 | 1280×800 | ✅ Ready | `store-assets/output/store-fresh-speed.png` |
+| Screenshot 3 [RECOMMENDED] | 1280×800 | ✅ Ready | `store-assets/output/store-speed-menu.png` |
+| Screenshot 4 | 1280×800 | ✅ Ready | `store-assets/output/store-speed-toast.png` |
+| Screenshot 5 | 1280×800 | ✅ Ready | `store-assets/output/store-options.png` |
 | Small Promo Tile [RECOMMENDED] | 440×280 | ✅ Ready | `store-assets/output/store-promo-tile.png` |
 | Marquee Promo Tile | 1400×560 | ⬜ Not created | |
 
@@ -233,11 +233,10 @@ pnpm store:assets   # 重截 5 张图
 > 图上的字和这里说的必须一字不差。
 
 1. `store-fullscreen` — 首图。全屏态 + 底部控制条，标题 `Watch web video fullscreen`
-   （控制条本体在 6.0.9 换了配色与排版，这张要重截）
-2. `store-controls` — 控制条特写，标题 `Auto-hiding controls, out of your way`
-   （同上，控制条换了样子，这张要重截）
-3. `store-speed-toast` — 调速小胶囊特写，标题 `Fine-tune speed in 0.1x steps`
-4. `store-options` — 设置页 7 行改绑表（英文），标题 `7 shortcuts you can rebind`
+2. `store-controls` — 控制条特写（2x），标题 `Auto-hiding controls, out of your way`
+3. `store-speed-menu` — 倍速档位菜单展开（2x），标题 `Click a speed preset — 0.5x to 4x`
+4. `store-speed-toast` — 调速小胶囊特写（2x），标题 `Fine-tune speed in 0.1x steps`
+5. `store-options` — 设置页 7 行改绑表（英文），标题 `7 shortcuts you can rebind`
    （6.0.9 的设置页多了产品名、深色模式与底部版本号；且**方向键现在显示成箭头符号**
    （`←` `→`）而不是 `ArrowLeft` / `ArrowRight` —— 旧图里显示的是后者，
    与扩展实际显示的不一致。这张要重截）
@@ -247,11 +246,37 @@ pnpm store:assets   # 重截 5 张图
    旧图与现在的设置页**已经不是同一页**了，这张必须重截。
    标题 `7 shortcuts you can rebind` 仍然成立（可改键的动作仍是 7 个）——
    第二张卡片不是可改键的动作。
-5. `store-fresh-speed` — 「不记忆速度」，标题 `Never inherits a speed — always 1.0x`
-   （6.0.7 起替换原站点速度记忆截图。走真实 UI：网页全屏 + 控制条右下角如实显示 `1x`；
-   poster 特意换成 `Documentary · Episode 3`，避免与首图 `store-fullscreen` 长得一样浪费展示位）
 
-⚠️ 第 2、3 张是 2x 放大特写，不是像素裁切。
+⚠️ 第 2、3、4 张是 2x 放大特写，不是像素裁切。
+
+> ✅ 2026-10-22：换了第 3 张 —— 原来的第 3 张是调速胶囊，第 5 张是「不记忆速度」。
+> 现在第 3 张是**倍速档位菜单展开**，原来的「不记忆速度」那张**删掉了**。
+>
+> **为什么换**：档位菜单是**鼠标用户唯一的调速路径**（键盘有 `=` / `-`，
+> 鼠标此前只能看着只读的发愁），而文案早就承诺了
+> 「全屏控制条上的倍速可以点开，列出 0.5x 到 4x」—— **承诺了却一张图都没有**。
+> 换掉的那张则是生成脚本自己的注释就承认过的：
+> 「否则这张会和首图 store-fullscreen 长得一模一样，白白浪费一个展示位」——
+> 它和首图都是「全屏 + 控制条显示 1x」，只靠换个背景色来区分，是治标。
+> 「从不记忆速度」是个**行为**，详细描述里已经写清楚了，靠文案承载比靠截图更合适。
+>
+> ⚠️ 换图必然要同步改 `scripts/generate-store-assets.mjs` 里的 `CAPTIONS`。
+>
+> ⚠️ **这轮出图时还发现了一个真的产品缺陷**（不是素材问题）：
+> 档位菜单有 `max-height: 60vh`，窗口一矮（低于约 480px）就把 3x / 4x
+> **悄悄截在容器外面** —— 没有滚动条提示、没有省略号，看起来就像菜单只有 8 档，
+> 而这恰恰是「看快点」时最想按的两档。已修（`72vh` + 更紧凑的行高），
+> 回归守卫见 `tests/e2e/speed-menu.spec.js` 的「矮窗口里 10 个档位全部露得出来」。
+>
+> **画面内容为什么从「渐变 + 居中一行字」换成了「一张课程幻灯片」**：
+> 原来 poster 上那行居中的大字（`Online course · Lesson 12`）在截图里
+> 和扩展自己画的东西（标题胶囊、控制条）**长得一模一样** ——
+> 用户分不清哪句是网页的、哪句是扩展的，那是**产品的一部分**，不能被误读。
+> 幻灯片有明确的排版结构（眉标 / 标题 / 要点），一眼就知道那是「视频里的内容」。
+> 版面分区是刻意的：上边留给标题胶囊、左上角留给调速小胶囊、下边留给控制条与档位菜单、
+> 文字统一左对齐。这条**有守卫**：出图脚本会量真实的盒子，
+> 标题胶囊压到任何一样东西就直接报错（`assertCaptionDoesNotCover`）——
+> 之前就真撞过：胶囊正好落在 poster 的居中大字上，两段字叠在一起像渲染坏了。
 
 > **首图标题为什么改了**：原来是 `Watch any web video fullscreen`。那个 `any`
 > 与 Single Purpose 里的 "any web video" 是同一个毛病 —— 可以被读成
@@ -268,12 +293,6 @@ pnpm store:assets   # 重截 5 张图
 > ✅ 2026-10-20 已全部改完并重新出图（上面 5 张 + promo tile 都逐张看过，
 > 首图大标题现在是 `Watch web video fullscreen`，promo tile 副标题是
 > `Clean fullscreen for web video`，图上**再无 `any`**）。
->
-> **建议换掉第 3 张**：现在 5 张里没有任何一张能让人看出 6.0.9 最直观的新能力
-> ——「倍速可以点，弹出 0.5x–4x 的档位菜单」。`store-speed-toast` 展示的是
-> 6.0.7 就有的调速胶囊，信息量最低；若要换，把它换成**倍速档位菜单打开的样子**。
-> （商店截图上限 5 张，所以是替换而不是新增。）
-> ⚠️ 改图必然要同步改 `scripts/generate-store-assets.mjs` 里的 `CAPTIONS`。
 
 ## Permissions Justification
 
@@ -828,8 +847,9 @@ distributionChannels: [{ deployPercentage: 100, crxVersion: "6.0.8" }]
 - [ ] 详细描述（English）→ 复制 `---` 之后的那一段
 - [ ] 粘贴后**逐段数一遍**：中文 18 段，英文 18 段，一一对应
 - [ ] Single Purpose → 替换成改过的那句
-- [ ] 5 张截图 → `store-assets/output/` 下已按当前 UI 重新生成（2026-10-21，
-      `pnpm store:assets`；设置页在 6.2.0 变了：多了「使用引导」卡片、输入框加宽），
+- [ ] 5 张截图 → `store-assets/output/` 下已按当前 UI 重新生成（2026-10-22，
+      `pnpm store:assets`；设置页在 6.2.0 变了：多了「使用引导」卡片、输入框加宽；
+      画面内容换成了课程幻灯片；第 3 张换成了倍速档位菜单），
       直接上传；重生成命令见「素材文案的唯一来源」
 - [ ] Small Promo Tile → `store-assets/output/store-promo-tile.png`（已重新生成，
       副标题里的 `any` 已删）

@@ -25,15 +25,15 @@ const CAPTIONS = {
     fullscreen: 'Watch web video fullscreen',
     controls: 'Auto-hiding controls, out of your way',
     speed: 'Fine-tune speed in 0.1x steps',
+    speedMenu: 'Click a speed preset — 0.5x to 4x',
     options: '7 shortcuts you can rebind',
-    freshSpeed: 'Never inherits a speed — always 1.0x',
   },
   zh_CN: {
     fullscreen: '网页视频，一键全屏',
     controls: '控制条自动隐藏，不打扰观看',
     speed: '0.1x 精细调速',
+    speedMenu: '倍速档位可点选：0.5x 到 4x',
     options: '7 个快捷键，全部可改绑',
-    freshSpeed: '不继承速度，永远从 1.0x 开始',
   },
 };
 
@@ -126,6 +126,69 @@ const addCaption = async (page, text, placement) => {
   );
 };
 
+/**
+ * 标题胶囊不许压住任何**用户要读的东西**：
+ *
+ *  - 扩展自己画的界面（控制条 / 调速小胶囊 / 倍速档位菜单）
+ *  - 演示页 poster 上那段「视频内容」文字
+ *
+ * ⚠️ 这不是假想：store-speed-toast 那张的胶囊正好落在 poster 的居中大字上，
+ * 两段字叠在一起，截图上看着像渲染坏了。判据要量**真实的盒子**
+ * （getBoundingClientRect），不是「看起来好像没压到」。
+ *
+ * ⚠️ poster 上那段文字是画在 SVG 里的，页面上查不到 —— 所以由 demo.html
+ * 把它在 poster 坐标系里的边界写在 `data-poster-text` 上，这里按
+ * object-fit: cover 的规则换算到屏幕坐标再比。
+ */
+const assertCaptionDoesNotCover = async (page, label) => {
+  const caption = await page.locator(`#${CAPTION_ID}`).boundingBox();
+  if (!caption) throw new Error(`${label}: 标题胶囊不存在`);
+
+  const overlaps = (a, b) =>
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+
+  const targets = [
+    { name: '全屏控制条', selector: '#vsc-controls .bar' },
+    { name: '调速小胶囊', selector: '#vsc-speed-toast' },
+    { name: '倍速档位菜单', selector: '#vsc-controls .speed-menu' },
+  ];
+  for (const target of targets) {
+    const locator = page.locator(target.selector);
+    if ((await locator.count()) === 0) continue;
+    const box = await locator.boundingBox();
+    if (box && overlaps(caption, box)) {
+      throw new Error(
+        `${label}: 标题胶囊压住了${target.name}（${JSON.stringify(box)}）—— 截图上两样东西叠在一起。`,
+      );
+    }
+  }
+
+  const posterText = await page.evaluate(() => {
+    const raw = document.body.dataset.posterText;
+    const video = document.getElementById('demo-video');
+    if (!raw || !video) return null;
+    const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const box = JSON.parse(raw);
+    // object-fit: cover —— poster 按「填满」缩放后居中，超出部分被裁掉。
+    const scale = Math.max(rect.width / 960, rect.height / 540);
+    const drawWidth = 960 * scale;
+    const drawHeight = 540 * scale;
+    return {
+      x: rect.left + (rect.width - drawWidth) / 2 + box.x * scale,
+      y: rect.top + (rect.height - drawHeight) / 2 + box.y * scale,
+      width: box.width * scale,
+      height: box.height * scale,
+    };
+  });
+  if (posterText && overlaps(caption, posterText)) {
+    throw new Error(
+      `${label}: 标题胶囊压住了画面里的文字（${JSON.stringify(posterText)}）—— ` +
+        `截图上那段字被盖住，看起来像渲染坏了。`,
+    );
+  }
+};
+
 // 以 dist 为 web 根目录服务（vite 产物使用绝对路径 /options.js 等）
 const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1', '--directory', distDir], {
   stdio: 'ignore',
@@ -187,6 +250,7 @@ try {
         );
         if (!ctlVisible) throw new Error('fullscreen controls not visible');
         await addCaption(page, captions.fullscreen, 'top-center');
+        await assertCaptionDoesNotCover(page, 'store-fullscreen');
         await page.screenshot({ path: outPath('store-fullscreen', locale) });
         console.log(`${label('store-fullscreen', locale)} done (controls=visible)`);
       } finally {
@@ -226,6 +290,7 @@ try {
         );
         if (!ctlVisible) throw new Error('fullscreen controls not visible (closeup)');
         await addCaption(page, captions.controls, 'top-center');
+        await assertCaptionDoesNotCover(page, 'store-controls');
         await page.screenshot({ path: outPath('store-controls', locale) });
         console.log(`${label('store-controls', locale)} done (2x closeup)`);
       } finally {
@@ -251,6 +316,7 @@ try {
           () => document.getElementById('vsc-speed-toast')?.classList.contains('vsc-visible'),
         );
         if (!visible) throw new Error('speed toast not visible at capture time');
+        await assertCaptionDoesNotCover(page, 'store-speed-toast');
         await page.screenshot({ path: outPath('store-speed-toast', locale) });
         console.log(`${label('store-speed-toast', locale)} done (2x closeup)`);
       } finally {
@@ -318,26 +384,27 @@ try {
       }
     }
 
-    // 5) 「不记忆速度」：走真实 UI —— 网页全屏 + 控制条上的 1.0x。
+    // 4) 倍速档位菜单：全屏控制条上的倍速徽标点开，列出 0.5x–4x。
     //
-    // 早先这版用的是演示页里两张虚构的速度卡片，结果有两个问题：
-    // 标题胶囊与卡片标题重复同一句话，且下方大片留白；更重要的是，
-    // 它和其它四张（都是真实 UI）风格割裂，还容易被误读成产品有这样一个界面。
-    // 「不记忆速度」是个**行为**，不需要也不该配一个专用界面。
+    // ⚠️ 为什么是这一张：它展示的是**鼠标用户唯一的调速路径** ——
+    // 键盘有 = / -，但鼠标此前只能看着只读的发愁。
+    // 商店文案早就承诺了「全屏控制条上的倍速可以点开，列出 0.5x 到 4x」，
+    // 而 5 张截图里**一张都没有**它 —— 承诺了却看不见，是最容易被忽略的缺口。
+    //
+    // ⚠️ 替换掉的是原来第 5 张「不记忆速度」：那张与首图**长得几乎一样**
+    // （都是全屏 + 控制条显示 1x），生成脚本自己的注释就写着
+    // 「白白浪费一个展示位」—— 只靠换个背景色来区分，是治标。
+    // 「从不记忆速度」是个**行为**，靠文案承载更合适（详细描述里已经写了）。
     {
-      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const context = await browser.newContext({
+        viewport: { width: 640, height: 400 },
+        deviceScaleFactor: 2,
+      });
       try {
         const page = await context.newPage();
         await page.goto(`${BASE}/demo.html?lang=${locale}`, { waitUntil: 'networkidle' });
         await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
-        // 换成另一个视频的内容，否则这张会和首图 store-fullscreen 长得一模一样，
-        // 白白浪费一个展示位。用户一眼能看出「换了个视频，速度仍是 1x」。
-        await page.evaluate(() => {
-          const video = document.getElementById('demo-video');
-          const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%231e3a5f'/><stop offset='0.5' stop-color='%230f172a'/><stop offset='1' stop-color='%23241b3a'/></linearGradient></defs><rect width='960' height='540' fill='url(%23g)'/><text x='480' y='270' fill='%2394a3b8' font-family='sans-serif' font-size='28' text-anchor='middle'>Documentary · Episode 3</text></svg>";
-          video?.setAttribute('poster', 'data:image/svg+xml;utf8,' + svg);
-        });
-        await page.mouse.click(640, 360);
+        await page.mouse.click(320, 200);
         await page.keyboard.press('f');
         // ⚠️ 不能等 `#vsc-controls` 的 visible 状态：控制条搬进 shadow root 之后，
         // **宿主元素**自己就是 visibility:hidden（可见性由影子树里的 bar 元素
@@ -350,15 +417,27 @@ try {
           const bar = host?.shadowRoot?.querySelector('.bar');
           return Boolean(bar?.classList.contains('bar--visible'));
         });
-        // 关键：不按 = / -，让控制条如实显示 1.0x —— 这正是「从不记忆」的样子。
-        await page.waitForTimeout(200);
-        const rate = await page.evaluate(
-          () => document.getElementById('demo-video')?.playbackRate ?? null,
-        );
-        if (rate !== 1) throw new Error(`expected playbackRate 1, got ${rate}`);
-        await addCaption(page, captions.freshSpeed, 'top-center');
-        await page.screenshot({ path: outPath('store-fresh-speed', locale) });
-        console.log(`${label('store-fresh-speed', locale)} done (real UI, rate=${rate})`);
+        // 点开倍速档位菜单。控制条在 shadow root 里，Playwright 的 CSS
+        // 选择器会自动穿透开放 shadow DOM。
+        await page.locator('#vsc-controls .speed').click();
+        await page.waitForFunction(() => {
+          const host = document.getElementById('vsc-controls');
+          const menu = host?.shadowRoot?.querySelector('.speed-menu');
+          return Boolean(menu && !menu.hasAttribute('hidden'));
+        });
+        const rates = await page.evaluate(() => {
+          const host = document.getElementById('vsc-controls');
+          const items = host?.shadowRoot?.querySelectorAll('.speed-menu__item') ?? [];
+          return Array.from(items).map((item) => item.textContent);
+        });
+        if (rates.length === 0) throw new Error('speed menu is empty');
+        // 移动鼠标让控制条保持可见（3 秒不动会淡出，菜单跟着一起消失）。
+        await page.mouse.move(320, 385);
+        await page.waitForTimeout(150);
+        await addCaption(page, captions.speedMenu, 'top-center');
+        await assertCaptionDoesNotCover(page, 'store-speed-menu');
+        await page.screenshot({ path: outPath('store-speed-menu', locale) });
+        console.log(`${label('store-speed-menu', locale)} done (${rates.length} presets)`);
       } finally {
         await context.close();
       }

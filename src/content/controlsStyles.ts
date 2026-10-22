@@ -398,7 +398,18 @@ ${hostRule}
   display: flex;
   flex-direction: column;
   min-width: 96px;
-  max-height: 60vh;
+  /*
+   * ⚠️ 上限不是随便定的：10 个档位 × 25.5px + 容器内边距 = **263px**。
+   * 上限低于它，菜单就会**悄悄把 3x / 4x 截在外面** ——
+   * 没有滚动条提示、没有省略号，看起来就像菜单只有 8 档，
+   * 而 3x / 4x 恰恰是「看快点」时最想按的两档。
+   *
+   * 72vh：窗口高约 365px 起就够放下全部 10 档；
+   * 再矮就滚动（那种窗口本来就放不下 10 行）。
+   * 同时它也保住了「菜单顶部不会顶出视口」——
+   * 菜单是从按钮往上长的，顶部跑出屏幕的话上边几档就够不着了。
+   */
+  max-height: 72vh;
   overflow-y: auto;
   padding: 4px;
   border-radius: 10px;
@@ -422,7 +433,11 @@ ${hostRule}
 .speed-menu__item {
   display: block;
   width: 100%;
-  padding: 6px 10px;
+  /*
+   * 4px 而不是 6px：10 行 × 每行少 2px = 菜单矮了 20px，
+   * 刚好让 263px 的内容在 72vh 的上限里**一行不落**地显示完。
+   */
+  padding: 4px 10px;
   border: none;
   border-radius: 6px;
   background: transparent;

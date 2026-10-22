@@ -106,4 +106,61 @@ test.describe('倍速档位菜单', () => {
 
     await expect(page.locator('[data-role="speed-menu"]')).toBeHidden();
   });
+
+  /**
+   * 矮窗口里，10 个档位必须**全都露得出来**。
+   *
+   * ⚠️ 这里曾经有个静默缺陷：菜单有 `max-height: 60vh`，
+   * 窗口一矮（低于约 480px）就把 3x / 4x 这两档**截在容器外面** ——
+   * 没有滚动条提示、没有省略号，看起来就像菜单只有 8 档。
+   * 而 3x / 4x 恰恰是「看快点」时最想按的两档。
+   *
+   * 判据量的是**真实的盒子**：菜单容器不需要滚动（scrollHeight ≤ clientHeight），
+   * 且每一档都落在菜单盒子与视口之内 ——
+   * 光看「元素存在」或「opacity 是 1」都抓不到这件事。
+   */
+  test('矮窗口里 10 个档位全部露得出来（不会被 max-height 悄悄截掉）', async ({ page }) => {
+    await page.setViewportSize({ width: 640, height: 400 });
+    await enterFullscreen(page);
+
+    await page.mouse.move(300, 200);
+    await page.locator('[data-role="speed"]').click();
+
+    const menu = page.locator('[data-role="speed-menu"]');
+    await expect(menu).toBeVisible();
+    await expect(page.locator('[data-role="speed-menu"] [role="menuitem"]')).toHaveCount(10);
+
+    const metrics = await page.evaluate(() => {
+      const host = document.getElementById('vsc-controls');
+      const el = host?.shadowRoot?.querySelector('[data-role="speed-menu"]');
+      if (!el) throw new Error('speed menu not found in shadow root');
+      const rect = el.getBoundingClientRect();
+      const itemRects = Array.from(el.querySelectorAll('[role="menuitem"]')).map((item) => {
+        const box = item.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom };
+      });
+      return {
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        menuTop: rect.top,
+        menuBottom: rect.bottom,
+        itemRects,
+      };
+    });
+
+    // 容器装得下 = 不用滚动 = 每一档都在里面。
+    expect(
+      metrics.scrollHeight,
+      '菜单被 max-height 截断了 —— 3x / 4x 露在容器外面，用户看不到',
+    ).toBeLessThanOrEqual(metrics.clientHeight + 1);
+
+    // 菜单整体在视口里（菜单是从按钮往上长的，顶部跑出去就够不着了）。
+    expect(metrics.menuTop, '菜单顶部顶出视口了').toBeGreaterThanOrEqual(0);
+    expect(metrics.menuBottom, '菜单底部跑出视口了').toBeLessThanOrEqual(400);
+
+    metrics.itemRects.forEach((box, index) => {
+      expect(box.top, `第 ${index + 1} 档在菜单盒子外面（被截掉了）`).toBeGreaterThanOrEqual(metrics.menuTop - 1);
+      expect(box.bottom, `第 ${index + 1} 档在菜单盒子外面（被截掉了）`).toBeLessThanOrEqual(metrics.menuBottom + 1);
+    });
+  });
 });
