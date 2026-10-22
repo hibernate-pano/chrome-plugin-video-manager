@@ -292,6 +292,16 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
       return new RegExp(`^${pattern}$`).test(file);
     });
 
+    // 「这个文件算不算一次性排查脚本（探针）」的判据只有一个：**文件名**。
+    //
+    // ⚠️ 为什么不能靠「有没有被 Git 跟踪」来判：
+    // 那样一来，「新建了一个永久用例却忘了登记进 test:e2e:ext」这个
+    // **最该被抓住**的错误，在本地会悄无声息（文件还没 git add）。
+    // 探针靠名字豁免（`zz*` / `*probe*` / `_` / `tmp-` 都在 testIgnore 里），
+    // 永久用例一律严格 —— 两件事各归各，判据不混。
+    //
+    // ⚠️ 也没有用「已提交」当判据：那等于把「提交前忘了登记」这个错误
+    // 推迟到 commit 之后才报，而提交的那一刻人已经不看测试输出了。
     const script = pkg.scripts['test:e2e:ext'] ?? '';
     for (const file of specFiles) {
       if (isIgnored(file)) continue;

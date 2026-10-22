@@ -117,6 +117,7 @@ README 与商店文案里写着三句承诺：**产物里没有第三方库**、
 | `frame-scale.spec.js` | ✅ `--load-extension` 真加载 `dist/` | iframe 被缩放时，提示的坐标换算（见下） |
 | `video-owner.spec.js` | ✅ `--load-extension` 真加载 `dist/` | **视频在别处时不能静默**：跨 frame 的「谁有视频」协议（见下） |
 | `first-run-hint.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 首次使用引导：小视口（嵌入框）里退到精简版 |
+| `first-run-hint-multi-window.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 首次使用引导：两个**窗口**同时起播 → 只能有一条（认领必须原子） |
 | `iframe-fullscreen.spec.js` | ✅ `--load-extension` 真加载 `dist/` | iframe 里的网页全屏要铺满**整个页面**，不是铺满那个框 |
 | `speed-toast.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 调速胶囊/角标的可见性与坐标 |
 
@@ -409,6 +410,8 @@ expect(hint.text).not.toMatch(anyLocaleFragment('hintToolbar'));
 - [tests/e2e/frame-scope.spec.js](./tests/e2e/frame-scope.spec.js): 帧的归属 —— 快捷键/图标该作用在哪个视频上
 - [tests/e2e/frame-scale.spec.js](./tests/e2e/frame-scale.spec.js): 缩放 iframe 里的坐标换算（以浏览器画出的像素为基准）
 - [tests/e2e/first-run-hint.spec.js](./tests/e2e/first-run-hint.spec.js): 首次引导在小视口（嵌入框）里的「放得下」契约
+- [tests/e2e/first-run-hint-multi-window.spec.js](./tests/e2e/first-run-hint-multi-window.spec.js):
+  首次引导的**认领必须原子** —— 两个窗口同时起播时只能有一条（修复前实测两条同时可见）
 - [tests/e2e/speed-toast.spec.js](./tests/e2e/speed-toast.spec.js): 倍速胶囊与角标 —— 暂停后自己回来、进/出全屏重新贴位
 - [tests/e2e/video-owner.spec.js](./tests/e2e/video-owner.spec.js): 「视频在嵌入框里」不能静默 + 「谁有视频」的广播
 - [tests/e2e/iframe-fullscreen.spec.js](./tests/e2e/iframe-fullscreen.spec.js): 嵌入框里的网页全屏要**铺满整个页面**

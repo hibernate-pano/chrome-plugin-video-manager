@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "pnpm build && playwright test",
-    "test:e2e:ext": "pnpm build && playwright test no-network.spec.js real-extension.spec.js boundary.spec.js first-run-hint.spec.js frame-scale.spec.js frame-scope.spec.js iframe-fullscreen.spec.js fullscreen-controls.spec.js fullscreen-regression.spec.js options-page.spec.js speed-toast.spec.js subtitle-visibility.spec.js style-isolation.spec.js speed-menu.spec.js takeover-rules.spec.js takeover-scope.spec.js toolbar-title.spec.js video-owner.spec.js",
+    "test:e2e:ext": "pnpm build && playwright test no-network.spec.js real-extension.spec.js boundary.spec.js body-replacement.spec.js first-run-hint.spec.js first-run-hint-multi-window.spec.js frame-scale.spec.js frame-scope.spec.js iframe-fullscreen.spec.js fullscreen-controls.spec.js fullscreen-isolation.spec.js fullscreen-regression.spec.js options-page.spec.js options-self-conflict.spec.js speed-toast.spec.js stale-title.spec.js subtitle-visibility.spec.js style-isolation.spec.js speed-menu.spec.js takeover-rules.spec.js takeover-scope.spec.js toolbar-title.spec.js video-owner.spec.js",
     "icons": "node scripts/render-icons.mjs",
     "store:assets": "node scripts/generate-store-assets.mjs",
     "store:auth": "node scripts/store-auth.mjs",
