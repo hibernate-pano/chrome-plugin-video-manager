@@ -105,8 +105,11 @@
 - **设置页的「重新显示使用引导」可以随时把它叫回来** —— 引导是这个产品
   唯一的入口，错过一次不该等于永远看不到。
   它**真的**管用：已经打开的标签页里也会重新弹出来，不必刷新页面
-- 嵌入框很小的时候（320×180 那种），它会退成精简版，只留「按哪个键」那两行；
-  读屏播报走的仍然是完整版
+- 嵌入框很小的时候它会**分档让位**，而不是硬塞：
+  320×180 那种退成**精简版**（只留「按哪个键」那两行）；
+  再小（240×135 那种）退成**极简版**（只说「调速 · 键」，连方向词都省掉）。
+  两种精简版都**仍然说得出这是调速** —— 光秃秃的键名用户读不懂。
+  读屏播报走的始终是完整版（它不占版面）
 
 ## 接管失败时会说话
 
@@ -173,11 +176,26 @@ pnpm build
 ## 测试
 
 ```bash
-pnpm test          # 单元测试（jsdom + chrome mock）
-pnpm build         # tsc 类型检查 + vite 构建 → dist/
-pnpm test:e2e      # 全部 Playwright（会先 build）
-pnpm test:e2e:ext  # 真加载 dist 的 E2E（会先 build，需要本机有 Chromium）
+pnpm setup:browsers  # 第一次：把 Chromium 装进**项目内**的私有缓存
+pnpm test            # 单元测试（jsdom + chrome mock）
+pnpm build           # tsc 类型检查 + vite 构建 → dist/
+pnpm test:e2e:ext    # 真加载 dist 的 E2E（会先 build）
 ```
+
+> ⚠️ **为什么浏览器要装在项目内**：Playwright 的默认缓存
+> （`~/Library/Caches/ms-playwright`）是这台机器上**所有项目共享**的，
+> 而它的 `_deleteStaleBrowsers` 会把「不认识的」浏览器目录删掉 ——
+> 于是**别的项目**跑一次 `playwright install`，就能把本项目的浏览器清空。
+> 症状是「Executable doesn't exist」，而它与「产品坏了」长得一模一样。
+> 所以本项目用 `PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright` 装一份私有的，
+> 跑 e2e 时也带上这个环境变量：
+>
+> ```bash
+> PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright pnpm test:e2e:ext
+> ```
+>
+> 找浏览器的逻辑只有一份（`scripts/find-chromium.mjs`），
+> e2e 与商店素材脚本共用；它**按版本号**挑，不拿缓存里最新的那个凑合。
 
 CI 会在 push / PR 上跑 `test`、`build` 和 `e2e` 三个 job（`build` 依赖 `test`，`e2e` 独立）。出包不再走 CI，改由本地 `pnpm build:ext` 完成。
 
@@ -203,7 +221,7 @@ CI 会在 push / PR 上跑 `test`、`build` 和 `e2e` 三个 job（`build` 依�
     但点一下它之后快捷键立刻能用，点工具栏图标也一直能接管它 ——
     两条路径说的是同一件事
 - DRM 视频（如 Netflix）受浏览器保护，无法接管
-- 极少数强依赖原始 DOM 位置的站点会退回 CSS cover 模式
+- 极少数页面在视频的媒体源真的丢了（换源重载）时会退回 CSS cover 模式
 
 > 给 `<html>` 或 `<body>` 加 `transform` 的站点上，网页全屏的浮层曾会错位 ——
 > 那是因为浮层挂在 `<html>` 上，而 transform 会让它变成 fixed 后代的包含块。
