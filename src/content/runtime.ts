@@ -8,6 +8,10 @@ import {
   DEFAULT_SHORTCUTS,
   FrameFocusMessage,
   FRAME_FOCUS_MESSAGE,
+  FRAME_GONE_MESSAGE,
+  FRAME_PROBE_MESSAGE,
+  FrameGoneMessage,
+  FrameProbeResponse,
   PersistedSettings,
   SPEED_CHANGE_EVENT,
   SPEED_REPORT_MESSAGE,
@@ -19,6 +23,7 @@ import {
   VideoOwnerReportMessage,
 } from '../shared/types';
 import { FullscreenController } from './fullscreenController';
+import { observeBody, type BodyObserver } from './bodyObserver';
 import { ownsUserFocus } from './frameScope';
 import { createFirstRunHint, FirstRunHint } from './firstRunHint';
 import { KeyboardController } from './keyboardController';
@@ -150,7 +155,7 @@ export class ContentRuntime {
    * 就会被记成两次上报（消息翻倍，service worker 白白多醒一次）。
    */
   private readonly speedToast = new SpeedToast({
-    onRateChange: (rate) => this.reportSpeed(rate),
+    onRateChange: (rate, video) => this.reportSpeed(rate, video),
   });
   private readonly takeoverNotice = new TakeoverNotice();
   private readonly firstRunHint: FirstRunHint = createFirstRunHint(
@@ -252,8 +257,28 @@ export class ContentRuntime {
   });
   }
   private unsubscribeSettings: (() => void) | null = null;
-  /** 上一次上报给 background 的倍速（去重用，见 reportSpeed）。 */
-  private lastReportedRate: number | null = null;
+  /**
+   * 上一次上报给 background 的倍速（去重用，见 reportSpeed）。
+   *
+   * ⚠️ 三个值各有一义：
+   * - `null`：还没报成过（发失败时也回到这里）；
+   * - `undefined`：报过「这一层此刻没有受控视频」（不带 rate 的那条）；
+   * - 数字：报过这个倍速。
+   *
+   * 为什么不把「没有视频」也记成 1：那是撒谎（那个 1.2 倍可能在**别的**
+   * frame 里正在播），而标题会被这句话带偏。
+   */
+  private lastReportedRate: number | null | undefined = null;
+  /**
+   * 这一层**报出去过倍速的那个视频**。
+   *
+   * ⚠️ 判「那个视频还在不在」时用它，而不是 getCurrentVideo()：
+   * getCurrentVideo() 判的是「此刻能不能接管一个视频」（要可见、有尺寸…），
+   * 而这里要问的是「报出这个倍速的那个视频还在不在」——
+   * 视频被站点滚出视口、或者被 display:none 藏起来时，前者会说「没有视频」，
+   * 而那个视频其实还在、还在按 1.2 倍播（那时清掉读数就是在说谎）。
+   */
+  private reportedVideo: HTMLVideoElement | null = null;
   /**
    * 「焦点在我这儿」这个状态是不是已经上报过。
    *
@@ -281,6 +306,24 @@ export class ContentRuntime {
   private lastNoVideoQueryAt = 0;
   /** 是否有「别的 frame 有没有视频」的查询正在路上。 */
   private noVideoQueryPending = false;
+  /**
+   * 盯着「报出去过倍速的那个视频还在不在页面里」。
+   *
+   * ⚠️ 为什么需要它：那条**不带 rate** 的上报（「这一层此刻没有受控视频」）
+   * 只有在**变化的那一刻**发才有意义 —— 而「那个视频被站点从页面里摘走」
+   * （SPA 换页、站点重建播放器、换清晰度）这件事**没有任何事件**会通知我们：
+   * 视频不会发 `ratechange`（它只是被删了），页面也不会发 focus 事件。
+   *
+   * 没有这个观察者，那条上报**永远发不出去** ——
+   * background 收到的最后一个信号永远是「1.2 倍」，标题就一直挂着 1.2 倍。
+   *
+   * ⚠️ 观察的是 **body 的整棵子树**（见 bodyObserver.ts 的说明）：
+   * 视频被摘掉的方式有两种 —— 站点直接 `video.remove()`（父节点变了），
+   * 或者整个播放器容器被换掉（视频跟着祖先一起消失，它自己的父节点根本没变）。
+   * 只盯着父节点会漏掉后一种，而那恰恰是 SPA 换页时的常见形态。
+   */
+  private reportedVideoWatcher: BodyObserver | null = null;
+  private readonly boundReconcileReportedVideo = () => this.reconcileReportedVideo();
   private readonly boundHandleMessage = (
     message: unknown,
     _sender: chrome.runtime.MessageSender,
@@ -299,6 +342,19 @@ export class ContentRuntime {
     this.checkContextAlive();
   };
   private readonly boundPrepareLiveRegion = () => prepareLiveRegion();
+  /**
+   * 这一层要走了（页面被卸载 / iframe 被换掉）。
+   *
+   * ⚠️ pagehide 的 `persisted` = true 是「进后退缓存」：页面还可能原样回来，
+   * 那个视频还在、还在按原来的倍速播 —— 那时清掉读数就是撒谎。
+   */
+  private readonly boundReportFrameGone = (event: PageTransitionEvent) => {
+    if (event.persisted) {
+      return;
+    }
+
+    this.reportFrameGone();
+  };
 
   private getCurrentVideo() {
     return this.fullscreenController.getActiveVideo() ?? this.registry.getCurrentVideo();
@@ -360,8 +416,17 @@ export class ContentRuntime {
    * ⚠️ 只有**焦点所在的那个 frame** 才该说话：焦点落进 iframe 时，
    * 顶层文档的 activeElement 是那个 <iframe> 元素（浏览器把焦点代理到它身上），
    * 于是顶层自动闭嘴 —— 否则工具栏标题会停在**别的 frame** 的倍速上（在说谎）。
+   *
+   * ⚠️ **不带 rate** 也是一份合法的上报：「这一层此刻没有受控视频」。
+   * 那不是一个可以写进标题的倍速（写成 1 就是撒谎 —— 那个 1.2 倍可能是
+   * 别的 frame 里正在播的视频），background 收到后保持标题不变
+   * （契约见 shared/types.ts 的 SPEED_REPORT_MESSAGE）。
+   *
+   * @param rate 这一层此刻的受控视频倍速；没有受控视频时为 undefined。
+   * @param video 报出这个倍速的那个视频（用来记住「是哪一个」，
+   *   见 reportedVideo 的说明）。
    */
-  private reportSpeed(rate: number) {
+  private reportSpeed(rate?: number, video?: HTMLVideoElement | null) {
     if (this.contextInvalidated) {
       // 上下文已经死了：消息发不出去，别再试。
       return;
@@ -376,7 +441,10 @@ export class ContentRuntime {
     }
 
     try {
-      const message: SpeedReportMessage = { type: SPEED_REPORT_MESSAGE, rate };
+      const message: SpeedReportMessage = {
+        type: SPEED_REPORT_MESSAGE,
+        ...(rate === undefined ? {} : { rate }),
+      };
       void chrome.runtime?.sendMessage?.(message)?.catch?.(
         (error: unknown) => this.handleSendFailure(error, () => {
           // 没报成就不算报过：下一次机会（站点再改速、焦点再动）补报。
@@ -384,6 +452,10 @@ export class ContentRuntime {
         }),
       );
       this.lastReportedRate = rate;
+      if (rate !== undefined) {
+        this.reportedVideo = video ?? this.getCurrentVideo();
+        this.watchReportedVideo();
+      }
     } catch (error) {
       this.lastReportedRate = null;
       this.handleSendFailure(error);
@@ -435,6 +507,13 @@ export class ContentRuntime {
     this.lastFocusRate = rate;
     this.startFocusWatch();
 
+    // 记下「这一层报出去的是哪个视频」：探针要靠它回答
+    // 「那个视频还在不在」（见 reportedVideo 的说明）。
+    if (video) {
+      this.reportedVideo = video;
+      this.watchReportedVideo();
+    }
+
     try {
       const message: FrameFocusMessage = {
         type: FRAME_FOCUS_MESSAGE,
@@ -457,6 +536,97 @@ export class ContentRuntime {
       this.focusReported = false;
       this.focusRecordStale = true;
       this.handleSendFailure(error);
+    }
+  }
+
+  /**
+   * 「报出去过倍速的那个视频」还在不在页面里？
+   *
+   * 不在了 → 发一条**不带 rate** 的上报（「这一层此刻没有受控视频」）。
+   *
+   * ⚠️ 为什么这条上报**不带 rate**：那个视频已经不在了，而这一层的
+   * 「当前倍速」是 getCurrentVideo() 给的 —— 站点可能已经换上了**另一个**视频
+   * （这时报它的新倍速是对的），也可能一个都没有（这时报任何数字都是撒谎）。
+   * 说「我没有受控视频」是唯一两种情形都成立的说法，
+   * background 据此判断读数该不该作废（见 background 的倍速上报分支）。
+   */
+  private reconcileReportedVideo() {
+    const video = this.reportedVideo;
+    if (!video) {
+      this.stopReportedVideoWatcher();
+      return;
+    }
+
+    if (video.isConnected) {
+      return;
+    }
+
+    // 那个视频被站点从页面里拿走了。
+    // 先把「报出去过倍速的那个视频」清掉 —— 它已经不在了，
+    // 留着它会让下一次探针回答「gone」（对的），但也会让
+    // 「这一层报过倍速」这个事实被反复当成「还有读数」。
+    this.reportedVideo = null;
+    this.stopReportedVideoWatcher();
+
+    // 「这一层此刻没有受控视频」→ 不带 rate 的上报。
+    // ⚠️ 不能直接清掉 lastReportedRate：那样的话下一次调速会**再报一遍**
+    // （对的），但「没有视频」这个状态本身也该被报出去一次。
+    this.reportSpeed(undefined);
+  }
+
+  /**
+   * 盯着「报出去过倍速的那个视频」。
+   *
+   * 只在真的报过倍速之后才挂 —— 没什么可看的时候不占观察者。
+   */
+  private watchReportedVideo() {
+    if (this.reportedVideoWatcher || !this.reportedVideo || !document.body) {
+      return;
+    }
+
+    this.reportedVideoWatcher = observeBody({
+      // ⚠️ 必须观察 body 的**整棵子树**：视频被摘掉的方式有两种 ——
+      // 站点直接 video.remove()（父节点变了），或者整个播放器容器被换掉
+      // （视频跟着祖先一起消失，它自己的父节点根本没变）。
+      bodyInit: { childList: true, subtree: true },
+      onBodyMutation: this.boundReconcileReportedVideo,
+      // body 被整个换掉时（SPA 重建页面），旧 body 里的目标视频已经
+      // 「不在页面上了」，而观察者再也收不到任何通知 —— 只能在这里主动查一次。
+      onBodyReplaced: this.boundReconcileReportedVideo,
+    });
+  }
+
+  private stopReportedVideoWatcher() {
+    this.reportedVideoWatcher?.disconnect();
+    this.reportedVideoWatcher = null;
+  }
+
+  /**
+   * 告诉 background「我这一层要走了」。
+   *
+   * 背景：frame 被销毁时（iframe 被换掉、整页跳转），**没有人**会来说这件事：
+   * 内容脚本跟着文档一起没了，而 background 只能靠猜
+   * （「URL 变了？换页了？倍速归 1？」—— 那是 6.2.0 之前的老做法，
+   * 同文档导航也会触发它，于是用户刚调好的读数凭空消失）。
+   *
+   * 页面在卸载前的最后一刻还能发消息 —— 这是唯一一条**确定**的信号：
+   * 「报出这个倍速的那个 frame 自己说它要走了」。
+   *
+   * ⚠️ 只在「这一层真的报过倍速」时才发：没报过就没有读数可作废，
+   * 白发一条只是白白唤醒一次 service worker。
+   */
+  private reportFrameGone() {
+    if (this.contextInvalidated || !this.reportedVideo) {
+      return;
+    }
+
+    try {
+      const message: FrameGoneMessage = { type: FRAME_GONE_MESSAGE };
+      void chrome.runtime?.sendMessage?.(message)?.catch?.(() => {
+        // 页面正在卸载，发不出去就算了 —— background 还有探针兜底。
+      });
+    } catch {
+      // 同上：卸载途中发不出去是常态，不是错误。
     }
   }
 
@@ -751,6 +921,11 @@ export class ContentRuntime {
     // 这一页已经是个发不出消息的僵尸 —— 用户看到的只有「毫无反应」。
     window.addEventListener('blur', this.boundHandleWindowBlur);
 
+    // 这一层要走了 → 告诉 background「我这儿那个倍速作废了」。
+    // 少了这一条，iframe 被 SPA 换掉之后没人会来说这件事，
+    // 标题会一直挂着早已不存在的倍速（见 background 的复位路径）。
+    window.addEventListener('pagehide', this.boundReportFrameGone);
+
     try {
       this.settings = await loadSettings();
     } catch (error) {
@@ -778,7 +953,12 @@ export class ContentRuntime {
     // 用户点完图标去看别的标签页是很常见的节奏，那时 background 已经
     // 记下了正确的 frame 与倍速。
     this.reportFocus();
-    this.reportSpeed(this.getCurrentVideo()?.playbackRate ?? 1);
+    // ⚠️ 这一层**没有**受控视频时不带 rate（契约见 shared/types.ts）：
+    // 写成 1 就是撒谎 —— 那个 1.2 倍可能在**别的** frame 里正在播，
+    // 而「整页导航后标题复位」这件事由 background 的探针负责，
+    // 不靠这条谎报顺带完成。
+    const startupVideo = this.getCurrentVideo();
+    this.reportSpeed(startupVideo?.playbackRate, startupVideo);
   }
 
   stop() {
@@ -799,8 +979,10 @@ export class ContentRuntime {
     document.removeEventListener('focusin', this.boundReportFocus, true);
     document.removeEventListener('pointerdown', this.boundReportFocus, true);
     window.removeEventListener('blur', this.boundHandleWindowBlur);
+    window.removeEventListener('pagehide', this.boundReportFrameGone);
 
     this.stopFocusWatch();
+    this.stopReportedVideoWatcher();
 
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.removeListener(this.boundHandleMessage);
@@ -862,7 +1044,41 @@ export class ContentRuntime {
       // `<video>` 若在同一个任务里插入，直接回答就会用**上一帧的快照**
       // 说出「我没有视频」。晚一个微任务，答案才是真的。
       void Promise.resolve().then(() => this.reportVideoOwner());
+      return;
     }
+
+    if (type === FRAME_PROBE_MESSAGE) {
+      // background 在问「报出这个倍速的那个视频还在不在」。
+      //
+      // ⚠️ 必须**真的回一句**：background 判「这个 frame 没了」靠的就是
+      // 「有没有人回答」—— 没有回答 = 这个 frame 已经不在了
+      // （tabs.sendMessage 的回调会带 lastError 回来）。
+      // 不回就等于让 background 以为这一层死了。
+      sendResponse(this.answerFrameProbe());
+      return;
+    }
+  }
+
+  /**
+   * 回答 background 的探针：「你这一层报出去的那个视频还在吗？」
+   *
+   * ⚠️ 问的是**报出去的那一个**视频，不是「这一层此刻有没有视频」：
+   * 视频被滚出视口、被 display:none 藏起来时，后者会说「没有」，
+   * 而那个视频其实还在、还在按 1.2 倍播 —— 那时清掉读数就是撒谎。
+   */
+  private answerFrameProbe(): FrameProbeResponse {
+    const video = this.reportedVideo;
+    if (!video) {
+      // 这一层从来没报过倍速 → 没有读数可保，也不该据此清掉什么。
+      return { ok: true, video: 'unknown' };
+    }
+
+    if (!video.isConnected) {
+      // 那个视频被页面换掉了（iframe 被删掉、视频元素被重建）。
+      return { ok: true, video: 'gone' };
+    }
+
+    return { ok: true, video: 'alive', rate: video.playbackRate };
   }
 
   /**

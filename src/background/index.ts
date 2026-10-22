@@ -2,6 +2,9 @@ import { t } from '../shared/i18n';
 import { formatRate } from '../shared/rate';
 import {
   FRAME_FOCUS_MESSAGE,
+  FRAME_GONE_MESSAGE,
+  FRAME_PROBE_MESSAGE,
+  FrameProbeMessage,
   OPEN_OPTIONS_COMMAND,
   SPEED_REPORT_MESSAGE,
   TOGGLE_FULLSCREEN_MESSAGE,
@@ -171,6 +174,9 @@ const readTabRate = async (tabId: number): Promise<StoredRate | null> => {
 const forgetRate = (tabId: number) => {
   tabRates.delete(tabId);
   tabRateFrames.delete(tabId);
+  // 版本号也 +1：正在等待的异步复位路径会发现自己手里的版本号过期了
+  // （读数已经没了，它再动手就是多此一举）。
+  tabRateRevisions.set(tabId, (tabRateRevisions.get(tabId) ?? 0) + 1);
   void chrome.storage?.session?.remove?.(rateStorageKey(tabId))?.catch?.(() => {});
 };
 
@@ -208,6 +214,11 @@ const applySpeed = (tabId: number, rate: number, frameId: number) => {
     return;
   }
 
+  // 每次都换一次「版本号」：复位路径是**异步**的（要等探针），
+  // 等待期间可能来了一份**新的**上报 —— 那时「按旧判据清掉」就成了一步错棋。
+  // 版本号变了就说明「有新的读数到了」→ 旧判据作废。
+  tabRateRevisions.set(tabId, (tabRateRevisions.get(tabId) ?? 0) + 1);
+
   // 落盘要连「是谁报的」一起存：worker 被回收之后，
   // 「是不是同一个 frame」是复位标题的唯一依据。
   rememberRate(tabId, rate, frameId);
@@ -216,6 +227,114 @@ const applySpeed = (tabId: number, rate: number, frameId: number) => {
   if (rateChanged) {
     applyTitle(tabId, rate);
   }
+};
+
+/**
+ * tabId -> 这个标签页的读数「版本号」。
+ *
+ * 每次有新上报就 +1。它存在的唯一理由：**复位路径是异步的** ——
+ * 判据要等探针的回答（一次跨进程往返），等待期间完全可能有新的上报到达
+ * （整页导航之后，新页面的内容脚本启动时就会报一次）。
+ *
+ * 那种情况下「按旧判据清掉读数」就成了一步错棋：用户刚调好的读数被抹掉，
+ * 而新读数才是真的。所以异步路径在动手之前要核对版本号：
+ * 变了就说明有新的读数到了，**新读数赢**。
+ *
+ * ⚠️ 只在内存里：service worker 被回收之后版本号归零，
+ * 而那时内存里的读数也一起没了 —— 判据本来就只能从 storage.session 来，
+ * 版本号只是用来防「同一次 worker 生命周期内」的竞争。
+ */
+const tabRateRevisions = new Map<number, number>();
+
+/**
+ * 探针的结果：这个 frame 还在吗？它报出去的那个视频还在吗？
+ */
+interface FrameProbe {
+  /** 收到了回答 = 这个 frame 还活着。 */
+  alive: boolean;
+  /** 那个视频的状态（见 FrameProbeResponse['video']）。 */
+  video: 'alive' | 'gone' | 'unknown';
+  /** 视频还在的话，它此刻的倍速。 */
+  rate: number | null;
+}
+
+/**
+ * 探针扑空时的重试间隔（毫秒）。
+ *
+ * 内容脚本是 document_start 时**动态 import** 的（见 content-loader.js）：
+ * frame 已经在了、监听器还没注册上的那几十毫秒里，探针会扑空。
+ * 扑空与「frame 没了」在回调里长得一模一样（都有 lastError），
+ * 所以宁可多问一次 —— 多试一次的代价只是一次失败的回调。
+ */
+const FRAME_PROBE_RETRY_DELAY_MS = 80;
+
+/**
+ * 问某个 frame：「你还在吗？你报出去的那个视频还在吗？」
+ *
+ * ⚠️ **不按错误文案分流**：Chrome 在不同版本下给的是不同的字符串
+ * （「No frame with id 3 in tab with id 7」/「Frame with ID 3 was removed」…），
+ * 按文案匹配等于把判据建在别人的实现细节上。
+ * 这里只认一件事：**有没有人回答**。回答了 = 这个 frame 还活着；
+ * 没人回答 = 它已经不在了（或者还没准备好 —— 所以重试一次）。
+ */
+const probeFrame = async (tabId: number, frameId: number): Promise<FrameProbe> => {
+  const message: FrameProbeMessage = { type: FRAME_PROBE_MESSAGE };
+
+  const ask = () => new Promise<{ answered: boolean; payload: unknown }>((resolve) => {
+    try {
+      chrome.tabs.sendMessage(
+        tabId,
+        message,
+        { frameId },
+        (response: unknown) => {
+          if (chrome.runtime?.lastError) {
+            resolve({ answered: false, payload: null });
+            return;
+          }
+
+          resolve({ answered: true, payload: response });
+        },
+      );
+    } catch {
+      resolve({ answered: false, payload: null });
+    }
+  });
+
+  let attempt = await ask();
+  if (!attempt.answered) {
+    await new Promise((resolve) => setTimeout(resolve, FRAME_PROBE_RETRY_DELAY_MS));
+    attempt = await ask();
+  }
+
+  if (!attempt.answered) {
+    return { alive: false, video: 'gone', rate: null };
+  }
+
+  const payload = attempt.payload as { video?: unknown; rate?: unknown } | null;
+  const rate = typeof payload?.rate === 'number' && Number.isFinite(payload.rate)
+    ? payload.rate
+    : null;
+
+  if (payload?.video === 'alive') {
+    return { alive: true, video: 'alive', rate };
+  }
+
+  if (payload?.video === 'gone') {
+    return { alive: true, video: 'gone', rate: null };
+  }
+
+  return { alive: true, video: 'unknown', rate: null };
+};
+
+/**
+ * 复位这个标签页的读数：标题回到默认，存储里那份记录删掉。
+ *
+ * ⚠️ 删掉而不是写成 1：那份记录的价值全在「是谁报的」上
+ * （见 tabRateFrames），写成 1 只会留下一条「这个标签页是 1 倍」的假记录。
+ */
+const resetTabRate = (tabId: number) => {
+  forgetRate(tabId);
+  applyTitle(tabId, 1);
 };
 
 /**
@@ -270,6 +389,81 @@ const readFocusedFrame = async (tabId: number): Promise<number | null> => {
   }
 
   return null;
+};
+
+/**
+ * 焦点记录指着的 frame 还在吗？不在就清掉它。
+ *
+ * 为什么需要：焦点记录决定「点工具栏图标」这个意图发给谁。
+ * 那个 frame 没了却还记着它，图标就会打到一个不存在的 frame 上
+ * （退路是顶层 frame —— 见 sendToggleToFrame，但那是退路，不是常态）。
+ */
+const forgetDeadFocusedFrame = async (tabId: number) => {
+  const focusedFrameId = await readFocusedFrame(tabId);
+  if (focusedFrameId === null) {
+    return;
+  }
+
+  const probe = await probeFrame(tabId, focusedFrameId);
+  if (probe.alive) {
+    return;
+  }
+
+  forgetFocusedFrame(tabId);
+};
+
+/**
+ * 复核这个标签页的读数：那条记录指向的 frame 还在吗？它报的视频还在吗？
+ *
+ * 什么时候会走到这里：
+ * - 标签页换了 URL（SPA 换页 / 整页跳转）；
+ * - 某个 frame 报告「我这一层没有受控视频」，而读数是**别的** frame 报的。
+ *
+ * 两种结果：
+ * - 那个视频还在 → 读数继续有效（顺带把倍速刷新成它此刻真实的值）；
+ * - 那个 frame 或那个视频没了 → 读数作废：标题复位、存储删掉。
+ *
+ * ⚠️ **不按「URL 变了」就清**：同文档导航（history.pushState）也会带 URL 变化，
+ * 而那时视频还好好地播着 1.2 倍 —— 清掉就是让标题与画面自相矛盾
+ * （6.2.0 修过一次的老毛病）。判据是「那个视频还在不在」，不是「换页了没」。
+ */
+const revalidateTabRate = async (tabId: number) => {
+  const state = await readTabRate(tabId);
+  if (!state) {
+    // 这个标签页没有读数。但焦点记录可能还指着已经没了的 frame ——
+    // 那会让「点工具栏图标」打到一个不存在的 frame 上。
+    await forgetDeadFocusedFrame(tabId);
+    return;
+  }
+
+  // 记下这一刻的版本号：探针是异步的，等待期间来了一份新上报的话，
+  // 版本号会变 —— 那时「按旧判据清掉」就成了错棋（见 tabRateRevisions）。
+  const revision = tabRateRevisions.get(tabId) ?? 0;
+
+  const probe = await probeFrame(tabId, state.frameId);
+
+  if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+    // 等待期间有了新的读数 → 新读数赢，这一步旧判据作废。
+    return;
+  }
+
+  const current = await readTabRate(tabId);
+  if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
+    return;
+  }
+
+  if (probe.alive && probe.video === 'alive') {
+    // 那个视频还在 → 读数继续有效。倍速被站点改回去了就跟着改。
+    if (probe.rate !== null && probe.rate !== state.rate) {
+      applySpeed(tabId, probe.rate, state.frameId);
+    }
+    return;
+  }
+
+  // frame 没了 / 它报出去的那个视频被页面换掉了 / 它换过一次文档
+  // （新的内容脚本还没报过倍速）→ 读数作废。
+  resetTabRate(tabId);
+  await forgetDeadFocusedFrame(tabId);
 };
 
 /**
@@ -576,12 +770,77 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
     //
     // ⚠️ 这条路径是**异步**的：service worker 被回收过之后，内存里没有
     // 这个标签页的倍速，判据得去 storage.session 里拿（readTabRate）。
-    // 判据本身没变 —— 仍然是「报出这个倍速的就是这个 frame 自己」。
     void (async () => {
       const state = await readTabRate(tabId);
-      if (state?.frameId === frameId) {
-        applySpeed(tabId, 1, frameId);
+      if (!state) {
+        return;
       }
+
+      if (state.frameId === frameId) {
+        // 报出这个倍速的就是这个 frame 自己，而它现在说「我这儿没有受控视频」
+        // → 那个视频已经不在了 → 复位。
+        resetTabRate(tabId);
+        return;
+      }
+
+      // 读数是**别的** frame 报的：顶层说「我这儿没有视频」是**正常**的
+      // （视频在嵌入框里），那时抹掉读数就是让标题在说谎。
+      //
+      // ⚠️ 但也不能就此认定读数还有效 —— 那个 frame 可能已经没了
+      // （SPA 把 iframe 换掉了）：这时标题会一直挂着早已不存在的倍速，
+      // 而且**没有人**会来说这件事（它已经不会说话了）。
+      // 所以问它一句：还在吗？还在就留着读数，不在就复位。
+      const revision = tabRateRevisions.get(tabId) ?? 0;
+      const probe = await probeFrame(tabId, state.frameId);
+      if (probe.alive && probe.video !== 'gone') {
+        return;
+      }
+
+      // 探针期间可能已经有新的上报到了 → 别拿旧判据覆盖它。
+      if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+        return;
+      }
+
+      const current = await readTabRate(tabId);
+      if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
+        return;
+      }
+
+      resetTabRate(tabId);
+    })();
+
+    return;
+  }
+
+  // ── 「我这一层要走了」──
+  if (type === FRAME_GONE_MESSAGE) {
+    const frameId = sender.frameId;
+    if (typeof frameId !== 'number') {
+      return;
+    }
+
+    // ⚠️ 版本号要在**进异步之前**记下：读存储是异步的，这期间可能有
+    // **新的**上报到了（新页面的内容脚本启动时就会报一次）。
+    // 那时的读数不是这一层的 —— 这一层正在卸载，它报的那份已经作废，
+    // 但**新**的那份是有效的。版本号变了就说明有新读数，
+    // 不许拿「这一层走了」去清掉它。
+    const revision = tabRateRevisions.get(tabId) ?? 0;
+
+    // 这一层自己说它要走了（页面卸载 / iframe 被换掉）。
+    // 读数是它报的就作废 —— 这是**唯一确定**的信号：
+    // 别的信号都只是「猜」（URL 变了？换页了？），而这一条是事实。
+    void (async () => {
+      const state = await readTabRate(tabId);
+      if (!state || state.frameId !== frameId) {
+        return;
+      }
+
+      if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+        return;
+      }
+
+      resetTabRate(tabId);
+      await forgetDeadFocusedFrame(tabId);
     })();
 
     return;
@@ -589,18 +848,123 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
 
   // ── 倍速上报 ──
   if (type === SPEED_REPORT_MESSAGE) {
+    const frameId = sender.frameId ?? 0;
+
     if (typeof rate !== 'number' || !Number.isFinite(rate)) {
+      // ⚠️ **不带 rate 的上报不是「无效消息」**，它是一句有意义的陈述：
+      // 「**这一层**此刻没有受控视频」。
+      //
+      // ⚠️ 它**不**等于「这个标签页没有倍速了」：倍速可能是**别的** frame
+      // 报的（视频在嵌入框里、而这一层是顶层）。所以绝不能一收到就清读数 ——
+      // 那等于在正常播放时抹掉读数（标题在说谎）。
+      //
+      // 正确的判据是「这份读数是不是**这一层**报出来的」：
+      // - 是 → 那个视频已经不在了 → 复位；
+      // - 不是 → 问那个 frame 一句「你的视频还在吗」（探针）：
+      //   还在 → 读数继续有效；不在 → 复位。
+      //
+      // ⚠️ 以前这里直接 `return`，把这句话整个丢掉了 ——
+      // 于是「视频被站点换掉 → 那一层说它没有视频了」这条信号**永远到不了**，
+      // 标题继续挂着早已不存在的倍速（这正是本次要修的那个故障）。
+      void (async () => {
+        const state = await readTabRate(tabId);
+        if (!state) {
+          // 这个标签页本来就没有读数，没什么可清。
+          return;
+        }
+
+        // 记下这一刻的版本号：读存储是异步的，等待期间可能来了一份新的读数
+        // （新页面的内容脚本启动时就会报一次）—— 那时不能拿旧判据去覆盖它。
+        const revision = tabRateRevisions.get(tabId) ?? 0;
+
+        if (state.frameId === frameId) {
+          // 报出这个倍速的就是这一层，而它现在说「我这儿没有受控视频」
+          // → 那个视频已经不在了 → 复位。
+          if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+            return;
+          }
+
+          resetTabRate(tabId);
+          return;
+        }
+
+        // 读数是**别的** frame 报的：这一层说「我这儿没有视频」是**正常**的
+        // （视频在嵌入框里）。但也不能就此认定读数还有效 ——
+        // 那个 frame 可能已经没了（SPA 把 iframe 换掉了），
+        // 而它不会再说这件事。问它一句。
+        const probe = await probeFrame(tabId, state.frameId);
+        if (probe.alive && probe.video !== 'gone') {
+          return;
+        }
+
+        if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+          // 探针期间来了新的读数 → 新读数赢。
+          return;
+        }
+
+        const current = await readTabRate(tabId);
+        if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
+          return;
+        }
+
+        resetTabRate(tabId);
+      })();
+
       return;
     }
 
     // sender.frameId 对内容脚本的消息总是在（顶层 frame 是 0）。
     // 万一不是，也得当成一个具体 frame：落盘的那份必须能回答
     // 「是不是同一个 frame」，否则 worker 一重启就再也分不清了。
-    applySpeed(tabId, rate, sender.frameId ?? 0);
+    applySpeed(tabId, rate, frameId);
   }
 });
+
+/**
+ * tabId -> 上一次看到的 URL。
+ *
+ * 为什么要它：chrome.tabs.onUpdated 的 changeInfo.url 只在「URL 变了」时出现，
+ * 但它出现时**并不能**说明「导航真的发生了」——
+ * 同一个文档里的路由变化（history.pushState）也会带着新 URL 出现。
+ * 拿它跟上一次对比，才能把「同一个 URL 的状态变化」
+ * （loading / complete / favicon…）全部滤掉。
+ *
+ * ⚠️ 这是内存里的：service worker 被回收之后这份就没了，
+ * 于是回收后的第一次 URL 变化会被当成「变了」（判据交给探针，无害）。
+ */
+const lastTabUrls = new Map<number, string>();
 
 chrome.tabs?.onRemoved?.addListener((tabId) => {
   forgetRate(tabId);
   forgetFocusedFrame(tabId);
+  lastTabUrls.delete(tabId);
+});
+
+/**
+ * 标签页换了 URL → 复核这个标签页的读数。
+ *
+ * 为什么需要这条：SPA 把页面里的 iframe 整个换掉时，
+ * 那个 iframe 里的视频（以及它报出来的倍速）就此消失，
+ * 而**没有人**会来说这件事 —— 它已经不会说话了。
+ * 于是标题会一直挂着早已不存在的倍速（标题在说谎）。
+ *
+ * ⚠️ **换页不等于倍速归 1**（那是 6.2.0 之前的老做法，见 CHANGELOG）：
+ * 同文档导航也会带 URL 变化，而那时视频还好好地播着 1.2 倍。
+ * 清不清，交给探针按「那个视频还在不在」判断 —— 这条监听器只负责
+ * 「什么时候该问一句」。
+ */
+chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
+  const url = changeInfo.url;
+  if (typeof url !== 'string') {
+    return;
+  }
+
+  const previous = lastTabUrls.get(tabId);
+  lastTabUrls.set(tabId, url);
+  if (previous === url) {
+    // URL 没真的变 → 不动。
+    return;
+  }
+
+  void revalidateTabRate(tabId);
 });

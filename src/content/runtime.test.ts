@@ -3,6 +3,8 @@ import * as liveRegionModule from './liveRegion';
 import { ContentRuntime } from './runtime';
 import {
   FRAME_FOCUS_MESSAGE,
+  FRAME_GONE_MESSAGE,
+  FRAME_PROBE_MESSAGE,
   SPEED_REPORT_MESSAGE,
   STORAGE_KEY,
   TOGGLE_FULLSCREEN_MESSAGE,
@@ -156,6 +158,22 @@ describe('ContentRuntime integration', () => {
     await runtime.start();
     await vi.advanceTimersByTimeAsync(0);
   });
+
+  /**
+   * 起一份**新的**运行时（用当前的 DOM 状态）。
+   *
+   * 为什么需要：有些契约只在「启动那一刻」成立 ——
+   * 比如「这一层没有受控视频时，启动上报不带 rate」。
+   * beforeEach 里那份运行时是在**有视频**的 DOM 上起的，
+   * 改不了它的启动条件，只能另起一份。
+   */
+  const startFreshRuntime = async () => {
+    runtime.stop();
+    (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+    runtime = new ContentRuntime({ isTrustedEvent: () => true });
+    await runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+  };
 
   afterEach(() => {
     runtime.stop();
@@ -540,6 +558,173 @@ describe('ContentRuntime integration', () => {
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: SPEED_REPORT_MESSAGE,
       rate: 1,
+    });
+  });
+
+  /**
+   * 这一层**没有**受控视频时，启动上报**不带 rate**。
+   *
+   * ⚠️ 以前这里报的是 `rate: 1`（「没有视频就当 1 倍」）。那是**撒谎**：
+   * 那个 1.2 倍可能在**别的** frame 里正在播，而这条谎报会让工具栏标题
+   * 把别人的倍速抹成默认值（标题与画面自相矛盾）。
+   *
+   * 契约见 shared/types.ts 的 SPEED_REPORT_MESSAGE：
+   * 「没有受控视频」一律不带 rate，background 收到后保持标题不变。
+   */
+  it('这一层没有受控视频时，启动上报不带 rate（不拿 1 冒充）', async () => {
+    video.remove();
+    await startFreshRuntime();
+
+    const speedReports = (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[0] as { type?: string; rate?: number })
+      .filter((message) => message?.type === SPEED_REPORT_MESSAGE);
+
+    expect(speedReports).toEqual([{ type: SPEED_REPORT_MESSAGE }]);
+  });
+
+  /**
+   * 探针：background 问「报出这个倍速的那个视频还在吗」。
+   *
+   * background 记着「这个标签页的倍速是哪个 frame 报的」，而那个 frame
+   * 随时可能消失（SPA 把 iframe 换掉、页面整页跳转）—— 消失之后**没有人**
+   * 会来说这件事，于是标题会一直挂着早已不存在的倍速。
+   */
+  describe('探针：background 问「那个视频还在吗」', () => {
+    const askProbe = (): unknown => {
+      let response: unknown = null;
+      lastMessageListener()({ type: FRAME_PROBE_MESSAGE }, {}, (value: unknown) => {
+        response = value;
+      });
+      return response;
+    };
+
+    /** 调一次速（走真实路径：胶囊把「读数变了」回调回来）。 */
+    const changeSpeed = async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: '=' }));
+      await vi.advanceTimersByTimeAsync(0);
+    };
+
+    it('那个视频还在 → 回答 alive + 此刻的倍速', async () => {
+      await changeSpeed();
+
+      expect(askProbe()).toEqual({ ok: true, video: 'alive', rate: 1.1 });
+    });
+
+    it('那个视频被页面换掉了 → 回答 gone', async () => {
+      await changeSpeed();
+
+      // SPA 把 <video> 从文档里摘掉（iframe 被换掉时的常见形态）。
+      video.remove();
+
+      expect(askProbe()).toEqual({ ok: true, video: 'gone' });
+    });
+
+    it('这一层从没报过倍速 → 回答 unknown（不据此清掉别人的读数）', async () => {
+      // 没有报过倍速 = 这一层没有读数可保，也不能因为「没报过」就
+      // 断言「视频没了」。
+      video.remove();
+      await startFreshRuntime();
+
+      expect(askProbe()).toEqual({ ok: true, video: 'unknown' });
+    });
+  });
+
+  /**
+   * 「我这一层要走了」。
+   *
+   * frame 被销毁时（iframe 被换掉、整页跳转）**没有人**会来说这件事：
+   * 内容脚本跟着文档一起没了，而 background 只能靠猜
+   * （「URL 变了？换页了？倍速归 1？」—— 6.2.0 之前的老做法，
+   * 同文档导航也会触发它，于是用户刚调好的读数凭空消失）。
+   */
+  describe('页面卸载时的告别', () => {
+    it('这一层要走了 → 告诉 background', async () => {
+      window.dispatchEvent(new PageTransitionEvent('pagehide'));
+
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: FRAME_GONE_MESSAGE });
+    });
+
+    it('进后退缓存（persisted）→ 不说「我走了」', () => {
+      // persisted = true：页面还可能原样回来，那个视频还在、还在按
+      // 原来的倍速播 —— 那时清掉读数就是撒谎。
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith({ type: FRAME_GONE_MESSAGE });
+    });
+
+    it('这一层从没报过倍速 → 不必说（没有读数可作废）', async () => {
+      video.remove();
+      await startFreshRuntime();
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+
+      window.dispatchEvent(new PageTransitionEvent('pagehide'));
+
+      expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith({ type: FRAME_GONE_MESSAGE });
+    });
+  });
+
+  /**
+   * 那个视频被站点从页面里拿走了 → 说一句「这一层没有受控视频」。
+   *
+   * ⚠️ 这条上报**不带 rate**，而它**不会自己触发**：
+   * 视频被摘掉时既没有 `ratechange`（它只是被删了），
+   * 页面也没有 focus 事件 —— 没有观察者，那句话永远发不出去，
+   * background 收到的最后一个信号就永远是「1.2 倍」。
+   */
+  describe('报出去的那个视频被换掉了', () => {
+    const speedReports = () =>
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+        .map((call) => call[0] as { type?: string; rate?: number })
+        .filter((message) => message?.type === SPEED_REPORT_MESSAGE);
+
+    /** 调一次速（走真实路径：胶囊把「读数变了」回调回来）。 */
+    const changeSpeed = async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: '=' }));
+      await vi.advanceTimersByTimeAsync(0);
+    };
+
+    it('视频被摘掉 → 上报「这一层没有受控视频」（不带 rate）', async () => {
+      await changeSpeed();
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+
+      // 站点把那个 <video> 从页面里拿走了（SPA 换页、换清晰度）。
+      video.remove();
+      // MutationObserver 的回调是微任务。
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(speedReports()).toEqual([{ type: SPEED_REPORT_MESSAGE }]);
+    });
+
+    it('整个播放器容器被换掉（视频跟着祖先一起消失）→ 同样上报', async () => {
+      // ⚠️ 视频自己的父节点根本没变 —— 只盯着父节点会漏掉这一档，
+      // 而它恰恰是 SPA 换页时的常见形态。
+      await changeSpeed();
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+
+      const wrapper = document.createElement('div');
+      document.body.appendChild(wrapper);
+      wrapper.appendChild(video);
+      await vi.advanceTimersByTimeAsync(0);
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+
+      wrapper.remove();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(speedReports()).toEqual([{ type: SPEED_REPORT_MESSAGE }]);
+    });
+
+    it('视频还在 → 不上报（别白唤醒 service worker）', async () => {
+      await changeSpeed();
+      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+
+      // 页面里发生了点别的变化（与那个视频无关）。
+      const other = document.createElement('div');
+      document.body.appendChild(other);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(speedReports()).toEqual([]);
     });
   });
 

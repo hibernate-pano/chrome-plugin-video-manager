@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { FRAME_FOCUS_MESSAGE, SPEED_REPORT_MESSAGE } from '../shared/types';
+import {
+  FRAME_FOCUS_MESSAGE,
+  FRAME_GONE_MESSAGE,
+  FRAME_PROBE_MESSAGE,
+  SPEED_REPORT_MESSAGE,
+} from '../shared/types';
 
 /**
  * 工具栏图标标题 = 当前标签页的倍速。
@@ -41,7 +46,18 @@ type MessageListener = (
   sender: { tab?: { id?: number }; frameId?: number },
 ) => void;
 type RemovedListener = (tabId: number) => void;
-type UpdatedListener = (tabId: number, changeInfo: { status?: string }) => void;
+type UpdatedListener = (tabId: number, changeInfo: { status?: string; url?: string }) => void;
+
+/**
+ * 探针问某个 frame 时的答案。
+ *
+ * `answered: false` = 没有人应答 = 那个 frame 已经不在了
+ * （真实 API 里表现为回调带着 lastError 回来）。
+ */
+interface ProbeAnswer {
+  answered: boolean;
+  payload?: unknown;
+}
 
 interface Harness {
   messages: MessageListener[];
@@ -51,6 +67,13 @@ interface Harness {
   storageSet: Mock;
   storageRemove: Mock;
   storageGet: Mock;
+  /**
+   * 探针（background 问「那个 frame 还在吗」）的答案。
+   *
+   * 默认：回答「视频还在」—— 这是最常见的情况，
+   * 也是「别的 frame 报的倍速不该被抹掉」那条守卫的前提。
+   */
+  probeAnswer: (frameId: number) => ProbeAnswer;
   /** i18n 查到的文案；改它就能模拟「UI 语言变了」。 */
   actionTitle: string;
 }
@@ -79,10 +102,14 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
       session.delete(key);
     }),
     storageGet: vi.fn(async (key: string) => (session.has(key) ? { [key]: session.get(key) } : {})),
+    probeAnswer: () => ({ answered: true, payload: { ok: true, video: 'alive', rate: 1.5 } }),
     actionTitle: LOCALIZED_ACTION_TITLE,
   };
 
-  vi.stubGlobal('chrome', {
+  // ⚠️ lastError 只能在**回调里**读 —— 真实的 API 就是这样：
+  // 「有人应答」与「没人应答」在回调里长得一模一样，
+  // 唯一的区别是回调执行的那一刻 lastError 有没有值。
+  const chromeStub = {
     action: {
       onClicked: { addListener: () => undefined },
       setTitle: harness.setTitle,
@@ -93,12 +120,51 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
       getMessage: (key: string) => (key === 'actionTitle' ? harness.actionTitle : ''),
     },
     tabs: {
-      sendMessage: vi.fn(),
+      /**
+       * tabs.sendMessage 的替身。
+       *
+       * 探针（FRAME_PROBE_MESSAGE）的答案由 harness.probeAnswer 决定：
+       * 回答了 = frame 还活着；带 lastError 的回调 = 没人应答（frame 没了）。
+       */
+      sendMessage: vi.fn((
+        _tabId: number,
+        message: unknown,
+        optionsOrCallback: unknown,
+        maybeCallback?: unknown,
+      ) => {
+        const callback = typeof optionsOrCallback === 'function'
+          ? optionsOrCallback
+          : maybeCallback;
+        if (typeof callback !== 'function') {
+          return;
+        }
+
+        const options = (typeof optionsOrCallback === 'object' && optionsOrCallback !== null)
+          ? optionsOrCallback as { frameId?: number }
+          : {};
+        const type = (message as { type?: unknown } | null)?.type;
+
+        if (type === FRAME_PROBE_MESSAGE) {
+          const answer = harness.probeAnswer(options.frameId ?? 0);
+          if (!answer.answered) {
+            chromeStub.runtime.lastError = { message: 'No frame with id' };
+            callback(undefined);
+            chromeStub.runtime.lastError = null;
+            return;
+          }
+
+          callback(answer.payload);
+          return;
+        }
+
+        // 其它消息（广播问询）：真实环境里不回答也没有关系。
+        callback(undefined);
+      }),
       onRemoved: { addListener: (fn: RemovedListener) => harness.removed.push(fn) },
       onUpdated: { addListener: (fn: UpdatedListener) => harness.updated.push(fn) },
     },
     runtime: {
-      lastError: null,
+      lastError: null as { message: string } | null,
       getManifest: () => ({
         name: MANIFEST_NAME,
         action: { default_title: MANIFEST_ACTION_TITLE },
@@ -113,7 +179,9 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
         get: harness.storageGet,
       },
     },
-  });
+  };
+
+  vi.stubGlobal('chrome', chromeStub);
 
   return harness;
 };
@@ -136,6 +204,15 @@ describe('background 工具栏标题', () => {
    * 而读存储是一次异步 IO。不等它落地就断言，测的是「还没发生」。
    */
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  /**
+   * 等探针那条**慢**路径走完。
+   *
+   * 探针扑空时会重试一次（内容脚本是 document_start 动态 import 的，
+   * frame 在了、监听器还没注册上的那几十毫秒里会扑空）——
+   * 那条重试带一个 80ms 的间隔，所以这里要等得久一点。
+   */
+  const flushSlow = () => new Promise((resolve) => setTimeout(resolve, 200));
 
   const report = (tabId: number | undefined, rate: number, frameId = 0) => {
     harness.messages[0]?.(
@@ -262,20 +339,101 @@ describe('background 工具栏标题', () => {
   });
 
   /**
-   * 导航**不再**自己复位标题。
+   * 导航**不猜**倍速，但会**复核**读数。
    *
-   * 根因：`chrome.tabs.onUpdated` 的 `status === 'loading'` 既表示跨文档导航，
-   * 也表示**同文档导航**（history.pushState）。实测：SPA 站点上 pushState 之后，
-   * 视频的 playbackRate 仍然是 1.1，而标题被猜成了默认值 —— 用户刚调好的倍速
-   * 读数凭空消失，与视频上的常驻角标自相矛盾。
+   * 根因（6.2.0 修过一次的老毛病）：`chrome.tabs.onUpdated` 的
+   * `status === 'loading'` 既表示跨文档导航，也表示**同文档导航**
+   * （history.pushState）。实测：SPA 站点上 pushState 之后，视频的
+   * playbackRate 仍然是 1.1，而标题被猜成了默认值 —— 用户刚调好的倍速读数
+   * 凭空消失，与视频上的常驻角标自相矛盾。
    *
-   * 现在倍速的事实只有内容脚本知道：它上报一次，background 只记「最后一次上报」。
+   * 现在这条监听器**不猜**：它只负责「什么时候该问一句」，
+   * 答不答由探针按「那个视频还在不在」决定。
    */
-  it('不再监听导航去猜倍速', () => {
+  it('同一个 URL 的状态变化（loading / complete）不碰读数', async () => {
+    report(7, 1.5, 3);
+
+    // ⚠️ 这两个事件里**没有 url**：同一个文档、同一个 URL 的状态变化。
+    harness.updated[0]?.(7, { status: 'loading' });
+    harness.updated[0]?.(7, { status: 'complete' });
+    await flush();
+
+    expect(harness.setTitle, '同一个 URL 的状态变化不该重写标题').toHaveBeenCalledTimes(1);
+    expect(harness.storageRemove, '也不该删掉那份记录').not.toHaveBeenCalled();
+  });
+
+  it('URL 变了，但那个视频还在 → 读数留着（不按「换页 = 倍速归 1」处理）', async () => {
+    // 同文档导航（history.pushState）也会带 URL 变化 ——
+    // 那时视频还好好地播着 1.5 倍，清掉读数就是让标题与画面自相矛盾。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({
+      answered: true,
+      payload: { ok: true, video: 'alive', rate: 1.5 },
+    });
+
+    harness.updated[0]?.(7, { url: 'https://example.com/second' });
+    await flush();
+
     expect(
-      harness.updated.length,
-      '不得再监听 onUpdated 去猜「换页了 = 倍速归 1」—— 同文档导航也会触发它',
-    ).toBe(0);
+      harness.setTitle,
+      '视频还在时不该重写标题（那会让刚调好的读数凭空消失）',
+    ).toHaveBeenCalledTimes(1);
+    expect(harness.storageRemove).not.toHaveBeenCalled();
+  });
+
+  it('URL 变了，而那个 frame 已经没了 → 复位标题、删掉那份记录', async () => {
+    // 真实故障：SPA 把 iframe 整个换掉 → 那个 frame 死了，
+    // 而它报出来的 1.5 倍还挂在标题上（标题在说谎）。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({ answered: false });
+
+    harness.updated[0]?.(7, { url: 'https://example.com/second' });
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '读数作废了就该把那份记录删掉').toHaveBeenCalledWith(
+      'vsc-tab-rate:7',
+    );
+  });
+
+  it('URL 变了，而那个视频被页面换掉了 → 复位标题', async () => {
+    // frame 还在，但它报出去的那个 <video> 已经被站点换掉了。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({
+      answered: true,
+      payload: { ok: true, video: 'gone' },
+    });
+
+    harness.updated[0]?.(7, { url: 'https://example.com/second' });
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+  });
+
+  it('复核期间来了新的上报 → 新的读数赢，复位不能覆盖它', async () => {
+    // 整页导航之后新页面的内容脚本会重新上报 —— 那份新读数必须赢过
+    // 「按旧判据清掉」这个动作（清掉不能覆盖新上报）。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => {
+      // 探针还在路上的时候，新页面上报了 2 倍。
+      report(7, 2, 0);
+      return { answered: false };
+    };
+
+    harness.updated[0]?.(7, { url: 'https://example.com/second' });
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 2x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
   });
 
   it('内容脚本上报 1.0 时标题复位（导航后的复位走这条路）', () => {
@@ -348,6 +506,185 @@ describe('background 工具栏标题', () => {
       harness.setTitle,
       '别的 frame 报的倍速不该被这条消息抹掉（不该重写标题）',
     ).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 读数指向的 frame **没了** → 复位。
+   *
+   * 故障链：视频在 iframe 里、调到 1.5x；SPA 把那个 iframe 整个换掉；
+   * 顶层 frame 报「我这儿没有受控视频」（正常 —— 顶层本来就没有视频）。
+   *
+   * ⚠️ 以前这里直接跳过（判据是「报出这个倍速的就是这个 frame 自己」），
+   * 于是标题一直挂着 1.5x，而页面上一个视频都没有 —— 而且**没有人**会再来说
+   * 这件事：那个 iframe 已经不会说话了。
+   */
+  it('读数指向的 frame 已经没了 → 探针问不到它 → 复位', async () => {
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({ answered: false });
+
+    reportFocus(7, 0);
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
+  });
+
+  it('读数指向的 frame 还在 → 不复位（反向守卫）', async () => {
+    // 上一条的**反向守卫**：视频在 iframe 里、那个 iframe 好好地在那儿，
+    // 顶层说「我这儿没有视频」是正常的 —— 读数必须留着。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({
+      answered: true,
+      payload: { ok: true, video: 'alive', rate: 1.5 },
+    });
+
+    reportFocus(7, 0);
+    await flush();
+
+    expect(
+      harness.setTitle,
+      '那个 frame 还活着就不该抹掉读数',
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 「这一层没有受控视频」的**倍速上报**（不带 rate）→ 接住它。
+   *
+   * ⚠️ 以前这里直接 `return`，把这句话整个丢掉了 ——
+   * 于是「视频被站点换掉 → 那一层说它没有视频了」这条信号**永远到不了**，
+   * 标题继续挂着早已不存在的倍速（这正是本次要修的那个故障）。
+   *
+   * ⚠️ 但**不能**一收到就清读数：倍速可能是**别的** frame 报的
+   * （视频在嵌入框里、而这一层是顶层）。
+   */
+  it('不带 rate 的上报：这一层正是报出这个倍速的那一层 → 复位', async () => {
+    report(7, 1.5, 0);
+
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+    );
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
+  });
+
+  it('不带 rate 的上报：读数是别的 frame 报的、而那个 frame 还活着 → 不复位', async () => {
+    // ⚠️ 反向守卫：视频在 iframe 里、顶层 frame 说「我这儿没有视频」是**正常**的。
+    // 那时抹掉读数就是让标题在说谎。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({
+      answered: true,
+      payload: { ok: true, video: 'alive', rate: 1.5 },
+    });
+
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+    );
+    await flush();
+
+    expect(
+      harness.setTitle,
+      '别的 frame 报的倍速不该被这条消息抹掉',
+    ).toHaveBeenCalledTimes(1);
+    expect(harness.storageRemove).not.toHaveBeenCalled();
+  });
+
+  it('不带 rate 的上报：读数是别的 frame 报的、而那个 frame 已经没了 → 复位', async () => {
+    // 故障链：视频在 iframe 里、调到 1.5 倍；SPA 把 iframe 换掉 →
+    // 顶层 frame 报「这一层没有受控视频」（不带 rate）。
+    // 那个 iframe 已经不会说话了 → 探针问不到它 → 读数作废。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({ answered: false });
+
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+    );
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
+  });
+
+  it('不带 rate 的上报：这个标签页本来就没有读数 → 不重写标题', async () => {
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+    );
+    await flush();
+
+    expect(harness.setTitle, '没有读数就没有「复位」可言').not.toHaveBeenCalled();
+  });
+
+  it('frame 自己说要走了（页面卸载 / iframe 被换掉）→ 复位', async () => {
+    // 这是**唯一确定**的信号：报出这个倍速的那个 frame 自己说它要走了。
+    report(7, 1.5, 3);
+
+    harness.messages[0]?.(
+      { type: FRAME_GONE_MESSAGE },
+      { tab: { id: 7 }, frameId: 3 },
+    );
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
+  });
+
+  it('走的不是报出这个倍速的那个 frame → 不动', async () => {
+    // 别的 frame 走了（页面上还有别的嵌入框）：那份读数与它无关。
+    report(7, 1.5, 3);
+
+    harness.messages[0]?.(
+      { type: FRAME_GONE_MESSAGE },
+      { tab: { id: 7 }, frameId: 5 },
+    );
+    await flush();
+
+    expect(
+      harness.setTitle,
+      '别的 frame 走了不该抹掉这份读数',
+    ).toHaveBeenCalledTimes(1);
+    expect(harness.storageRemove).not.toHaveBeenCalled();
+  });
+
+  it('「我走了」到达时读数已经换人了 → 不许拿它清掉新读数', async () => {
+    // 竞态：整页导航 → 旧 frame 卸载（发「我走了」）→ 新页面的内容脚本启动
+    // （发新上报）。这两条消息可能**乱序**到达。
+    //
+    // 一旦「我走了」被当成「当前这份读数作废」，用户刚看到的新读数就被抹掉了。
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({ answered: false });
+
+    // 「我走了」这条消息**先**到，但它要等一次异步的读存储 ——
+    // 那次 await 期间，新页面的上报到了。
+    const stale = harness.messages[0];
+    stale?.(
+      { type: FRAME_GONE_MESSAGE },
+      { tab: { id: 7 }, frameId: 3 },
+    );
+    report(7, 2, 0);
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 2x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
   });
 
   it('焦点 frame 带着倍速 → 标题跟着它走（复位不能误伤这条）', () => {

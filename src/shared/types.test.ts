@@ -121,6 +121,8 @@ describe('消息协议的真源', () => {
     // docs/ARCHITECTURE.md 的消息表是照着它写的，两边会一起漂。
     expect(names).toEqual([
       'FRAME_FOCUS_MESSAGE',
+      'FRAME_GONE_MESSAGE',
+      'FRAME_PROBE_MESSAGE',
       'OPEN_OPTIONS_COMMAND',
       'SPEED_CHANGE_EVENT',
       'SPEED_REPORT_MESSAGE',

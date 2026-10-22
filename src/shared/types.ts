@@ -177,6 +177,75 @@ export interface SpeedReportMessage {
 }
 
 /**
+ * background -> content（只发给**指定的**一个 frame）：「你还活着吗？」
+ *
+ * 背景：background 记着「这个标签页的倍速是哪个 frame 报的」。那个 frame
+ * 随时可能消失 —— SPA 把 iframe 整个换掉、页面整页跳转 —— 而**没有人**
+ * 会来说一声。于是那份记录悬在半空：标题继续挂着早已不存在的倍速
+ * （标题在说谎），而它指向的 frame 早就没了。
+ *
+ * 以前唯一的复位判据是「报出这个倍速的 frame 自己说它没有视频了」，
+ * 而那个 frame 没了之后就不会再说话 —— 判据永远等不到。
+ *
+ * 这条消息就是来问「那个 frame 还在不在」的探针。
+ */
+export const FRAME_PROBE_MESSAGE = 'vsc-frame-probe';
+
+/**
+ * 探针本身：一条不带载荷的指令。
+ *
+ * 回答走 sendResponse（形状见 FrameProbeResponse）——
+ * 它只问**一个** frame（tabs.sendMessage 带 frameId），
+ * 所以响应通道只有一条，不需要广播。
+ */
+export interface FrameProbeMessage {
+  type: typeof FRAME_PROBE_MESSAGE;
+}
+
+/**
+ * 探针的回答。
+ *
+ * ⚠️ 「视频还在不在」问的是**这一层报出去过的那一个视频**，
+ * 不是「这一层此刻有没有视频」：视频被站点滚出视口、被 display:none 藏起来
+ * 时，「此刻有没有视频」会说没有，而那个视频其实还在、还在按 1.2 倍播。
+ */
+export interface FrameProbeResponse {
+  ok: true;
+  /**
+   * 那一层报出去过的视频现在怎么样：
+   * - `'alive'`：还在（读数继续有效）；
+   * - `'gone'`：被页面换掉了（读数作废）；
+   * - `'unknown'`：这一层从来没报过倍速（没有读数可保，别据此清掉什么）。
+   */
+  video: 'alive' | 'gone' | 'unknown';
+  /** 视频还在的话，它此刻的倍速。 */
+  rate?: number;
+}
+
+/**
+ * content -> background：「我这一层要走了。」
+ *
+ * 背景：frame 被销毁时（iframe 被换掉、整页跳转），**没有人**会来说这件事：
+ * 内容脚本跟着文档一起没了，它来不及说，而 background 只能靠猜
+ * （「URL 变了？换页了？倍速归 1？」—— 那是 6.2.0 之前的老做法，
+ * 同文档导航也会触发它，于是用户刚调好的读数凭空消失）。
+ *
+ * 页面在卸载前的最后一刻还能发消息 —— 这是唯一一条**确定**的信号：
+ * 「报出这个倍速的那个 frame 自己说它要走了」。
+ */
+export const FRAME_GONE_MESSAGE = 'vsc-frame-gone';
+
+/**
+ * 「我这一层要走了」—— 一条不带载荷的通告。
+ *
+ * background 从 sender.frameId 认出是哪一个 frame 走的（它只关心
+ * 「走掉的那个是不是报出这个倍速的那个」）。
+ */
+export interface FrameGoneMessage {
+  type: typeof FRAME_GONE_MESSAGE;
+}
+
+/**
  * 控制条发出的 DOM 事件：倍速变了。
  *
  * 为什么用 DOM 事件而不是构造函数回调：控制条由 FullscreenController 创建，
