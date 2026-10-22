@@ -612,3 +612,34 @@ export const installRuntimeStyles = () => {
     styleWatcher.observe(document.documentElement, { childList: true });
   }
 };
+
+/**
+ * 撤掉注入的 runtime 样式并停掉自愈观察者。
+ *
+ * ⚠️ 为什么需要这个：扩展上下文失效（扩展被更新/重载）时，运行时会
+ * `stop()` 掉自己创建的**一切** —— 胶囊、角标、live region、各种提示。
+ * 但这段 `<style>` 原来不在那条清理路径上：它是模块级变量，
+ * 没有卸载入口，于是旧页面上会永远留着一个 `<style id="vsc-runtime-styles">`。
+ *
+ * 实测（扩展重载后，旧页面上的残留节点）：
+ *   vsc-runtime-styles count=1，其余（胶囊/角标/live region/提示）全是 0
+ *
+ * 影响很小（那段 CSS 只样式化我们自己的 id），但它是「东西没被释放」
+ * 的一个实例 —— 而且它会让「旧页面上的扩展已经彻底退场」这句话不成立。
+ *
+ * ⚠️ 必须先断开观察者再摘节点：否则摘的那一刻观察者会看到
+ * 「style 脱离文档」并**立刻重注入**，等于没摘。
+ */
+export const uninstallRuntimeStyles = () => {
+  styleWatcher?.disconnect();
+  styleWatcher = null;
+
+  if (styleElement) {
+    styleElement.remove();
+    styleElement = null;
+  }
+
+  // 兜底：模块变量可能是被别处摘掉之后重建的（或页面重建了 <html>），
+  // 按 id 再摘一次，保证「卸载后页面里一个都不剩」。
+  document.getElementById(STYLE_ID)?.remove();
+};

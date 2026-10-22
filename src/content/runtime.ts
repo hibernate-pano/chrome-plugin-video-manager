@@ -29,6 +29,7 @@ import {
   isolateNotice,
   NOTICE_STALE_TOKENS,
   showNotice,
+  uninstallRuntimeStyles,
 } from './runtimeStyles';
 import { SpeedToast } from './speedToast';
 import { TakeoverNotice } from './takeoverNotice';
@@ -812,6 +813,13 @@ export class ContentRuntime {
     this.speedToast.destroy();
     destroyLiveRegion();
     this.takeoverNotice.destroy();
+
+    // ⚠️ 最后才摘样式：上面那些 destroy() 都还在用这些 class 做清理，
+    // 提前摘掉会让「撤掉节点」变成一个看不见的瞬时闪动。
+    //
+    // ⚠️ 而「扩展已更新」提示**不依赖**这段样式 —— 它用自己的 inline
+    // `!important` 底座（isolateNotice），所以摘掉不会让那句提示变得不可见。
+    uninstallRuntimeStyles();
   }
 
   /** background 消息：工具栏图标点击 -> 切换当前标签页的网页全屏。 */

@@ -11,6 +11,7 @@ import {
   NOTICE_SHELL_STYLES,
   NOTICE_Z_INDEX,
   installRuntimeStyles,
+  uninstallRuntimeStyles,
   isolateNotice,
   OVERLAY_Z_INDEX,
   setImportant,
@@ -93,6 +94,55 @@ describe('installRuntimeStyles', () => {
     const rebuilt = document.getElementById(STYLE_ID);
     expect(rebuilt).not.toBeNull();
     expect(rebuilt).not.toBe(original);
+    expect(document.querySelectorAll(`#${STYLE_ID}`).length).toBe(1);
+  });
+});
+
+describe('uninstallRuntimeStyles', () => {
+  beforeEach(() => {
+    document.getElementById(STYLE_ID)?.remove();
+    installRuntimeStyles();
+  });
+
+  it('撤掉节点，且页面里一个都不剩', () => {
+    expect(document.getElementById(STYLE_ID)).not.toBeNull();
+
+    uninstallRuntimeStyles();
+
+    expect(document.getElementById(STYLE_ID)).toBeNull();
+  });
+
+  it('撤掉之后节点不会被悄悄重建', async () => {
+    // 要求本身很明确：卸载之后页面里不该再长出这个节点。
+    //
+    // ⚠️ 诚实标注：这条用例**证明不了**「观察者被断开了」——
+    // 实测过变异（把 `styleWatcher?.disconnect()` 删掉），它照样绿。
+    // 原因是 `uninstallRuntimeStyles` 还把 `styleElement` 置成了 null，
+    // 而观察者回调的第一句就是 `if (styleElement && ...)` ——
+    // 两个机制**各自都能**阻止重建，于是单删一个观察不到。
+    //
+    // 仍然保留 disconnect：它是**直接**意图（「别再盯着了」），
+    // 而置 null 是副作用式的。以后若有人改写观察者逻辑（比如改成
+    // 与 styleElement 无关的判据），disconnect 就得独自兜住。
+    uninstallRuntimeStyles();
+
+    // 给观察者足够的微任务机会（如果它真会重建，会在这里发生）。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      document.getElementById(STYLE_ID),
+      '卸载之后样式节点又回来了',
+    ).toBeNull();
+  });
+
+  it('卸载后再次 install 仍然能装回来（不是一次性自毁）', () => {
+    uninstallRuntimeStyles();
+    expect(document.getElementById(STYLE_ID)).toBeNull();
+
+    installRuntimeStyles();
+
+    expect(document.getElementById(STYLE_ID)).not.toBeNull();
     expect(document.querySelectorAll(`#${STYLE_ID}`).length).toBe(1);
   });
 });

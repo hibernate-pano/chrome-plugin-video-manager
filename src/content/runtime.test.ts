@@ -503,6 +503,32 @@ describe('ContentRuntime integration', () => {
 
       expect(liveRegion(), '内容脚本停了却留下一个孤儿节点').toBeNull();
     });
+
+    it('停止时把我们注入的 runtime 样式也摘掉', () => {
+      // ⚠️ 为什么这条值得守：扩展上下文失效（扩展被更新/重载）时，
+      // 运行时会 stop() 掉自己创建的**一切** —— 胶囊、角标、live region、提示。
+      // 而这段注入的 `<style id="vsc-runtime-styles">` 原先不在那条清理路径上：
+      // 它是模块级变量、没有卸载入口。
+      //
+      // 实测（扩展重载后，旧页面上的残留节点）：
+      //   vsc-runtime-styles count=1，其余（胶囊/角标/live region/提示）全是 0
+      //
+      // 影响很小（那段 CSS 只样式化我们自己的 id），但「旧页面上的扩展
+      // 已经彻底退场」这句话因此不成立 —— 用户 inspect 一下就能看到
+      // 一个属于已经不在的扩展的节点。
+      const styleId = 'vsc-runtime-styles';
+      expect(
+        document.getElementById(styleId),
+        '前置条件：runtime 启动后应该装上了样式',
+      ).not.toBeNull();
+
+      runtime.stop();
+
+      expect(
+        document.getElementById(styleId),
+        '内容脚本停了，却把注入的样式留在页面里',
+      ).toBeNull();
+    });
   });
 
   it('启动时把当前倍速上报给 background（background 不再猜）', async () => {
