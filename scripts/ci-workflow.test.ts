@@ -261,53 +261,116 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(script).toMatch(/real-extension\.spec\.js/);
   });
 
-  it('test:e2e:ext 覆盖 tests/e2e 下每一个 spec，新用例不会静默漏跑', () => {    // 同一条教训：新增一个 spec 文件却忘了加进 test:e2e:ext，CI 会照样全绿，
-    // 而那个文件从未被执行过。这里用文件系统做事实核查，而不是手写名单。
-    // 唯一的例外来源是 playwright.config.js 的 testIgnore。
-    const e2eDir = resolve(repoRoot, 'tests/e2e');
-    const specFiles = readdirSync(e2eDir).filter((name) => name.endsWith('.spec.js'));
-    expect(specFiles.length, 'tests/e2e 下应当有 spec 文件').toBeGreaterThan(0);
-
-    const playwrightConfig = readFileSync(resolve(repoRoot, 'playwright.config.js'), 'utf8');
-    const ignored = (
-      (playwrightConfig.match(/testIgnore:\s*\[([^\]]*)\]/)?.[1] ?? '')
-        .split(',')
-        .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
-        .filter(Boolean)
-    );
-
-    // testIgnore 里的条目可以是文件名，也可以是 glob（例如 '**/_*.spec.js'）。
-    // 只按「完全相等」判断的话，glob 形式的忽略项会被当成没写 ——
-    // 于是一次性排查脚本（探针）会重新被算成「CI 没跑的用例」，
-    // 守护本身失灵。
-    const isIgnored = (file: string) => ignored.some((entry) => {
-      if (!entry.includes('*')) {
-        return entry === file;
-      }
-
-      const pattern = entry
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*\//g, '(?:.*/)?')
-        .replace(/\*/g, '[^/]*');
-      return new RegExp(`^${pattern}$`).test(file);
-    });
-
-    // 「这个文件算不算一次性排查脚本（探针）」的判据只有一个：**文件名**。
-    //
-    // ⚠️ 为什么不能靠「有没有被 Git 跟踪」来判：
-    // 那样一来，「新建了一个永久用例却忘了登记进 test:e2e:ext」这个
-    // **最该被抓住**的错误，在本地会悄无声息（文件还没 git add）。
-    // 探针靠名字豁免（`zz*` / `*probe*` / `_` / `tmp-` 都在 testIgnore 里），
-    // 永久用例一律严格 —— 两件事各归各，判据不混。
-    //
-    // ⚠️ 也没有用「已提交」当判据：那等于把「提交前忘了登记」这个错误
-    // 推迟到 commit 之后才报，而提交的那一刻人已经不看测试输出了。
-    const script = pkg.scripts['test:e2e:ext'] ?? '';
-    for (const file of specFiles) {
-      if (isIgnored(file)) continue;
-      expect(script, `${file} 没有被 test:e2e:ext 引用，CI 不会执行它`).toContain(file);
+  /**
+   * 让 **Playwright 自己**回答「哪些 spec 会被执行」。
+   *
+   * ⚠️ 为什么不用手写 glob 匹配去解析 testIgnore：
+   * Playwright 的真实规则是「pattern 若没写成目录通配前缀的形式，它会自动补上；
+   * 随后用 minimatch 去匹配**绝对路径**」（见 playwright/lib/util.js 的
+   * createFileMatcher）。自己复刻这套语义就是在猜；猜错了守卫会**骗人** ——
+   * 那比没有守卫更糟。
+   *
+   * `--list` 用的是同一份 playwright.config.js、同一套匹配逻辑 ——
+   * 它列出来的，就是 CI 真会跑的那些文件。
+   *
+   * ⚠️ 这里必须**炸掉**而不是跳过：核实不了「哪些会跑」时如果默默放过，
+   * 这条守卫就成了假守卫（正是它要防的那类假象）。
+   */
+  const listPlaywrightSpecFiles = (): string[] => {
+    const cli = resolve(repoRoot, 'node_modules/@playwright/test/cli.js');
+    if (!existsSync(cli)) {
+      throw new Error(
+        `找不到 ${cli} —— 无法向 Playwright 核实「哪些用例会跑」。` +
+          `守卫在这里必须炸掉，绝不能默默放过。`,
+      );
     }
-  });
+
+    let stdout = '';
+    try {
+      stdout = execFileSync(process.execPath, [cli, 'test', '--list', '--reporter=json'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        timeout: 120_000,
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      throw new Error(`Playwright 的 --list 跑挂了，无法判断哪些用例会被执行：\n${stderr}`);
+    }
+
+    const start = stdout.indexOf('{');
+    if (start === -1) {
+      throw new Error(`Playwright 的 --list 没有输出 JSON：\n${stdout}`);
+    }
+    const report = JSON.parse(stdout.slice(start)) as {
+      suites?: { file?: string }[];
+      errors?: unknown[];
+    };
+    if ((report.errors ?? []).length > 0) {
+      throw new Error(`Playwright 收集用例时报错：\n${JSON.stringify(report.errors)}`);
+    }
+    return (report.suites ?? [])
+      .map((suite) => suite.file)
+      .filter((file): file is string => Boolean(file));
+  };
+
+  /** 从 `test:e2e:ext` 的命令行里取出登记的 spec 名单（按 token 精确切）。 */
+  const parseRegisteredSpecs = (script: string): string[] => {
+    const after = script.split('playwright test ')[1];
+    if (!after) return [];
+    return after.split(/\s+/).filter((entry) => entry.endsWith('.spec.js'));
+  };
+
+  /**
+   * 「绿灯」的意思必须是「**该跑的跑了**」，不是「没报错」。
+   *
+   * 这条断言守的是这个仓库里反复出现的同一族错误 —— **静默漏跑**：
+   *
+   * - 方向 A：新增了一个 spec 文件，却忘了登记进 `test:e2e:ext`
+   *   → CI 照样全绿，而那个文件从未被执行过。
+   * - 方向 B：登记进了 `test:e2e:ext`，但文件名撞上了 `testIgnore`
+   *   （探针豁免规则：一次性排查脚本按**文件名**放行）
+   *   → Playwright 会跳过它，CI 照样全绿，而那个用例**一次都没跑过**。
+   *
+   * ⚠️ 方向 B 是实测过的洞，不是理论风险：
+   * `playwright test <正常文件> <被 testIgnore 的文件>` 的退出码是 **0** ——
+   * 被忽略的那个被静默跳过，其余照跑，CI 判绿。
+   *
+   * ⚠️ 判据只用**一个**来源：Playwright 自己列出来的文件清单。
+   * 两个方向都在同一份清单上对账，所以「登记的」与「会跑的」不可能各说各话。
+   *
+   * ⚠️ 判据**不用**「有没有被 Git 跟踪」：
+   * 那样一来，「新建了永久用例却忘了登记」这个**最该被抓住**的错误，
+   * 在本地会悄无声息（文件还没 git add）；而用「已提交」当判据，
+   * 等于把「提交前忘了登记」推迟到 commit 之后才报 ——
+   * 那一刻人已经不看测试输出了。
+   */
+  it('test:e2e:ext 登记的 spec = Playwright 真会跑的 spec（谁都不会静默漏跑）', () => {
+    const listed = listPlaywrightSpecFiles();
+    const registered = parseRegisteredSpecs(pkg.scripts['test:e2e:ext'] ?? '');
+
+    expect(listed.length, 'Playwright 一个 spec 都没列出 —— 这条断言在空转').toBeGreaterThan(0);
+    expect(registered.length, 'test:e2e:ext 里应当登记了若干 spec').toBeGreaterThan(0);
+
+    // 方向 A：会跑却没登记
+    for (const file of listed) {
+      expect(
+        registered,
+        `${file} 会被 Playwright 执行，却没登记进 test:e2e:ext —— CI 不会跑它。`,
+      ).toContain(file);
+    }
+
+    // 方向 B：登记了却不会跑
+    for (const file of registered) {
+      expect(
+        listed,
+        `${file} 登记进了 test:e2e:ext，却不会被 Playwright 执行` +
+          `（文件不存在，或文件名撞上了 testIgnore 的探针豁免规则）——` +
+          `CI 照样全绿，但这个用例一次都没跑过。`,
+      ).toContain(file);
+    }
+  }, 120_000);
 });
 
 describe('CI 工作流：什么情况下才真的跑', () => {
