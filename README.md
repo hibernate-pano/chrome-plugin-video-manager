@@ -120,7 +120,13 @@
   构建用的依赖全是 devDependencies，不进包。
 - **它不发起任何网络请求。** 整个构建里只有两个 URL：仓库地址与本仓库的隐私政策链接。
   没有 CDN、没有远程字体、没有统计脚本、没有遥测。
-  想核实的话，解压商店里的那个 zip 就能看到。
+  想核实的话，解压商店里的那个 zip 就能看到 ——
+  产物里**一个 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon` 都没有**
+  （出包闸门 `scripts/package-extension.js` 会拦住任何新出现的网络 API）。
+  ⚠️ 这一条曾经**不完全成立**：Vite 默认注入的 modulepreload polyfill
+  里有一段 `fetch()`（运行时是死代码，Chrome 原生支持 modulepreload），
+  而它就躺在商店文案邀请用户去检查的那个 zip 里。
+  已通过 `vite.config.js` 的 `modulePreload.polyfill: false` 去掉。
 - **它只读视频本身。** `video` 元素的播放状态，以及字幕等浮层的**位置与尺寸**
   （用来让字幕跟着视频进出全屏）。不读页面文字、不读表单、不读浏览历史。
 - **它存的东西只有三类**：快捷键绑定（跟着你的 Chrome 账号同步）、

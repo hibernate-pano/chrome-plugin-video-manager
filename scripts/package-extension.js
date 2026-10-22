@@ -59,6 +59,66 @@ const assertNoForeignUrls = () => {
   }
 };
 
+/**
+ * 出包前的第二道闸：产物里不许出现**网络 API**。
+ *
+ * ⚠️ 为什么这道闸是 2026-10-22 才加的：
+ * 之前只有 `assertNoForeignUrls()`，它查的是「URL 指向哪里」，
+ * **查不出「代码会不会自己发起请求」**。
+ * 于是一段 Vite 注入的 modulepreload polyfill（里面有 `fetch(s.href)`）
+ * 从那道闸里溜了过去 —— 而 README 与商店文案都写着「不发起任何网络请求」，
+ * 商店文案甚至邀请用户「解压就能验证」。
+ *
+ * 那段 polyfill 运行时其实是死代码（Chrome 原生支持 modulepreload，
+ * polyfill 第一件事就是「不支持就 return」），但**承诺的对象是产物**：
+ * 用户 grep 得到 `fetch(`，审核员 grep 也得到 `fetch(`。
+ *
+ * ⚠️ 为什么这里不放过 `fetch`：
+ * 产物里的 `fetch` 有两种可能 —— 一是死代码，二是**真的在用**。
+ * 两者对用户没有区别：承诺是「不发网络请求」，
+ * 而「一段永不执行的 fetch」和「一段会执行的 fetch」在**审计**上无法区分。
+ * 所以规则简单到底：**产物里不许有网络 API**，除非先改文案。
+ *
+ * 例外只有一个：动态 `import()` —— 那是加载扩展**自己**的模块，
+ * 不是网络请求（content-loader.js 就靠它加载 content.js）。
+ */
+const assertNoNetworkApis = () => {
+  const forbidden = [
+    { name: 'fetch()', pattern: /(?<![.\w])fetch\s*\(/ },
+    { name: 'XMLHttpRequest', pattern: /(?<![.\w])new\s+XMLHttpRequest\b|\bXMLHttpRequest\s*\(/ },
+    { name: 'WebSocket', pattern: /(?<![.\w])new\s+WebSocket\b/ },
+    { name: 'sendBeacon', pattern: /(?<![.\w])sendBeacon\s*\(/ },
+    { name: 'EventSource', pattern: /(?<![.\w])new\s+EventSource\b/ },
+    { name: 'importScripts', pattern: /(?<![.\w])importScripts\s*\(/ },
+    { name: 'eval()', pattern: /(?<![.\w])eval\s*\(/ },
+    { name: 'new Function()', pattern: /(?<![.\w])new\s+Function\s*\(/ },
+  ];
+
+  const offenders = [];
+
+  for (const file of listFiles(distDir)) {
+    if (!/\.(js|css|html|json)$/.test(file)) continue;
+
+    const text = readFileSync(file, 'utf8');
+    for (const { name, pattern } of forbidden) {
+      if (pattern.test(text)) {
+        offenders.push(`${file.replace(`${rootDir}/`, '')} → ${name}`);
+      }
+    }
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(
+      '产物里出现了网络 API 或动态代码执行 ——' +
+        '「不发起任何网络请求」这句承诺已经不成立：\n' +
+        `${offenders.join('\n')}\n\n` +
+        '（产物是构建工具生成的，构建工具注入的东西也在里面 —— ' +
+        '那种情况要改构建配置，不是改产物。' +
+        '参考 vite.config.js 的 modulePreload.polyfill。）',
+    );
+  }
+};
+
 const removeJunkFiles = (targetDir) => {
   for (const entry of readdirSync(targetDir)) {
     const entryPath = resolve(targetDir, entry);
@@ -92,6 +152,7 @@ const outputPath = resolve(releaseDir, `video-speed-controller-v${version}.zip`)
 rmSync(outputPath, { force: true });
 
 assertNoForeignUrls();
+assertNoNetworkApis();
 
 execFileSync(
   'zip',

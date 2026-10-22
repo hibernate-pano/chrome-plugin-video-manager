@@ -12,9 +12,11 @@ Video Speed Controller 拿 `<all_urls>` 权限 —— 它的内容脚本注入�
 
 - 只读 `video` 元素与其播放状态，以及字幕等浮层的**位置与尺寸**；
 - 不读页面文字、不读表单、不读浏览历史；
-- **不发起任何网络请求** —— 产物里唯一的外部 URL 是仓库地址与隐私政策链接
-  （这一点有守卫：`scripts/release-content.test.ts` 与出包前的
-  `scripts/package-extension.js` 都会拦下新增的外部地址）；
+- **不发起任何网络请求** —— 产物里唯一的外部 URL 是仓库地址与隐私政策链接，
+  而且产物里**一个网络 API 都没有**（`fetch` / `XMLHttpRequest` / `WebSocket` /
+  `sendBeacon` / `EventSource` 一律没有）。
+  这一点有两道守卫：`scripts/release-content.test.ts`（源码层）与出包时的
+  `scripts/package-extension.js`（产物层，能看见构建工具注入的东西）；
 - 产物里**没有任何第三方库**（所有构建依赖都是 devDependencies，不进包）；
 - 权限只有 `storage` 与 `<all_urls>` 两项，没有 `tabs`、`cookies`、
   `webRequest`、`scripting` 这类能读浏览轨迹的。

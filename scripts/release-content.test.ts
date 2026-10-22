@@ -241,6 +241,31 @@ describe('发布包承诺：不发起任何网络请求', () => {
 });
 
 describe('发布包承诺：只申请必要的权限', () => {
+  it('构建配置仍然关着 modulepreload polyfill', () => {
+    // ⚠️ 为什么要在**源码**这一层守构建配置：
+    // 产物那道闸（scripts/package-extension.js 的 assertNoNetworkApis）
+    // 只在**出包时**跑 —— 而出包是最后一步，那时才发现问题已经晚了
+    // （要重新改配置、重新构建、重新出包）。
+    //
+    // 而这里守的根因是 2026-10-22 那次真实的漏网：
+    // Vite 默认注入 modulepreload polyfill，它里面有 `fetch(s.href)`。
+    // 那段代码运行时是死的（Chrome 原生支持 modulepreload），
+    // 但**产物里有它** —— 而承诺是关于**产物**的。
+    //
+    // 两道闸的关系：
+    //   - 这条（源码层）：改配置时立刻红，拦住「别把 polyfill 加回来」；
+    //   - assertNoNetworkApis（产物层）：出包时红，拦住「任何来源的网络 API」。
+    // 少任何一道，那次漏网都会重现。
+    const viteConfig = readFileSync(resolve(repoRoot, 'vite.config.js'), 'utf8');
+
+    expect(
+      viteConfig,
+      'vite.config.js 里没有关掉 modulepreload polyfill —— ' +
+        '它会把一段带 fetch() 的 polyfill 塞进产物，' +
+        '而「不发起任何网络请求」这句承诺是关于产物的。',
+    ).toMatch(/polyfill:\s*false/);
+  });
+
   it('permissions 只含 storage', () => {
     // 商店文案里逐字写的是「Stores your shortcut bindings ... 」。
     // 多一个权限，商店文案与 Permissions Justification 就对不上 ——
