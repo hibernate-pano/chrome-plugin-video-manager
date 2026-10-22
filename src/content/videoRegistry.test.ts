@@ -2205,3 +2205,45 @@ describe('VideoRegistry：class 变动与缓存', () => {
     registry.stop();
   });
 });
+
+describe('VideoRegistry：body 被整个换掉', () => {
+  beforeEach(() => {
+    // ⚠️ 这个 describe 块自带清场：上一个块留下的视频还在页面里，
+    // 「页面上还没有视频」这个前置条件就不成立了。
+    document.body.innerHTML = '';
+  });
+
+  it('站点换掉整个 body 之后：快捷键目标必须重新解析', async () => {
+    // ⚠️ 这是真实故障的形状：注册表的观察者绑在 document.body 上，
+    // 站点 `document.body.replaceWith(newBody)` 之后观察者就成了孤儿 ——
+    // 新 body 里的任何变化都看不见，「DOM 变更代次」永远不前进
+    // → 快捷键路径缓存里的 `null` 永不过期（null 结果没有 TTL）
+    // → **所有快捷键静默失灵**，直到用户碰一下视频
+    // （用户手势顺带触发一次作废，于是症状是「点一下就好了」）。
+    //
+    // 症状之所以自相矛盾（「图标能点、快捷键没反应」）：
+    // 工具栏那条路按帧重算，不吃这份缓存（见 getCurrentVideo）。
+    const registry = createRegistry();
+    registry.start();
+
+    // 页面上还没有视频 → 快捷键路径把「没有目标」缓存下来。
+    expect(registry.getWatchedTarget()).toBeNull();
+
+    // 站点换掉整个 body（SPA 重建页面），新 body 里带着视频。
+    const next = document.createElement('body');
+    const video = document.createElement('video');
+    video.id = 'after-swap';
+    next.appendChild(video);
+    document.body.replaceWith(next);
+
+    // MutationObserver 的回调是微任务，等它落地。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      registry.getWatchedTarget()?.video.id,
+      'body 换人之后，缓存里的 null 必须作废（否则快捷键永远醒不过来）',
+    ).toBe('after-swap');
+
+    registry.stop();
+  });
+});

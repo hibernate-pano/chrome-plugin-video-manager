@@ -18,6 +18,8 @@ import {
 import { FULLSCREEN_OVERLAY_ID, NOTICE_CARD_TOKENS } from './runtimeStyles';
 import { TransientPill } from './transientPill';
 import { closestSelector } from '../shared/domMatches';
+import { observeBody } from './bodyObserver';
+import type { BodyObserver } from './bodyObserver';
 
 const HINT_ID = 'vsc-first-run-hint';
 /** 关闭按钮的 id（引导自己的节点，不是页面的）。 */
@@ -142,6 +144,34 @@ const CLAIM_STORAGE_KEY = 'vsc-first-run-hint-claim';
  */
 const CLAIM_TTL_MS = 30_000;
 
+/**
+ * 认领的**稳定窗口**（毫秒）：写完之后等这么久再读回。
+ *
+ * ⚠️ 为什么不能「写完立刻读回」：
+ * `chrome.storage.local` 没有 compare-and-set，写后读回只能判出**已经落盘**的覆盖。
+ * 而另一个窗口的写可能**还在路上** —— 它与我们几乎同时发起，但落盘要排在
+ * 它自己那次 IPC 之后。那一刻我们读回来的仍是**自己的**值，
+ * 于是两个窗口都以为自己赢了。
+ *
+ * ⚠️ 这不是理论风险，是**实测过的 bug**（2026-10-22）：
+ * 两个窗口同时起播 → **两条引导同时弹出来**，
+ * 而 storage.local 里只有**一个**「已展示」标记。
+ * 引导是设备级的一次性提示、也是这个扩展**全部**的可见入口，
+ * 两条同时出现 = 用户第一眼看到的是「粗制滥造」。
+ * （旧注释把这件事写成「良性的失败模式：最多多弹一次」—— 那句话是错的，
+ * 下面把协议改掉了。）
+ *
+ * 所以：写完之后等一小段稳定窗口，让同时发起的竞争者的写**先落盘**，
+ * 读回时看到的就是**它**的值 → 只有一方赢。
+ *
+ * ⚠️ 100ms 怎么定的：同机两个窗口的 play 事件实测相差 ~1–3ms，
+ * 100ms 足够让竞争者的写落盘；而对用户来说，提示晚 0.1 秒出现是察觉不到的。
+ *
+ * ⚠️ 导出来是为了让单测知道「认领要多花这么久」——
+ * 时序断言必须与实现对得上，写死一个数字就会漂。
+ */
+export const CLAIM_SETTLE_MS = 100;
+
 interface HintClaim {
   /** 认领者：每个 frame 一份随机 id。 */
   owner: string;
@@ -178,29 +208,60 @@ const storageChanges = (): typeof chrome.storage.onChanged | null => {
 };
 
 /**
- * 读当前这把锁。读不出来就当「没有锁」。
+ * 读当前这把锁的结果。
  *
- * ⚠️ 读失败**不能**当成「锁被别人拿着」—— 那会让存储一坏，引导就永远不出现。
- * 读不出来 = 没人认领 = 允许弹。
+ * ⚠️ 为什么要区分「读到了空」与「**读不到**」：
+ * - 读到了空 → 存储是好的，只是没人认领 → 可以写。
+ * - 读不到（存储不可用/读失败）→ **不能**当成「锁被别人拿着」——
+ *   那会让存储一坏，引导就永远不出现。读不出来 = 没法协调 = 允许弹。
  */
-const readClaim = async (): Promise<HintClaim | null> => {
+interface ClaimRead {
+  /** 存储可用、这次真的读到了吗。 */
+  readonly readable: boolean;
+  /** 读到的锁（readable 为 true 时才有意义）。 */
+  readonly claim: HintClaim | null;
+}
+
+const readClaim = async (): Promise<ClaimRead> => {
+  const area = storageLocal();
+  if (!area?.get) {
+    return { readable: false, claim: null };
+  }
+
   try {
-    const stored = await storageLocal()?.get?.(CLAIM_STORAGE_KEY);
+    const stored = await area.get(CLAIM_STORAGE_KEY);
     const value = (stored as Record<string, unknown> | undefined)?.[CLAIM_STORAGE_KEY];
-    return isHintClaim(value) ? value : null;
+    return { readable: true, claim: isHintClaim(value) ? value : null };
   } catch {
-    return null;
+    return { readable: false, claim: null };
   }
 };
 
-/** 记下这把锁。写失败就算了 —— 那等于「没锁」，最多多弹一次。 */
-const writeClaim = async (claim: HintClaim): Promise<void> => {
+/**
+ * 记下这把锁。
+ *
+ * @returns 写成功了吗。写不进去 = 没法协调 = 等于「没锁」——
+ *   那时宁可多弹一次，也不要让「存储坏了」变成「引导再也不出现」。
+ */
+const writeClaim = async (claim: HintClaim): Promise<boolean> => {
+  const area = storageLocal();
+  if (!area?.set) {
+    return false;
+  }
+
   try {
-    await storageLocal()?.set?.({ [CLAIM_STORAGE_KEY]: claim });
+    await area.set({ [CLAIM_STORAGE_KEY]: claim });
+    return true;
   } catch {
-    // 存不下就当没锁住：多弹一条的代价，远小于「引导再也不出现」。
+    return false;
   }
 };
+
+/** 等一小段稳定窗口（让同时发起的竞争者的写先落盘）。 */
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 /** 归还这把锁。 */
 const clearClaim = async (): Promise<void> => {
@@ -221,8 +282,14 @@ const clearClaim = async (): Promise<void> => {
 export interface HintClaimBroker {
   /** 开始观察共享状态（读一次 + 订阅变更）。 */
   start(): void;
-  /** 认领。true = 拿到了这把锁。 */
-  tryClaim(owner: string): boolean;
+  /**
+   * 认领。true = 拿到了这把锁。
+   *
+   * ⚠️ 必须是**异步**的：`storage.local` 没有 compare-and-set，
+   * 唯一能判出「这把锁被别人抢走了」的办法是**写后读回**（见
+   * createStorageClaimBroker），而读回天生是异步的。
+   */
+  tryClaim(owner: string): Promise<boolean>;
   /** 归还（只归还自己的那把）。 */
   release(owner: string): void;
   /** 退订。 */
@@ -232,17 +299,22 @@ export interface HintClaimBroker {
 /**
  * 默认的认领器：读 chrome.storage.local，订阅它的变更。
  *
- * ⚠️ 为什么是「订阅 + 内存快照」而不是「每次现读」：
- * 现读是异步的，把它塞进 reveal 路径就等于给「提示出现的那一刻」加了一次
- * 异步 IO —— 提示会往后挪那么一两毫秒，而现有的时序断言全得跟着改。
- * 订阅式则是**同步**的：认领的那一刻直接看内存里的快照。
+ * ⚠️ 协议为什么长这样（每一步都在补一个**实测会踩**的洞）：
  *
- * ⚠️ 代价：快照可能旧了那么一两毫秒（别的 frame 刚写完、变更事件还没送到）。
- * 那只会让两个 frame 同时弹 —— **良性**的失败模式：最多多弹一次，
- * 而且两个抢锁的人不会互相踩坏状态（各自的标记是各自写的，
- * 归还时也只归还自己那把）。
+ * 1. **快照先看一眼**：有人拿着就直接让开，不必打扰存储。
+ * 2. **写之前现读一次**：快照是**事件驱动**的 —— 别的窗口刚写完、
+ *    变更事件还没送到时，快照仍显示「没人认领」。而写会**覆盖**别人
+ *    的锁，于是「先来后到」变成「谁最后写谁赢」，两个窗口都能弹。
+ *    现读看到别人的**活锁**就让开（过期的不算，见 CLAIM_TTL_MS）。
+ * 3. **写自己的**，然后**等一段稳定窗口**（CLAIM_SETTLE_MS）：
+ *    让同时发起的竞争者的写先落盘。
+ * 4. **读回**：读到的 `owner` 是自己才算认领成功；是别人 → 认领作废，
+ *    **不显示引导**，也**不删**别人的锁（那把锁正被别人拿着）。
+ *
+ * ⚠️ 读不到（存储不可用/读失败）时一律**放行**：读不出来 = 没法协调 =
+ * 允许弹。把它当成「锁被别人拿着」会让存储一坏，引导就永远不出现。
  */
-const createStorageClaimBroker = (): HintClaimBroker => {
+export const createStorageClaimBroker = (): HintClaimBroker => {
   /** 本 frame 看到的「当前这把锁」。 */
   let snapshot: HintClaim | null = null;
   /**
@@ -260,6 +332,10 @@ const createStorageClaimBroker = (): HintClaimBroker => {
     snapshot = claim;
   };
 
+  /** 这把锁现在还成立吗（没过期）。 */
+  const isLive = (claim: HintClaim | null): claim is HintClaim =>
+    claim !== null && Date.now() - claim.claimedAt < CLAIM_TTL_MS;
+
   return {
     start() {
       // 先订阅、再读：反过来的话，「读」与「订阅」之间发生的写入会被漏掉，
@@ -276,28 +352,64 @@ const createStorageClaimBroker = (): HintClaimBroker => {
       storageChanges()?.addListener?.(listener);
 
       const readVersion = version;
-      void readClaim().then((claim) => {
+      void readClaim().then(({ readable, claim }) => {
         if (version !== readVersion) {
           // 读的过程中来过更新事件：那份更新才是最新的。
           return;
         }
 
-        apply(claim);
+        if (readable) {
+          apply(claim);
+        }
       });
     },
 
-    tryClaim(owner) {
-      if (snapshot && Date.now() - snapshot.claimedAt < CLAIM_TTL_MS) {
-        // 有人拿着（哪怕是过期之前刚拿的）→ 这次不弹。
+    async tryClaim(owner) {
+      // ① 快照：有人拿着（且没过期）→ 这次不弹。
+      if (isLive(snapshot) && snapshot.owner !== owner) {
         return false;
       }
 
+      // ② 写之前**现读**一次：快照是事件驱动的，可能还没收到别人的写。
+      const before = await readClaim();
+      if (before.readable && isLive(before.claim) && before.claim.owner !== owner) {
+        apply(before.claim);
+        return false;
+      }
+
+      // ③ 写自己的。
       const claim: HintClaim = { owner, claimedAt: Date.now() };
+      if (!(await writeClaim(claim))) {
+        // 写不进去 = 没法协调 = 等于「没锁」。宁可多弹一次，
+        // 也不要让「存储坏了」变成「引导再也不出现」。
+        return true;
+      }
+
       apply(claim);
-      // 写盘是「通知别人」，不阻塞这次决定 —— 写慢了就慢一毫秒，
-      // 后果只是别人可能也弹一条（良性）。
-      void writeClaim(claim);
-      return true;
+
+      // ④ 稳定窗口：让同时发起的竞争者的写先落盘。
+      //
+      // ⚠️ 只有**存储可用**时才等：没有共享存储就没有竞争者，
+      // 等下去只是白等（而单测里没有 chrome，等下去会让所有时序断言失效）。
+      if (before.readable) {
+        await delay(CLAIM_SETTLE_MS);
+      }
+
+      // ⑤ 读回：写后读回是乐观锁（storage.local 没有 CAS）。
+      const after = await readClaim();
+      if (!after.readable) {
+        // 读不出来 = 没法核实 = 允许弹（与「读失败不能当成锁被别人拿着」一致）。
+        return true;
+      }
+
+      apply(after.claim);
+      if (!after.claim) {
+        // 我们的写没落盘（存储异常）→ 没法协调 → 放行。
+        return true;
+      }
+
+      // 读回来的是**别人** → 认领作废：不显示引导，也不删掉别人的锁。
+      return after.claim.owner === owner;
     },
 
     release(owner) {
@@ -308,7 +420,16 @@ const createStorageClaimBroker = (): HintClaimBroker => {
       }
 
       apply(null);
-      void clearClaim();
+      void (async () => {
+        // 现读一次再删：快照也是事件驱动的，别人可能刚把锁抢走，
+        // 而我们这边的事件还没送到 —— 那时删掉就是踩坏别人的状态。
+        const current = await readClaim();
+        if (!current.readable || !current.claim || current.claim.owner !== owner) {
+          return;
+        }
+
+        await clearClaim();
+      })();
     },
 
     dispose() {
@@ -650,9 +771,7 @@ export class FirstRunHint {
    * 把控制条的退出、倍速、音量三个按钮整个包在里面 —— 引导在视觉上
    * 压住了控制条。所以引导必须知道「此刻是不是在网页全屏里」。
    */
-  private fullscreenWatcher: MutationObserver | null = null;
-  /** 观察者当前挂在哪个 body 上（body 被换掉时要重新挂）。 */
-  private watchedBody: HTMLElement | null = null;
+  private fullscreenWatcher: BodyObserver | null = null;
   /**
    * 上一次观察到的全屏状态。
    *
@@ -817,6 +936,14 @@ export class FirstRunHint {
   private readonly claimOwner = `f${Math.random().toString(36).slice(2)}`;
   /** 此刻这把锁是不是 ours。 */
   private claimed = false;
+  /**
+   * 这个提示已经被销毁了。
+   *
+   * ⚠️ 为什么需要它：认领是**异步**的（约 100ms，见 claim）。
+   * 页面在这 100ms 里被卸载（用户关掉标签页）的话，认领回来之后
+   * 不许再弹任何东西 —— 否则会在已经卸载的页面上凭空冒出一条引导。
+   */
+  private destroyed = false;
 
   constructor(options: FirstRunHintOptions) {
     this.options = options;
@@ -1239,7 +1366,7 @@ export class FirstRunHint {
     //
     // 所以现在由「拥有视频的那个 frame」来弹。代价是顶层和 iframe 可能
     // 各弹一条 —— 这把锁就是为此存在的。
-    if (!this.claim()) {
+    if (!(await this.claim())) {
       // 抢不到锁有两种可能：
       // 1. 页面在后台（claim() 里第一道判据）—— 那不是「拒绝」，只是时候未到。
       //    记下来，等用户回到这个标签页时补上（见 handleVisibilityChange）。
@@ -1248,6 +1375,43 @@ export class FirstRunHint {
         this.pendingRevealVideo = video;
       }
       return;
+    }
+
+    // ⚠️ 认领是**异步**的（约 100ms）：这段时间里状态可能变了 ——
+    // 另一条路径可能已经把引导弹出来了（shownThisSession），
+    // 或者**别的窗口**已经展示完并落盘了「已展示」，
+    // 或者这条视频已经被从文档里拿走了，
+    // 或者页面已经被卸载了（destroyed）。
+    // 不复查的话，一次 await 就能弹出**两条**引导。
+    if (this.shownThisSession) {
+      return;
+    }
+
+    if (this.destroyed) {
+      this.releaseClaim();
+      return;
+    }
+
+    if (!video || !video.isConnected) {
+      this.releaseClaim();
+      return;
+    }
+
+    // ⚠️ 「已展示」是**设备级**的标记（在 storage.local，全设备共用）。
+    // 认领这 100ms 里，**别的窗口**可能刚好展示完并把它落盘了 ——
+    // 那时我们再弹一条就是「一次性提示」出现了两次。
+    try {
+      if (await this.options.wasShown()) {
+        this.shownThisSession = true;
+        this.eligible = false;
+        this.releaseClaim();
+        return;
+      }
+    } catch {
+      // 读不到 = 没法核实 = 不拦（锁已经保证了「只有一条」）。
+      // ⚠️ 这里与 computeEligibility 的取向相反是**故意的**：
+      // 那一条是「要不要弹」的判断，读不到就该保守（不打扰）；
+      // 这一条是「要不要拦下已经抢到锁的这一次」，拦错了就是「引导再也不出现」。
     }
 
     // ⚠️ 选「放得下的那一版」。
@@ -1296,7 +1460,7 @@ export class FirstRunHint {
    *
    * @returns true = 认领成功（这个 frame 该弹引导）。
    */
-  private claim(): boolean {
+  private async claim(): Promise<boolean> {
     // ⚠️ 看不见的页面不许抢认领。
     //
     // 后台标签页里的视频照样会派发 play，于是它 2.5 秒后也会来抢锁 ——
@@ -1319,12 +1483,25 @@ export class FirstRunHint {
       return true;
     }
 
+    let granted = false;
     try {
-      this.claimed = this.claimBroker.tryClaim(this.claimOwner);
+      // ⚠️ 认领是**异步**的：写后读回要等一次存储往返 + 稳定窗口
+      // （约 100ms）。这 100ms 里状态可能变，所以 await 之后还要复查。
+      granted = await this.claimBroker.tryClaim(this.claimOwner);
     } catch {
       // 抢锁失败当「没抢到」：宁可少弹一次，也不要在没有协调的情况下
       // 让两个 frame 各弹一条。
-      this.claimed = false;
+      granted = false;
+    }
+
+    this.claimed = granted;
+
+    // ⚠️ 认领期间页面可能被切到后台（用户切走了窗口）——
+    // 那这条引导就不该由我们弹：用户正看着别处。
+    // 把锁还回去，让用户看得到的那个窗口去弹。
+    if (granted && typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      this.releaseClaim();
+      return false;
     }
 
     return this.claimed;
@@ -1812,24 +1989,18 @@ export class FirstRunHint {
       return;
     }
 
-    const watcher = new MutationObserver(() => {
-      // body 被整个换掉时（少见，但 SPA 重建页面时会发生），观察者还挂在
-      // 旧 body 上，对新 body 里的背板增删一概看不见 —— 重新挂一次。
-      if (document.body && this.watchedBody !== document.body) {
-        this.watchedBody = document.body;
-        watcher.observe(document.body, { childList: true });
-      }
-
-      this.reconcileFullscreen();
+    this.fullscreenWatcher = observeBody({
+      // 只看 body 的**直接子节点**：body 上的其它增删（站点自己塞个广告位）
+      // 与全屏无关。
+      bodyInit: { childList: true },
+      onBodyMutation: () => this.reconcileFullscreen(),
+      // ⚠️ <html> 这一层才是「背板增删」真正会发生的地方 ——
+      // 网页全屏背板挂在 <html> 上（fullscreenController.ensureOverlay →
+      // mountViewportRoot，见 viewportRoot.ts），它不在 body 的子树里。
+      // 顺带：body 被换掉也是这一层的事，bodyObserver 会自动把 body 级
+      // 观察器重新挂到新 body 上。
+      onHostMutation: () => this.reconcileFullscreen(),
     });
-
-    this.watchedBody = document.body;
-    // 只看 body 的**直接子节点**：全屏背板是 body 的直接子节点，
-    // 而 body 上的其它增删（站点自己塞个广告位）与全屏无关。
-    watcher.observe(document.body, { childList: true });
-    // documentElement 这一层只为盯住「body 被换掉」这一种情况。
-    watcher.observe(document.documentElement, { childList: true });
-    this.fullscreenWatcher = watcher;
 
     // 起点必须与事实对齐：观察者可能是在用户**已经**进了全屏之后才挂上的，
     // 此时真实状态已经是「在全屏里」。若这里留成 false，等到退出全屏时
@@ -1910,6 +2081,11 @@ export class FirstRunHint {
   destroy() {
     // ⚠️ 这里不走 dismiss()：销毁不是「用户打断了阅读」，
     // 不该被记成一次失败尝试。
+    //
+    // ⚠️ destroyed 必须**先**置位：认领是异步的（约 100ms），
+    // 销毁时认领可能还在路上 —— 它回来之后不许再弹东西
+    // （那会在页面已经卸载之后凭空冒出一条引导）。
+    this.destroyed = true;
     this.hintVisible = false;
     this.clearReadTimer();
     this.cancelPendingReveal();

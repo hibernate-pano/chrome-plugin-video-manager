@@ -8,6 +8,8 @@ import {
 import { matchesSelector } from '../shared/domMatches';
 import { getSiteAdapter } from './siteAdapters';
 import { closestSelector } from '../shared/domMatches';
+import { observeBody } from './bodyObserver';
+import type { BodyObserver } from './bodyObserver';
 
 const VIDEO_SELECTOR = 'video';
 
@@ -568,39 +570,15 @@ export class VideoRegistry {
     style: CSSStyleDeclaration | null | undefined;
   }>();
   /**
-   * DOM 变更回调：**按变更的种类**决定作废多少缓存。
+   * body 级观察器（见 bodyObserver.ts）。
    *
-   * ⚠️ 为什么不能一律作废：class 变动在重渲染站点上每秒几十次
-   * （React / Vue / Next.js 每次渲染都要重算 class）。
-   * 一律作废 = 每次按键都要全页重扫一遍（实测 3 万节点的页面约 3ms），
-   * 而长按加速时每 120ms 一次 —— 那点开销全烧在这里了。
-   *
-   * 分类的依据是「这条变更会不会改变**候选集合**」：
-   * - childList：会（视频出现了/被摘掉了）→ 全量作废。
-   * - controls / autoplay / style：会（它们决定视频是不是装饰物、
-   *   是不是被 CSS 藏起来了）→ 全量作废。
-   * - class：**不会** —— 可见性判定读的是**计算样式**与**实测矩形**
-   *   （isCssHidden / isVisible / isInViewport），class 属性本身从头到尾
-   *   没有被读过 → 只作废测量结果（见 invalidateMeasurements）。
-   *
-   * ⚠️ 为什么**不能**把 class 从 attributeFilter 里去掉（那会更省）：
-   * 测量结果虽然是「每帧重测」的，但**目标缓存**是跨帧的（5 秒）。
-   * class 变动不推进任何代次的话，缓存里的目标就永远不会被复核 ——
-   * 站点用 `display:none` 把视频藏起来之后，它还能继续吃下快捷键整整 5 秒。
-   * 留着 class 观察，它才会推进**测量代次**，从而触发「复核那一个视频」
-   * （见 isStillUsable）。省下的那点观察开销，换来的是一条正确性。
+   * ⚠️ 它必须是「会跟着 body 换人」的那一种：站点
+   * `document.body.replaceWith(newBody)` 之后，观察者若还挂在**旧 body** 上，
+   * 新 body 里的任何变化都看不见 ——
+   * 「DOM 变更代次」永远不前进 → 快捷键路径缓存里的 `null` 永不过期
+   * → 所有快捷键静默失灵（而图标那条路按帧重算，不受影响）。
    */
-  private readonly observer = new MutationObserver((records) => {
-    for (const record of records) {
-      if (record.type !== 'attributes' || record.attributeName !== 'class') {
-        this.invalidate();
-        return;
-      }
-    }
-
-    // 只有 class 变了 → 只作废测量结果。
-    this.invalidateMeasurements();
-  });
+  private bodyObserver: BodyObserver | null = null;
   private readonly boundHandleInteraction = (event: Event) => this.handleInteraction(event);
   private readonly boundHandleFocus = (event: Event) => this.handleFocus(event);
   private readonly boundHandleGesture = (event: Event) => this.handleGesture(event);
@@ -624,21 +602,74 @@ export class VideoRegistry {
     // 真实手势单独记一条：它才代表"用户碰了这个页面"。
     document.addEventListener('pointerdown', this.boundHandleGesture, true);
     document.addEventListener('keydown', this.boundHandleGesture, true);
-    // observe 要求真实节点：极端情况下 body 还没建好就退到 documentElement。
+    // ⚠️ 为什么观察的是 body 而不是 documentElement：
+    //
+    // 我们自己的浮层全挂在 <html> 上（见 viewportRoot.ts）——
+    // 若去观察 documentElement 的**子树**，我们自己挂/摘浮层就会被算成
+    // 「DOM 变化」，每次浮层显隐都推进一次变更代次，
+    // 把「测量结果按帧复用」那套优化整个打掉（每次按键都要全页重扫）。
+    //
+    // 观察 body（子树）就覆盖了页面内容的一切变化；
+    // 「body 被整个换掉」由 bodyObserver 额外盯着 <html> 那一层。
     //
     // ⚠️ 为什么还要观察属性：判定依赖 `controls` / `autoplay` 两个属性，
     // 也依赖 class/style（可见性）。只观察 childList 的话，站点后来给视频
     // 加上 controls，我们仍然按「装饰视频」看待它。
     // attributeFilter 把回调限制在这几个属性上，避免无关属性（id、data-*）
     // 变动时缓存被冲掉。
-    this.observer.observe(document.body ?? document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['controls', 'autoplay', 'class', 'style'],
+    this.bodyObserver = observeBody({
+      bodyInit: {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['controls', 'autoplay', 'class', 'style'],
+      },
+      onBodyMutation: (records) => this.handleBodyMutation(records),
+      // body 被换掉时，新 body 里的内容**在换之前就已经存在** ——
+      // 观察器看不到它们的「加入」，只能靠这一次显式作废。
+      //
+      // ⚠️ 这一步是「快捷键全体失灵」的根因修复：没有它，
+      // 缓存里的 `null` 永不过期（null 结果没有 TTL），
+      // 站点换一次页面，快捷键就再也不会醒来。
+      onBodyReplaced: () => this.invalidate(),
     });
     this.invalidate();
     this.catchUpSiteStartedVideos();
+  }
+
+  /**
+   * DOM 变更回调：**按变更的种类**决定作废多少缓存。
+   *
+   * ⚠️ 为什么不能一律作废：class 变动在重渲染站点上每秒几十次
+   * （React / Vue / Next.js 每次渲染都要重算 class）。
+   * 一律作废 = 每次按键都要全页重扫一遍（实测 3 万节点的页面约 3ms），
+   * 而长按加速时每 120ms 一次 —— 那点开销全烧在这里了。
+   *
+   * 分类的依据是「这条变更会不会改变**候选集合**」：
+   * - childList：会（视频出现了/被摘掉了）→ 全量作废。
+   * - controls / autoplay / style：会（它们决定视频是不是装饰物、
+   *   是不是被 CSS 藏起来了）→ 全量作废。
+   * - class：**不会** —— 可见性判定读的是**计算样式**与**实测矩形**
+   *   （isCssHidden / isVisible / isInViewport），class 属性本身从头到尾
+   *   没有被读过 → 只作废测量结果（见 invalidateMeasurements）。
+   *
+   * ⚠️ 为什么**不能**把 class 从 attributeFilter 里去掉（那会更省）：
+   * 测量结果虽然是「每帧重测」的，但**目标缓存**是跨帧的（5 秒）。
+   * class 变动不推进任何代次的话，缓存里的目标就永远不会被复核 ——
+   * 站点用 `display:none` 把视频藏起来之后，它还能继续吃下快捷键整整 5 秒。
+   * 留着 class 观察，它才会推进**测量代次**，从而触发「复核那一个视频」
+   * （见 isStillUsable）。省下的那点观察开销，换来的是一条正确性。
+   */
+  private handleBodyMutation(records: MutationRecord[]) {
+    for (const record of records) {
+      if (record.type !== 'attributes' || record.attributeName !== 'class') {
+        this.invalidate();
+        return;
+      }
+    }
+
+    // 只有 class 变了 → 只作废测量结果。
+    this.invalidateMeasurements();
   }
 
   /**
@@ -671,7 +702,8 @@ export class VideoRegistry {
     document.removeEventListener('play', this.boundHandleInteraction, true);
     document.removeEventListener('pointerdown', this.boundHandleGesture, true);
     document.removeEventListener('keydown', this.boundHandleGesture, true);
-    this.observer.disconnect();
+    this.bodyObserver?.disconnect();
+    this.bodyObserver = null;
     this.fullscreenVideo = null;
     this.lastInteractedVideo = null;
     this.lastInteractedAt = 0;

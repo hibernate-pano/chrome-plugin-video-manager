@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildGuideText, createFirstRunHint, FirstRunHint, type HintClaimBroker } from './firstRunHint';
+import { buildGuideText, createFirstRunHint, createStorageClaimBroker, FirstRunHint, type HintClaimBroker, CLAIM_SETTLE_MS } from './firstRunHint';
 import { NOTICE_CARD_TOKENS } from './runtimeStyles';
 import { VideoRegistry } from './videoRegistry';
 import { DEFAULT_SHORTCUTS, FIRST_RUN_HINT_KEY, type ShortcutSettings } from '../shared/types';
@@ -150,7 +150,9 @@ const makeTestClaimBroker = () => {
 
   return {
     start: () => {},
-    tryClaim: (candidate: string) => {
+    // ⚠️ 认领是**异步**的（生产实现要写后读回，见 createStorageClaimBroker），
+    // 所以这里也返回 Promise —— 接口是异步的，注入的实现不能偷偷同步。
+    tryClaim: async (candidate: string) => {
       if (owner !== null) {
         return false;
       }
@@ -170,12 +172,13 @@ const makeTestClaimBroker = () => {
 /**
  * 等「能不能提示」这个异步判断落地。
  *
- * 判定要读两次异步存储（展示过没有 + 失败次数），所以要排空几轮微任务。
+ * 判定要读两次异步存储（展示过没有 + 失败次数），**认领**还要写后读回
+ * （一次读 + 一次写 + 一次读），所以要排空十几轮微任务。
  * 排空之前 `eligible` 还是 null，reveal() 会自己去查 —— 而那次查询排在
  * 计时器之后，断言就永远赶不上提示出现。
  */
 const settle = async () => {
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 24; i += 1) {
     await Promise.resolve();
   }
 };
@@ -398,10 +401,10 @@ describe('FirstRunHint', () => {
     await start(video);
 
     // 自动播放的广告位、悬停预览都会派发 play；只按 play 就弹提示等于打扰。
-    vi.advanceTimersByTime(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(isVisible()).toBe(false);
 
-    vi.advanceTimersByTime(600);
+    await vi.advanceTimersByTimeAsync(600);
     expect(isVisible()).toBe(true);
     expect(hintNode()?.textContent).toContain('f');
   });
@@ -410,13 +413,13 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(markShown).toHaveBeenCalledTimes(1);
 
     // 同一页面里再次播放（切集、重播）不该再弹一次。
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
     expect(markShown).toHaveBeenCalledTimes(1);
   });
 
@@ -425,7 +428,7 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(5000);
+    await vi.advanceTimersByTimeAsync(5000);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -438,7 +441,7 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(5000);
+    await vi.advanceTimersByTimeAsync(5000);
 
     expect(isVisible()).toBe(false);
   });
@@ -451,7 +454,7 @@ describe('FirstRunHint', () => {
     // 等 2.5 秒的窗口里用户按了暂停：这时弹提示是在打断他。
     // 判定必须靠真实的 pause 事件，而不是去读 video.paused 的状态快照。
     video.dispatchEvent(new Event('pause', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -463,7 +466,7 @@ describe('FirstRunHint', () => {
     await start(video);
 
     video.dispatchEvent(new Event('ended', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
   });
@@ -474,12 +477,12 @@ describe('FirstRunHint', () => {
     await start(video);
 
     video.dispatchEvent(new Event('pause', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
     expect(isVisible()).toBe(false);
 
     // 恢复播放后重新计时，而不是因为「已经等过一次」就永久放弃。
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
     expect(isVisible()).toBe(true);
   });
 
@@ -489,7 +492,7 @@ describe('FirstRunHint', () => {
     await start(video);
 
     video.remove();
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -500,7 +503,7 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     // 什么都没显示出来，就不该消耗掉这一次引导——用户改回绑定后仍应看到。
     expect(isVisible()).toBe(false);
@@ -511,7 +514,7 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
     expect(isVisible()).toBe(true);
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true }));
@@ -522,7 +525,7 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
     expect(isVisible()).toBe(true);
 
     // ⚠️ 用户刚看到提示冒出来，随手点了页面（点视频、点按钮）。
@@ -536,10 +539,10 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
     expect(isVisible()).toBe(true);
 
-    vi.advanceTimersByTime(12000);
+    await vi.advanceTimersByTimeAsync(12000);
     expect(isVisible()).toBe(false);
   });
 
@@ -547,7 +550,7 @@ describe('FirstRunHint', () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
     expect(hintNode()).not.toBeNull();
 
     hint.destroy();
@@ -555,7 +558,9 @@ describe('FirstRunHint', () => {
     expect(hintNode()).toBeNull();
     // 销毁后既不能再弹，也不能留下定时器（jsdom 会对残留定时器报错）。
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    expect(() => vi.advanceTimersByTime(20000)).not.toThrow();
+    expect(() => {
+      vi.advanceTimersByTime(20000);
+    }).not.toThrow();
     expect(isVisible()).toBe(false);
   });
 });
@@ -624,7 +629,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     // 站点让它自己播起来（autoplay 的视频不需要用户点）。
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(5000);
+    await vi.advanceTimersByTimeAsync(5000);
 
     // ⚠️ 核心断言：引导既没出现，**也没被记成「已展示」**。
     // 只断言前者是不够的 —— 那正是原 bug 的形状：提示出现了又消失，
@@ -640,7 +645,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     preview.dispatchEvent(new Event('play', { bubbles: true }));
     // 播满 30 秒：原来 2.5 秒就弹了。
-    vi.advanceTimersByTime(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -653,12 +658,12 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     await create();
 
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(isVisible()).toBe(false);
 
     // 用户后来打开了真正的网课视频 —— 引导必须照常出现。
     player.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -674,7 +679,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     await create();
 
     player.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -693,7 +698,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     await create();
 
     main.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -737,7 +742,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     try {
       player.dispatchEvent(new Event('play', { bubbles: true }));
-      vi.advanceTimersByTime(SHOWN_AT);
+      await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
       expect(isVisible(), '判定退化之后，引导照样要为内容视频出现').toBe(true);
       expect(markShown).toHaveBeenCalledTimes(1);
@@ -757,7 +762,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     userClicks(preview);
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -774,12 +779,12 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     // 站点先让它自动播起来（被装饰判据挡掉，不排计时器）。
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(isVisible()).toBe(false);
 
     // 用户点了它 —— 站点没有再派发 play（它本来就在播）。
     userClicks(preview);
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -803,7 +808,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     preview.dispatchEvent(new Event('pause', { bubbles: true }));
 
     userClicks(preview);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -824,7 +829,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     // 随后站点让另一条预览 B 自动播 —— B 没被选过，不该触发引导。
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -849,9 +854,9 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     preview.dispatchEvent(new Event('pause', { bubbles: true }));
 
     // 走过任何时间窗之后，站点又让预览自动播 —— 它仍然不是「装饰的」。
-    vi.advanceTimersByTime(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -867,7 +872,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     preview.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -889,7 +894,7 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
 
     preview.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -948,7 +953,7 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
     await create();
 
     hidden.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -960,7 +965,7 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
     await create();
 
     offscreen.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(isVisible()).toBe(false);
     expect(markShown).not.toHaveBeenCalled();
@@ -973,11 +978,11 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
     await create();
 
     hidden.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(isVisible()).toBe(false);
 
     visible.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(isVisible()).toBe(true);
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -1031,7 +1036,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(true);
     // ⚠️ 核心断言：弹出来 ≠ 用户读过了。
@@ -1044,18 +1049,18 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // ⚠️ 完整版引导是 4 行（两行动作 + 工具栏 + 去哪儿改绑）。
     // 原来的判据是**固定两秒**（注释写着「2 秒够读完两行短句」）——
     // 于是四行字只显示了它一半的时长就落盘「已展示」，
     // 而用户还在读第三行。
-    vi.advanceTimersByTime(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(markShown, '四行引导不能按两行的时间判「读过了」').not.toHaveBeenCalled();
 
     // 再等两秒 → 累计四行的时间 → 落盘。
-    vi.advanceTimersByTime(2100);
+    await vi.advanceTimersByTimeAsync(2100);
     expect(markShown).toHaveBeenCalledTimes(1);
   });
 
@@ -1065,7 +1070,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(markShown).toHaveBeenCalledTimes(1);
   });
@@ -1076,14 +1081,14 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // ⚠️ 用户在页面上随手点了一下（点视频、点按钮）。
     // 原来的判据是「读没读完」——而「读完」要到阅读窗口结束才成立，
     // 于是**头两秒里的每一次点击都被记成拒绝**：三次误点就闭嘴 7 天。
     document.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-    vi.advanceTimersByTime(READ_DELAY * 2);
+    await vi.advanceTimersByTimeAsync(READ_DELAY * 2);
 
     expect(recordFailedAttempt, '误点不是拒绝').not.toHaveBeenCalled();
   });
@@ -1094,7 +1099,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // ⚠️ 「×」是**唯一**的「我故意关掉它」的正路：
@@ -1115,12 +1120,12 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // 用户碰了一下键盘（多半是想用某个快捷键），没读完提示。
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
-    vi.advanceTimersByTime(READ_DELAY * 2);
+    await vi.advanceTimersByTimeAsync(READ_DELAY * 2);
 
     expect(markShown).not.toHaveBeenCalled();
     // ⚠️ 核心断言：**不记失败**。旧契约是「任何一次 keydown 都记一次失败」，
@@ -1134,7 +1139,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // 按下扩展自己绑定的键（默认 increaseSpeed = '='）：
@@ -1155,7 +1160,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     // ⚠️ 兜底：失败太多次就不再打扰，但**不写** flag ——
     // 那个 flag 是「一辈子只提示一次」的一次性开关，
@@ -1225,7 +1230,7 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
     await settle();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     const appeared = isVisible();
 
     // ⚠️ 必须是**主动关掉**（点引导自己的「×」）：那才是拒绝。
@@ -1235,7 +1240,7 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
       expect(close, '引导必须有一个真正的关闭按钮').not.toBeNull();
       close!.click();
     }
-    vi.advanceTimersByTime(READ_DELAY * 2);
+    await vi.advanceTimersByTimeAsync(READ_DELAY * 2);
     await settle();
 
     hint.destroy();
@@ -1318,14 +1323,14 @@ describe('FirstRunHint：窗口期里的按键不取消等待', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(900);
+    await vi.advanceTimersByTimeAsync(900);
 
     // 用户按了个键（多半是想用某个快捷键）。
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
 
     // ⚠️ 之前 dismiss() 把等待计时器一起清了 —— 提示再也不出现，
     // 用户第一次使用就「什么都没看到」。
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
   });
 
@@ -1335,10 +1340,10 @@ describe('FirstRunHint：窗口期里的按键不取消等待', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(900);
+    await vi.advanceTimersByTimeAsync(900);
     // 暂停是「用户不看了」的信号，与「按了个键」不是一回事。
     video.dispatchEvent(new Event('pause', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(false);
   });
@@ -1391,7 +1396,7 @@ describe('FirstRunHint：shadow DOM 里的视频', () => {
     // composed 事件跨 shadow 边界时，document 上的 event.target 是**宿主**，
     // 只有 composedPath()[0] 才是那个 video。
     video.dispatchEvent(new Event('play', { bubbles: true, composed: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(true);
   });
@@ -1434,7 +1439,7 @@ describe('FirstRunHint：面板位置', () => {
     await settle();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     const node = hintNode() as HTMLElement | null;
     expect(node).not.toBeNull();
@@ -1526,7 +1531,7 @@ describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () =
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     expect(hintNode()?.textContent).toContain('点扩展图标可切换网页全屏');
     restore();
@@ -1541,7 +1546,7 @@ describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () =
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     // 视觉上退到精简版：只留「按哪个键」那两行。
     expect(hintNode()?.textContent).toContain('网页全屏');
@@ -1557,7 +1562,7 @@ describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () =
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
-    vi.advanceTimersByTime(2600);
+    await vi.advanceTimersByTimeAsync(2600);
 
     // 退到精简版（64px）—— 135 - 64 = 71，装得下。
     expect(hintNode()?.textContent).not.toContain('点扩展图标可进入网页全屏');
@@ -1615,7 +1620,7 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(true);
     expect(markShown).not.toHaveBeenCalled();
@@ -1632,7 +1637,7 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     await create({ claimBroker: broker });
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     // ⚠️ jsdom 里两个 frame 共用同一个 document，所以只能**数节点**：
     // 两个 frame 各弹一条的话，页面上会挂着两个提示。
@@ -1646,7 +1651,7 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     await create({ claimBroker: broker });
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // 用户点掉提示：锁必须被归还 —— 不然这个标签页再也弹不出引导。
@@ -1660,7 +1665,7 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     // 归还之后，另一个 frame 就能抢到锁了。
     const second = await create({ claimBroker: broker });
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     // ⚠️ 这里数的是**看得见**的提示：被关掉的那条只是淡出，节点还留在
     // document 里（TransientPill 复用自己的节点）。
@@ -1714,7 +1719,9 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    // ⚠️ 认领要等一段稳定窗口（写后读回，见 CLAIM_SETTLE_MS），
+    // 所以提示比「播放满 2.5 秒」晚 CLAIM_SETTLE_MS 出现 —— 断言必须跟实现对得上。
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY + CLAIM_SETTLE_MS);
     expect(isVisible()).toBe(true);
 
     // ⚠️ 标记必须真的落到**共享**存储里 —— 不然别的 frame 看不见，
@@ -1724,9 +1731,230 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     expect(typeof claim?.claimedAt).toBe('number');
 
     // 读完（READ_DELAY 之后）→ 标记清掉，别的 frame 才有机会弹下一条。
-    vi.advanceTimersByTime(READ_DELAY);
+    await vi.advanceTimersByTimeAsync(READ_DELAY);
     await settle();
     expect(data['vsc-first-run-hint-claim']).toBeUndefined();
+  });
+});
+
+/**
+ * 一份**故意慢半拍**的共享存储：写要等测试放行才落盘。
+ *
+ * ⚠️ 模拟的是 bug 的现场：两个窗口几乎同时发起认领时，
+ * 先发起的那个写**还没落盘**，第二个已经读过了（读到「没人认领」）。
+ * 真实浏览器里就是这个时序 —— `storage.local.set` 要走一次 IPC 才落盘，
+ * 而读回可以排在它前面。
+ */
+const createDeferredStorage = () => {
+  const data: Record<string, unknown> = {};
+  const pending: Array<() => void> = [];
+
+  return {
+    data,
+    /** 放行待落盘的写（按发起顺序）。 */
+    flush: () => {
+      while (pending.length > 0) {
+        pending.shift()!();
+      }
+    },
+    local: {
+      get: async (key: string) => (key in data ? { [key]: data[key] } : {}),
+      set: async (values: Record<string, unknown>) => {
+        await new Promise<void>((resolve) => {
+          pending.push(() => {
+            Object.assign(data, values);
+            resolve();
+          });
+        });
+      },
+      remove: async (key: string) => {
+        delete data[key];
+      },
+    },
+  };
+};
+
+/**
+ * 认领必须是**原子的**：同一时刻只允许一个 frame 拿到锁。
+ *
+ * ⚠️ 这条守的是实测 bug（2026-10-22）：两个浏览器窗口同时起播 →
+ * **两条引导同时弹出来**，而 storage.local 里只有**一个**「已展示」标记。
+ * 引导是设备级的一次性提示、也是这个扩展**全部**的可见入口，
+ * 两条同时出现 = 用户第一眼看到的是「粗制滥造」。
+ *
+ * ⚠️ 旧实现（订阅式快照 + fire-and-forget 写）守不住这条：
+ * 两个窗口在同一瞬间读到同一份「没人认领」的快照 → 都认领 → 都弹。
+ */
+describe('认领的原子性：两个实例同时抢，只有一个赢', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  /** 装一份共享存储（两个 broker 共用它）。 */
+  const useStorage = (local: unknown) => {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local,
+        onChanged: { addListener: () => {}, removeListener: () => {} },
+      },
+    });
+  };
+
+  it('同时认领 → 只有一个拿到锁（写后读回）', async () => {
+    const storage = createDeferredStorage();
+    useStorage(storage.local);
+
+    const a = createStorageClaimBroker();
+    const b = createStorageClaimBroker();
+    a.start();
+    b.start();
+    await settle();
+
+    // 两个实例几乎同时发起认领。
+    const claimA = a.tryClaim('frame-a');
+    const claimB = b.tryClaim('frame-b');
+    await settle();
+
+    // ⚠️ 两个写都还没落盘（真实浏览器里就是这个时序）。
+    expect(storage.data['vsc-first-run-hint-claim']).toBeUndefined();
+
+    storage.flush();
+    await settle();
+
+    // 稳定窗口：让两个写都落盘之后再去读回。
+    await vi.advanceTimersByTimeAsync(CLAIM_SETTLE_MS + 10);
+    await settle();
+
+    const granted = [await claimA, await claimB];
+    expect(granted.filter(Boolean).length, '只能有一个赢 —— 两个都赢就是两条引导').toBe(1);
+
+    // 输的那个**不许**把赢家的锁删掉（那把锁正被别人拿着）。
+    const stored = storage.data['vsc-first-run-hint-claim'] as { owner?: unknown } | undefined;
+    const winner = granted[0] ? 'frame-a' : 'frame-b';
+    expect(stored?.owner, '存储里必须还是赢家的锁').toBe(winner);
+  });
+
+  it('后来的那个看到活锁就让开（先来后到）', async () => {
+    const storage = createDeferredStorage();
+    useStorage(storage.local);
+
+    const a = createStorageClaimBroker();
+    a.start();
+    const claimA = a.tryClaim('frame-a');
+    await settle();
+    storage.flush();
+    await settle();
+    await vi.advanceTimersByTimeAsync(CLAIM_SETTLE_MS + 10);
+    await settle();
+
+    expect(await claimA, '第一个应当拿到锁').toBe(true);
+
+    // 后来者：写之前现读，读到的是**还活着**的别人的锁 → 让开。
+    const b = createStorageClaimBroker();
+    b.start();
+    expect(await b.tryClaim('frame-b'), '后来的那个必须让开').toBe(false);
+  });
+
+  it('锁被归还之后，另一个实例能拿到', async () => {
+    const storage = createDeferredStorage();
+    useStorage(storage.local);
+
+    const a = createStorageClaimBroker();
+    a.start();
+    const claimA = a.tryClaim('frame-a');
+    await settle();
+    storage.flush();
+    await settle();
+    await vi.advanceTimersByTimeAsync(CLAIM_SETTLE_MS + 10);
+    await settle();
+    expect(await claimA).toBe(true);
+
+    // 归还（引导读完了 / 被关掉了）。
+    a.release('frame-a');
+    await settle();
+    expect(storage.data['vsc-first-run-hint-claim'], '锁必须真的还回去').toBeUndefined();
+
+    // 归还之后，别的实例就有机会了。
+    const b = createStorageClaimBroker();
+    b.start();
+    const claimB = b.tryClaim('frame-b');
+    await settle();
+    storage.flush();
+    await settle();
+    await vi.advanceTimersByTimeAsync(CLAIM_SETTLE_MS + 10);
+    await settle();
+
+    expect(await claimB, '锁还回去之后就该轮得到别人').toBe(true);
+  });
+
+  /**
+   * 用户实测到的那个症状，原样复现。
+   *
+   * ⚠️ 实测（真实 Chromium，两个窗口同时起播）：
+   *   - 两边都看得见引导（各一条）；
+   *   - 而 storage.local 里只有**一个**「已展示」标记。
+   *
+   * 「一条提示却只记了一次展示」= 提示出现了两次，但只消耗了一次机会 ——
+   * 也就是说用户会看到**两条一模一样的引导**，而这个扩展的全部可见入口
+   * 就是这条引导。两条同时出现在两个窗口里，是这个产品的第一印象。
+   */
+  it('两个实例同时抢 → 页面上只有一条引导，「已展示」也只记一次', async () => {
+    const storage = createDeferredStorage();
+    useStorage(storage.local);
+
+    // ⚠️ 两个 FirstRunHint = 两个窗口里的两个内容脚本（各拿一份 broker，
+    // 但**共用**同一份 storage —— 那就是「同一个设备」）。
+    const makeHint = () => {
+      const hint = new FirstRunHint({
+        getShortcuts: () => createShortcuts(),
+        wasShown: async () => false,
+        markShown: async () => {},
+        recordFailedAttempt: async () => {},
+        isInCooldown: async () => false,
+        claimBroker: createStorageClaimBroker(),
+      });
+      hint.start();
+      return hint;
+    };
+
+    const first = makeHint();
+    const second = makeHint();
+
+    try {
+      await settle();
+
+      // 两个「窗口」各自起播（两个运行时各自监听 play）。
+      const video = makeVisible(createVideo());
+      document.body.appendChild(video);
+      video.dispatchEvent(new Event('play', { bubbles: true }));
+
+      // 播放满 2.5 秒 → 两个运行时都来抢锁（此刻两个写都还没落盘）。
+      await vi.advanceTimersByTimeAsync(WATCH_DELAY);
+      await settle();
+      expect(storage.data['vsc-first-run-hint-claim'], '前置条件：两个写都还在路上').toBeUndefined();
+
+      // 两个写落盘（后写的赢）。
+      storage.flush();
+      await settle();
+
+      // 稳定窗口 + 读回。
+      await vi.advanceTimersByTimeAsync(CLAIM_SETTLE_MS + 10);
+      await settle();
+
+      // ⚠️ jsdom 里两个实例共用一个 document，所以只能**数节点**。
+      const hints = document.querySelectorAll(`#${HINT_ID}.vsc-visible`);
+      expect(hints.length, '两个窗口不能各弹一条引导').toBe(1);
+    } finally {
+      // ⚠️ 必须销毁：不销毁的话，这两个运行时会继续监听 document 上的
+      // play 事件，把**后面**那些用例的引导节点抢走（它们共用一个 document）。
+      first.destroy();
+      second.destroy();
+    }
   });
 });
 
@@ -1827,23 +2055,23 @@ describe('FirstRunHint：设置页重置之后，同一个标签页里能再看�
 
     // 第一轮：引导出现 → 读完 → 落盘「已展示」。
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
-    vi.advanceTimersByTime(READ_DELAY);
+    await vi.advanceTimersByTimeAsync(READ_DELAY);
     expect(markShown).toHaveBeenCalledTimes(1);
 
     // 用户在设置页点了「重新显示使用引导」。
     fireShownCleared();
 
     // 同一个标签页里，不刷新页面，引导应该再出现一次。
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     await settle();
     expect(isVisible(), '重置之后引导必须再出现一次').toBe(true);
 
     // ⚠️ 而且整条流程**重跑**：读完之后再次落盘「已展示」。
     // 只把提示画出来不算数 —— 用户要的是「再走一遍」。
-    vi.advanceTimersByTime(READ_DELAY);
+    await vi.advanceTimersByTimeAsync(READ_DELAY);
     await settle();
     expect(markShown).toHaveBeenCalledTimes(2);
   });
@@ -1854,7 +2082,7 @@ describe('FirstRunHint：设置页重置之后，同一个标签页里能再看�
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
     // 用户点了引导自己的「×」（那是一次拒绝）。
@@ -1867,7 +2095,7 @@ describe('FirstRunHint：设置页重置之后，同一个标签页里能再看�
     // 设置页点「重新显示使用引导」。
     fireShownCleared();
 
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     await settle();
     expect(isVisible(), '被关掉之后也要能被叫回来').toBe(true);
   });
@@ -1878,13 +2106,13 @@ describe('FirstRunHint：设置页重置之后，同一个标签页里能再看�
     await create();
 
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
-    vi.advanceTimersByTime(READ_DELAY);
+    await vi.advanceTimersByTimeAsync(READ_DELAY);
 
     // 视频再播一次、页面再等一会儿 —— 引导不该回来。
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
     await settle();
 
     expect(markShown).toHaveBeenCalledTimes(1);
@@ -1936,7 +2164,7 @@ describe('接缝：判定只有一份（VideoRegistry 代答）', () => {
     document.body.appendChild(video);
     await create();
     video.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     return {
       decorative: registry.isAmbientPreview(video),
@@ -2002,7 +2230,7 @@ describe('接缝：判定只有一份（VideoRegistry 代答）', () => {
 
     // 站点自己调 play()（没有任何用户手势做背景）。
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(SHOWN_AT);
+    await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(
       registry.isAmbientPreview(preview),
@@ -2061,7 +2289,7 @@ describe('接缝：判定只有一份（VideoRegistry 代答）', () => {
     await create();
 
     player.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(WATCH_DELAY);
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     const root = document.getElementById(HINT_ID)!;
     expect(root.style.getPropertyValue('font-size')).toBe(NOTICE_CARD_TOKENS['font-size']);
