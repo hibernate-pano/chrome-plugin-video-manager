@@ -177,8 +177,11 @@ CI 会在 push / PR 上跑 `test`、`build` 和 `e2e` 三个 job（`build` 依�
     点工具栏图标则会**直接**作用到嵌入框里那个视频上
 - DRM 视频（如 Netflix）受浏览器保护，无法接管
 - 极少数强依赖原始 DOM 位置的站点会退回 CSS cover 模式
-- 极少数给 `<html>` **本身**加 `transform` 的站点上，网页全屏的浮层会错位
-  （给 `<body>` 加 transform 不受影响 —— 那是更常见的写法，已经处理了）
+
+> 给 `<html>` 或 `<body>` 加 `transform` 的站点上，网页全屏的浮层曾会错位 ——
+> 那是因为浮层挂在 `<html>` 上，而 transform 会让它变成 fixed 后代的包含块。
+> 6.2.0 改成内联 `!important` 隔离底座（内联 important 赢过任何作者 important），
+> 实测两种情况都铺满视口。回归守卫：`tests/e2e/fullscreen-isolation.spec.js`。
 
 > frame 归属这条规则有回归守卫：`tests/e2e/frame-scope.spec.js`
 > （焦点在顶层 / 焦点在嵌入框内 / 点工具栏图标三种情形）。
