@@ -62,6 +62,16 @@ const appendVideo = (id: string, className = '') => {
   return video;
 };
 
+/**
+ * 这一份运行时看得见的**全部**候选视频。
+ *
+ * ⚠️ getAllVideos 是私有的，但「顶层看得见哪些视频」正是 6.1.0 那条契约的
+ * 核心：只看 getCurrentVideo() 分不清「另一个视频也在候选集里」与
+ * 「另一个视频根本不在这个 frame 的地盘里」—— 而这正是要守的分界。
+ */
+const candidatesOf = (registry: VideoRegistry): HTMLVideoElement[] =>
+  (registry as unknown as { getAllVideos: () => HTMLVideoElement[] }).getAllVideos();
+
 describe('VideoRegistry', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -369,12 +379,25 @@ describe('VideoRegistry', () => {
     expect(registry.getCurrentVideo()).toBe(main);
   });
 
-  it('finds the site main player inside a same-origin iframe', () => {
+  it('does not reach into a same-origin iframe (each frame manages its own document)', () => {
+    // 6.1.0 之前注册表会**下钻同源 iframe** 去找站点主播放器。那在内容脚本
+    // 注入到所有 frame（all_frames）之后从「必要」变成了「有害」——
+    //
+    // 顶层 registry 下钻到 iframe 里的视频，而 **iframe 里另有一份 registry**
+    // （同一个 <video> 节点，两份独立的运行时状态）。于是：
+    // 1. 同一个视频被两个 runtime 各管一半：顶层把它的倍速改了、iframe 里那份
+    //    又改一次 —— 角标显示的倍率与视频实际倍率互相矛盾；
+    // 2. 顶层能改它却报不了倍速（reportSpeed 只让焦点所在的那个 frame 说话），
+    //    工具栏标题因此停在别的 frame 的读数上（在说谎）。
+    //
+    // 修法：**每个 frame 只管自己 document 里的视频**。
+    // 跨 frame 的意图（点工具栏图标）由 background 路由到「用户此刻聚焦的
+    // 那个 frame」—— 那一份 registry 里就有那个视频。
     adapterHost.hostname = 'www.youtube.com';
     const registry = createRegistry();
 
-    const teaser = appendVideo('teaser');
-    mockRect(teaser, 800, 450, 0, 0);
+    const top = appendVideo('top');
+    mockRect(top, 640, 360, 0, 0);
 
     const frame = document.createElement('iframe');
     document.body.append(frame);
@@ -388,8 +411,32 @@ describe('VideoRegistry', () => {
     frameDocument.body.append(frameVideo);
     mockRect(frameVideo, 240, 120, 0, 0);
 
-    // 改动前只在 document 上查一次 preferred，iframe 里的主播放器根本看不见。
-    expect(registry.getCurrentVideo()).toBe(frameVideo);
+    // 顶层拿到的是**顶层那个**视频。
+    expect(registry.getCurrentVideo()).toBe(top);
+    // iframe 里那个视频不在顶层这一份的候选集里 —— 它归 iframe 自己那份管。
+    expect(candidatesOf(registry)).toContain(top);
+    expect(candidatesOf(registry)).not.toContain(frameVideo);
+  });
+
+  it('顶层自己没有视频时，也不会把 iframe 里的视频捡回来', () => {
+    // 上一条的推论：顶层看不见 iframe 里的视频，于是顶层点工具栏图标时
+    // 得到的答案是「这个页面里没有视频」—— 而不是「接管不了」。
+    // 那个视频由 iframe 自己那份运行时接管（它在**自己的** document 里）。
+    const registry = createRegistry();
+
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const frameDocument = frame.contentDocument;
+    if (!frameDocument) {
+      throw new Error('same-origin iframe document is required for this case');
+    }
+    const frameVideo = frameDocument.createElement('video');
+    frameVideo.id = 'framed-main';
+    frameDocument.body.append(frameVideo);
+    mockRect(frameVideo, 240, 120, 0, 0);
+
+    expect(registry.getCurrentVideo()).toBeNull();
+    expect(candidatesOf(registry)).toEqual([]);
   });
 
   it('keeps the preferred video ahead of a bigger paused one', () => {
@@ -1442,6 +1489,168 @@ describe('VideoRegistry：接管规则（证据分层）', () => {
     registry.stop();
   });
 
+  it('站点有多个 mainSelectors 时，站在后面那条选择器里的视频不该被当成装饰物', () => {
+    // ⚠️ 本模块内部曾经有**两条**「主播放器」判据，它们**不等价**：
+    // - 「唯一性」版：站点有多个 mainSelectors 时，命中第一个有候选的
+    //   选择器就停（那个函数已删除）；
+    // - 「是不是站点点名的」版（isSiteMainPlayerVideo）：任何一条命中都算。
+    //
+    // 页面上同时存在「video.html5-main-video」与「.html5-video-player video」
+    // 时，站在后者里的那条视频在唯一性版里**不算**主播放器
+    // （前面的选择器已经有候选了）。
+    //
+    // 而「装饰性预览」这条判定问的是「这个视频是不是站点点名的」——
+    // 于是它**必须**用「任何一条命中都算」那一版。
+    //
+    // ⚠️ 用错版本的后果：本模块**内部**对同一条视频给出两个相反的结论 ——
+    // 「要不要接管它」说它是装饰物（被排除掉），
+    // 「要不要给它弹引导」说它不是（引导会为一条我们压根不接管它的视频弹出）。
+    // 那正是本轮要消灭的那类 bug。
+    //
+    // ⚠️ 现在两条路径都调**同一个**函数（ambientPreview.ts 的
+    // isSiteMainPlayerVideo）——「唯一性」那份已经删掉。
+    adapterHost.hostname = 'www.youtube.com';
+
+    const registry = createRegistry();
+    registry.start();
+
+    // 站点点名的**第一个**主播放器 —— 唯一性版就是停在这里。
+    const main = withLayout(appendVideo('main'));
+    main.className = 'html5-main-video';
+    mockRect(main, 0, 0, 0, 0);
+
+    // 站在**第二条** mainSelector 里的那条视频。
+    const wrapper = document.createElement('div');
+    wrapper.className = 'html5-video-player';
+    document.body.appendChild(wrapper);
+    const secondary = document.createElement('video');
+    secondary.id = 'secondary';
+    // autoplay + 无原生 controls：除了主播放器豁免以外，它就是装饰物的形状。
+    secondary.setAttribute('autoplay', '');
+    wrapper.appendChild(secondary);
+    // ⚠️ 尺寸必须**小于大半个视口** ——
+    // 否则豁免它的是第 6 条（「占满大半个视口 = 页面主角」），而不是第 1 条
+    // （站点点名它是主播放器）。那样这条用例就成了**恒真的假守卫**：
+    // 把第 1 条改坏（改成永远 false）它照样绿（实测：1000×1000 在
+    // 1024×768 里占 127%，第 6 条直接放行）。
+    mockRect(secondary, 640, 360, 0, 0);
+    mockPlaying(secondary);
+
+    // 前置条件：这条视频**不能**靠第 6 条脱身（见上面的注释）。
+    // 把这条前置条件写出来，是为了以后有人把尺寸调大时**立刻看见**
+    // 这条用例失去了什么，而不是等到它悄悄变成假守卫。
+    const viewportArea = window.innerWidth * window.innerHeight;
+    expect(
+      (640 * 360) / viewportArea,
+      '前置条件：这条视频不能占满大半个视口 —— 否则豁免的是第 6 条而不是第 1 条',
+    ).toBeLessThan(0.6);
+
+    expect(
+      registry.isAmbientPreview(secondary),
+      '站点点名的视频不该是装饰物（公开判定）',
+    ).toBe(false);
+
+    // 接管路径也必须不把它当装饰物排除掉 —— 两条路径必须同向。
+    expect(
+      registry.getWatchedVideo()?.id,
+      '接管路径与公开判定必须一致：这条视频不该被当成装饰物排除掉',
+    ).toBe('secondary');
+
+    registry.stop();
+  });
+
+  it('站点点名的视频（站在第二条 mainSelector 里的）：接管路径也必须认它', () => {
+    // ⚠️ 上一条用的尺寸（640×360）**过大半个视口不够，但过了「够不够大」**
+    // —— 于是接管它靠的是第 6 档（占视口 ≥ 10%），不是「站点点名」。
+    // 那样这条用例就分不出「接管路径用的是哪一版主播放器判据」。
+    //
+    // 这条把尺寸压到 240×135（占 1024×768 的 4.1%，过不了第 6 档），
+    // 于是接管它的**唯一**可能就是第 2 档「站点点名它是主播放器」。
+    //
+    // ⚠️ 而第 2 档必须与装饰路径（第 1 条）**同一条判据**：
+    // 「唯一性」版（命中第一个有候选的选择器就停）会说「它不是主播放器」，
+    // 于是接管路径不认它、装饰路径却认它 ——
+    // 结果是扩展不接管这条视频，引导却为它弹出（多打扰一次）。
+    adapterHost.hostname = 'www.youtube.com';
+
+    const registry = createRegistry();
+    registry.start();
+
+    // 站点点名的**第一个**主播放器 —— 「唯一性」版就是停在这里。
+    const main = withLayout(appendVideo('main'));
+    main.className = 'html5-main-video';
+    mockRect(main, 0, 0, 0, 0);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'html5-video-player';
+    document.body.appendChild(wrapper);
+    const secondary = document.createElement('video');
+    secondary.id = 'secondary';
+    secondary.setAttribute('autoplay', '');
+    wrapper.appendChild(secondary);
+    mockRect(secondary, 240, 135, 0, 0);
+    mockPlaying(secondary);
+
+    // 前置条件：它过不了「够不够大」那条线 —— 否则接管它的理由
+    // 可能来自第 6 档，这条用例就分不出第 2 档有没有生效。
+    expect(
+      (240 * 135) / (window.innerWidth * window.innerHeight),
+      '前置条件：这条视频过不了「占视口 ≥ 10%」那条线',
+    ).toBeLessThan(0.1);
+
+    expect(
+      registry.isAmbientPreview(secondary),
+      '站点点名的视频不该是装饰物（公开判定）',
+    ).toBe(false);
+
+    expect(
+      registry.getWatchedVideo()?.id,
+      '接管路径必须与装饰路径用同一份「站点点名」判据',
+    ).toBe('secondary');
+
+    registry.stop();
+  });
+
+  it('页面把 matches 改坏时：判定退化，而不是整条候选扫描抛掉', () => {
+    // ⚠️ 页面可以把 `Element.prototype.matches` 换成会抛异常的版本。
+    //
+    // 这条判定在「装饰性预览」的**核心路径**上：它一抛，
+    // computeAmbientPreview 抛 → 整条候选扫描抛 → 快捷键彻底失灵
+    // （整个扩展等于没装）。
+    //
+    // 所以两条路径（接管 / 装饰）现在都走**同一份**带 try/catch 的匹配器：
+    // 判不出来就当「不匹配」——只少一条豁免，不会把整条链路带崩。
+    adapterHost.hostname = 'www.youtube.com';
+
+    const registry = createRegistry();
+    registry.start();
+
+    const video = withLayout(appendVideo('video'));
+    video.setAttribute('autoplay', '');
+    mockPlaying(video);
+    mockRect(video, 800, 450, 0, 0);
+
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, 'matches');
+    Object.defineProperty(Element.prototype, 'matches', {
+      value: () => {
+        throw new Error('页面把 matches 改坏了');
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      expect(() => registry.getWatchedVideo()).not.toThrow();
+      expect(() => registry.isAmbientPreview(video)).not.toThrow();
+    } finally {
+      if (original) {
+        Object.defineProperty(Element.prototype, 'matches', original);
+      }
+    }
+
+    registry.stop();
+  });
+
   it('被我们接管的全屏视频（键盘还没碰过它）：controls 被我们自己弄掉也不算「装饰视频」', () => {
     // 上一条走的是**键盘**路径（视频已经是键盘目标，于是「键盘命中过」
     // 那条证据先把它保住了）。这条走**工具栏图标**那条路径 ——
@@ -1607,6 +1816,69 @@ describe('VideoRegistry：接管规则（证据分层）', () => {
     registry.stop();
   });
 
+  it('性能：按住不放的重复按键不重扫整页', () => {
+    // 浏览器在用户**按住**某个键期间会持续派发 keydown（event.repeat === true）。
+    // 那些事件不带来任何新信息（还是同一个键、还是同一次手势），
+    // 但每一条都要重扫整页视频列表 —— 而「按住」恰恰是持续时间最长的手势
+    // （长按空格翻页、长按方向键快进）。
+    //
+    // 实测（真实 Chromium，3 万节点的页面）：单次全页扫描约 3ms。
+    // 不挡住重复事件的话，用户按住一秒就是 30 次扫描 = 90ms 白烧的 CPU。
+    const registry = createRegistry();
+    registry.start();
+
+    const video = withLayout(appendVideo('only'));
+    mockRect(video, 640, 360, 0, 0);
+
+    const querySelectorAll = vi.spyOn(document, 'querySelectorAll');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+    const scansAfterFirstPress = querySelectorAll.mock.calls.length;
+    expect(scansAfterFirstPress, '第一次按键当然要扫一遍').toBeGreaterThan(0);
+
+    for (let index = 0; index < 20; index += 1) {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', repeat: true, bubbles: true, cancelable: true,
+      }));
+    }
+
+    expect(
+      querySelectorAll.mock.calls.length,
+      '按住不放的重复事件不该再扫整页',
+    ).toBe(scansAfterFirstPress);
+
+    registry.stop();
+  });
+
+  it('性能：同一帧内不重复强制排版', () => {
+    // getBoundingClientRect() 会**强制排版** —— 它是候选路径里最贵的一次调用。
+    // 而一次按键里这条路径要走两遍：注册表记手势（找手势指向哪个视频）
+    // 与键盘控制器找接管目标。
+    //
+    // 所以测量结果按帧复用：同一帧内布局不会变，跨帧必须重测。
+    const registry = createRegistry();
+    registry.start();
+
+    const video = withLayout(appendVideo('only'));
+    mockRect(video, 640, 360, 0, 0);
+
+    const rect = vi.spyOn(video, 'getBoundingClientRect');
+
+    // 手势路径量一次。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+    expect(rect, '手势路径要量一次').toHaveBeenCalledTimes(1);
+
+    // 同一帧里的第二条路（找接管目标）必须复用同一份测量结果。
+    registry.getWatchedVideo();
+
+    expect(
+      rect,
+      '同一帧内的第二条路不该再强制排版',
+    ).toHaveBeenCalledTimes(1);
+
+    registry.stop();
+  });
+
   it('性能：视频消失之后能及时被发现（缓存必须失效）', async () => {
     const registry = createRegistry();
     registry.start();
@@ -1622,6 +1894,313 @@ describe('VideoRegistry：接管规则（证据分层）', () => {
       registry.getWatchedVideo(),
       '缓存不能返回一个已经被摘掉的视频',
     ).toBeNull();
+
+    registry.stop();
+  });
+});
+
+/**
+ * 工具栏图标路径（**显式**操作）选哪个视频。
+ *
+ * ⚠️ 这条路径与快捷键路径的**契约**不同：显式操作必须有目标
+ * （用户点了图标就是想对某个视频动手），快捷键路径没有目标就必须穿透。
+ * 但两者的**候选过滤与打分**必须一致 —— 否则用户会看到
+ * 「按 = 改的是 A、点图标进的是 B」。
+ *
+ * 本组用例守的是 6.2.1 修掉的缺陷：
+ * 「很久以前点过、早已滚出屏幕」的小预览，靠着 +10000 的最高权重抢走了
+ * 图标路径的目标 —— 而同一时刻按 f 进的却是眼前的大播放器。
+ */
+describe('VideoRegistry：工具栏图标路径的目标', () => {
+  const VIEWPORT_WIDTH = 1024;
+  const VIEWPORT_HEIGHT = 768;
+
+  const simulateViewport = (width: number, height: number) => {
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      value: width,
+      configurable: true,
+    });
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      value: height,
+      configurable: true,
+    });
+    Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    simulateViewport(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+  });
+
+  afterEach(() => {
+    delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
+    delete (document.documentElement as unknown as Record<string, unknown>).clientHeight;
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    vi.restoreAllMocks();
+  });
+
+  const withLayout = (video: HTMLVideoElement) => {
+    video.style.display = 'block';
+    return video;
+  };
+
+  it('D1：早已滚出视口的旧视频不该抢走图标路径的目标', () => {
+    // 场景（实测，真实 Chromium）：
+    //   用户几十秒前点过一张 320×180 的卡片预览，之后页面换成大播放器；
+    //   点工具栏图标 → 进的全屏却是那个早就滚走的小预览（或一块黑屏），
+    //   而同一时刻按 f 进的却是大播放器 —— **图标与快捷键表现不一致**。
+    //
+    // ⚠️ 场景设计要点：大播放器必须是「装饰性自动播放」的形状 ——
+    //    否则快捷键路径本来就有目标，回退分支根本轮不到执行，
+    //    那这条用例就成了一条恒真的假守卫。
+    const registry = createRegistry();
+    registry.start();
+
+    // 早就滚出视口的小卡片：用户点过它。
+    const card = withLayout(appendVideo('card'));
+    mockRect(card, 320, 180, 5000, 0);
+    card.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+    // 眼前的大播放器（装饰性自动播放预览 → 快捷键路径**不**接管它）。
+    const big = withLayout(appendVideo('big'));
+    big.setAttribute('autoplay', '');
+    mockPlaying(big);
+    mockRect(big, 800, 450, 0, 0);
+
+    // 前置条件：快捷键路径没有目标（所以图标路径会走「回退」分支）。
+    expect(
+      registry.getWatchedVideo(),
+      '前置条件：装饰性预览不该被快捷键接管（否则测不到回退分支）',
+    ).toBeNull();
+
+    expect(
+      registry.getCurrentVideo()?.id,
+      '图标路径必须作用于眼前的那个视频，而不是早就滚走的小卡片',
+    ).toBe('big');
+
+    registry.stop();
+  });
+
+  it('D1：「用户碰过它」这个权重会过期 —— 很久以前的点击不该一直霸占目标', async () => {
+    // ⚠️ 为什么这条与上一条分开：上一条守的是「在视口里的候选优先」，
+    //    这条守的是「+10000 有时限」。两条修的是同一个缺陷的两半，
+    //    但判据不同 —— 混在一起的话，改坏其中一半另一条仍然绿。
+    //
+    // 场景：用户点过一张卡片预览，之后继续往下滚 —— 两个视频都滚出了视口。
+    // 那次点击只说明「一分钟前用户想动它」，不再说明「用户此刻想动它」。
+    const registry = createRegistry();
+    registry.start();
+
+    // 用户点过的小卡片（早已滚出视口）。
+    const card = withLayout(appendVideo('card'));
+    mockRect(card, 320, 180, 5000, 0);
+
+    // 还在播的大视频（同样滚出了视口）。
+    const feed = withLayout(appendVideo('feed'));
+    mockPlaying(feed);
+    mockRect(feed, 800, 450, 5000, 0);
+
+    const base = Date.now();
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(base);
+      card.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+      // 刚刚碰过 → 它就是目标（+10000 是全场最高）。
+      expect(
+        registry.getCurrentVideo()?.id,
+        '用户刚碰过的视频必须优先当目标',
+      ).toBe('card');
+
+      // 60 秒过去 → 那次点击不再说明用户此刻想动哪个视频。
+      //
+      // ⚠️ 必须跨过一帧：getCurrentVideo() 有「同一帧内复用」的快照，
+      // 而帧号由 rAF 推进。同一帧内它会直接返回上一次的结果 ——
+      // 那样这条用例就测不到「权重过期」这件事了。
+      now.mockReturnValue(base + 61_000);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      expect(
+        registry.getCurrentVideo()?.id,
+        '很久以前的点击不该一直霸占图标路径的目标',
+      ).toBe('feed');
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    registry.stop();
+  });
+
+  it('D1：用户刚点过的视频仍然优先（权重没有收得太紧）', () => {
+    // ⚠️ 上一条的**反向守卫**：给 +10000 加时限不是为了削弱它。
+    //
+    // 用户点了一个暂停的小卡片 → 那就是他的目标，此刻点图标就该动它。
+    const registry = createRegistry();
+    registry.start();
+
+    const card = withLayout(appendVideo('card'));
+    mockRect(card, 320, 180, 0, 0);
+
+    // 一个更大的、正在播的邻居（没有用户手势，不该靠「正在播」压过用户的选择）。
+    const other = withLayout(appendVideo('other'));
+    mockPlaying(other);
+    mockRect(other, 800, 450, 0, 0);
+
+    card.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+    expect(
+      registry.getCurrentVideo()?.id,
+      '用户刚点过的视频必须优先于更大的邻居',
+    ).toBe('card');
+
+    registry.stop();
+  });
+});
+
+/**
+ * class 变动与缓存：**只改 class** 不该让整页重扫。
+ *
+ * ⚠️ 这组用例守的是重渲染站点（React / Vue / Next.js）上的开销：
+ * 那些站点每次渲染都要重算 class —— 每秒几十次。class 变动如果
+ * 一律作废全部缓存，扩展每次按键都要全页重扫一遍（实测 3 万节点的页面
+ * 约 3ms），而长按加速时每 120ms 一次 —— 那点开销全烧在这里了。
+ *
+ * 之所以能降级：可见性判据读的是**计算样式**与**实测矩形**
+ * （isCssHidden / isVisible / isInViewport），class 属性本身从头到尾
+ * 没有被读过。所以 class 变动只需要让「测量」重做一遍 ——
+ * 「候选列表」与「目标缓存」都留着。
+ *
+ * ⚠️ 但降级不等于不管：class 变动**能**改变可见性（站点把视频
+ * `display:none` 藏起来就是改 class）。所以目标缓存命中时必须复核
+ * 那一个视频（见 isStillUsable）—— 只复核一个，不重扫全页。
+ */
+describe('VideoRegistry：class 变动与缓存', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * 让「站点用 CSS 把视频藏起来」这件事在 jsdom 里成立。
+   *
+   * ⚠️ 为什么不用真的 <style> 规则：jsdom 的样式计算对 class 选择器的
+   * 支持不完整（`.hide{display:none}` 不保证进 computed style）。而这条
+   * 用例要测的是**缓存策略**（class 变动之后可见性判据有没有重算），
+   * 不是 CSS 引擎 —— 把 computed style 换掉最稳，也最直指要害。
+   */
+  const hideByClass = (video: HTMLVideoElement, className: string) => {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudoElt) => {
+      const style = real(element, pseudoElt);
+      if (element !== video) {
+        return style;
+      }
+      return {
+        display: video.classList.contains(className) ? 'none' : style.display,
+        visibility: style.visibility,
+      } as unknown as CSSStyleDeclaration;
+    });
+  };
+
+  it('D3：只改 class 不该让快捷键路径重扫整页（重渲染站点的热路径）', async () => {
+    const registry = createRegistry();
+    const video = appendVideo('only');
+    // ⚠️ 样式必须在 start() 之前设好 —— 那是一次 style 属性变动，
+    //    会走「全量作废」那条路，混进来就测不到「只改 class」了。
+    video.style.display = 'block';
+    mockRect(video, 640, 360, 0, 0);
+    registry.start();
+
+    const querySelectorAll = vi.spyOn(document, 'querySelectorAll');
+    const rect = vi.spyOn(video, 'getBoundingClientRect');
+
+    // 先算一次，把目标缓存捂热。
+    expect(registry.getWatchedVideo()).toBe(video);
+    const scansAfterFirstCall = querySelectorAll.mock.calls.length;
+    expect(scansAfterFirstCall).toBeGreaterThan(0);
+    rect.mockClear();
+
+    // 站点重渲染 → **只改 class**（React/Vue 每次渲染都这么干）。
+    video.className = 'is-playing';
+    // MutationObserver 的回调是微任务，等它落地。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(registry.getWatchedVideo()).toBe(video);
+    expect(
+      querySelectorAll.mock.calls.length,
+      '只改 class 不该让快捷键路径重扫整页（重渲染站点上每秒几十次）',
+    ).toBe(scansAfterFirstCall);
+    expect(
+      rect,
+      'class 变动之后测量结果必须重做（可见性判据的依据变了）',
+    ).toHaveBeenCalled();
+
+    registry.stop();
+  });
+
+  it('D3：站点用 class 把视频藏起来 → 候选列表必须是最新的', async () => {
+    // ⚠️ 这条守的是「降级之后不能丢的正确性」：class 变动不再作废
+    //    目标缓存，那么缓存里的目标有可能已经被站点藏起来了。
+    //    没有复核的话，它会继续吃下快捷键最多 5 秒。
+    const registry = createRegistry();
+    const video = appendVideo('only');
+    video.style.display = 'block';
+    mockRect(video, 640, 360, 0, 0);
+    registry.start();
+
+    hideByClass(video, 'hide');
+
+    // 前置条件：藏起来之前它是目标。
+    expect(registry.getWatchedVideo()).toBe(video);
+
+    // 站点把它藏起来（**只改 class**）。
+    video.className = 'hide';
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      registry.getWatchedVideo(),
+      '被站点藏起来的视频不该继续吃下快捷键',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  it('D3：候选列表永远不缓存 —— 新出现的视频必须被看见', async () => {
+    // ⚠️ 为什么这条要单列：DOM 的增删是**同步**可见的，而
+    //    MutationObserver 的作废通知是**微任务**。所以「候选列表」
+    //    一旦被缓存，同一个同步块里刚加进来的视频就会漏掉。
+    //    测量可以缓存，列表不行。
+    //
+    // ⚠️ 为什么走工具栏路径：快捷键路径有「键盘目标粘性」（+8000、30 秒），
+    //    那是**故意**让目标别乱跳的机制 —— 用它来测「列表新不新鲜」会被
+    //    粘性盖住，看不出问题。
+    const registry = createRegistry();
+    registry.start();
+
+    const first = appendVideo('first');
+    first.style.display = 'block';
+    mockRect(first, 640, 360, 0, 0);
+
+    // 先算一次（收一遍候选）。
+    expect(registry.getCurrentVideo()).toBe(first);
+
+    // 站点换了一个更大的视频。
+    const second = appendVideo('second');
+    second.style.display = 'block';
+    mockRect(second, 1920, 1080, 0, 0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      registry.getCurrentVideo()?.id,
+      '候选列表不能被缓存住（否则新出现的视频永远看不见）',
+    ).toBe('second');
 
     registry.stop();
   });

@@ -1,9 +1,12 @@
 import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
   resetPlaybackRate,
   seekBy,
   stepPlaybackRate,
   togglePlayback,
 } from './playback';
+import { getSiteAdapter as lookupSiteAdapter, type SiteAdapter } from './siteAdapters';
 import { matchesShortcut } from '../shared/shortcuts';
 import {
   SEEK_STEP_SECONDS,
@@ -44,12 +47,51 @@ interface KeyboardControllerOptions {
   exitFullscreen: () => void;
   showSpeedFeedback: (rate: number, video: HTMLVideoElement) => void;
   /**
+   * 播放状态变了。
+   *
+   * @param playing true = 已经在播放，false = 已经暂停。
+   *
+   * 为什么必须有这条：播放/暂停**在设计上没有任何视觉提示** ——
+   * 控制条只在网页全屏里才有，非全屏时按空格画面上什么都不变。
+   * 读屏用户因此完全无法确认自己按的空格生效没有。
+   *
+   * 这里只报告**发生了什么**（语义），文案由运行时决定。
+   */
+  onPlaybackStateChange?: (playing: boolean) => void;
+  /**
+   * 进度跳了。
+   *
+   * @param positionSeconds 跳完之后视频的播放位置（秒）。
+   * @param deltaSeconds 实际跳了多少秒（正数 = 前进，负数 = 后退）。
+   * @param direction 动作的方向。被时长夹住时 deltaSeconds 可能是 0，
+   *   那时只能靠 direction 知道用户按的是前进还是后退。
+   *
+   * 为什么必须有这条：快进快退**在设计上没有任何视觉提示** ——
+   * 画面只是跳了一下，读屏用户听不到任何东西。
+   */
+  onSeek?: (
+    positionSeconds: number,
+    deltaSeconds: number,
+    direction: 'forward' | 'back',
+  ) => void;
+  /**
    * 有视频、但进入全屏必然失败时的反馈。
    *
    * 这一支必须放行按键（不能让用户既丢键又没反应），可放行之后如果什么都不说，
    * 用户看到的就是「按 f 没反应」。放行和反馈要一起做。
    */
   notifyTakeoverUnavailable: (video: HTMLVideoElement | null) => void;
+  /**
+   * 「我按了快捷键，但这个 frame 里没有可接管的目标」。
+   *
+   * 键必须**放行**给页面（没有明确目标就不接管，这是原则），
+   * 可放行之后如果什么都不说，用户看到的就是「按 f 没反应」。
+   * 放行和反馈要一起做 —— 这一条就是那半句反馈。
+   *
+   * ⚠️ 它只负责**说明**，不负责替用户去动别的 frame 的视频：
+   * 「焦点决定作用对象」这条规则不能破。
+   */
+  notifyNoVideoHere?: () => void;
   /**
    * 这个键盘事件是不是「用户真的按了」。
    *
@@ -62,6 +104,17 @@ interface KeyboardControllerOptions {
    * 连原型上的 getter 都覆盖不了。注入之后，两条分支都能测。
    */
   isTrustedEvent?: (event: KeyboardEvent) => boolean;
+  /**
+   * 「这个站点自己会用哪些键」—— 站点适配器。
+   *
+   * 真实运行时按 `window.location.hostname` 查（见 siteAdapters）。
+   *
+   * 为什么要抽成依赖：仓库里**没有**一份可信的「各站点键位表」可以当测试夹具 ——
+   * 凭空写一个真实站点的键位，等于往产品里塞一条没核实过的事实。
+   * 注入之后，机制本身（keydown 与 keyup 一起放行）可以被独立测到，
+   * 而「哪个站点有哪些键」这份数据留在 siteAdapters 里单独守。
+   */
+  getSiteAdapter?: (hostname: string) => SiteAdapter;
 }
 
 /** 真正接收文本输入的 <input> 类型；其余（range/checkbox/button/color…）不算编辑态。 */
@@ -293,28 +346,71 @@ const yieldsToFocusedControl = (event: KeyboardEvent): boolean => {
 };
 
 /**
- * 这个视频是不是**根本没法 seek**（直播流）。
+ * 这个视频是不是**根本没法 seek**（直播流 / 不可 seek 的流）。
  *
- * 直播流（MediaStream / 无时长源）的 `duration` 是 Infinity 且 `seekable` 为空，
- * `video.currentTime = x` 什么也不会发生 —— 但我们会把这个键**吞掉**，
+ * 直播流（MediaStream / MSE / blob:）的 `duration` 常常不是有限数
+ * （Infinity = 传统直播，NaN = MSE 直播的常态），`video.currentTime = x`
+ * 什么也不会发生 —— 但我们会把这个键**吞掉**，
  * 于是用户看到的是「按了 → 什么都没发生，页面也没滚动」。
+ * DRM 站点同理：`seekable` 是空的。
  *
  * 这种情况下不该吞键：让它落到页面上，用户至少还能滚动。
  *
- * 只在「能确定是直播」时才放行（duration 无限 **且** 没有可 seek 区间）：
- * 别的情形（媒体还没加载完、时长还没算出来）保持原样，免得漏掉正常的快进。
+ * ⚠️ 判据必须是「**或**」而不是「**且**」：
+ * 早先要求 `duration === Infinity` **且** `seekable` 为空，两个条件同时成立
+ * 才判成直播 —— 于是两种最常见的直播流都判不出来：
+ * - MSE 直播：`duration` 是 NaN（第一个条件不成立）
+ * - 有 DVR 窗口的直播：`duration` 是 Infinity 但 `seekable` 有一档（第二个不成立）
+ * 判不出来 = 键被吞掉 = 用户看到「按了 → 什么都没发生，页面也没滚动」。
+ *
+ * ⚠️ 但 `Infinity` 与 `NaN` 不是一回事，不能一视同仁：
+ * - `Infinity` 是浏览器的**明确表态**（这个媒体没有尽头 = 直播流）→ 一定 seek 不了；
+ * - `NaN` 只是「还不知道」（元数据没到 / MSE 直播）→ 判不出来，
+ *   交给后面「seek 之后 currentTime 是否真的变了」的探测去决定。
+ *   一律当成直播会让「视频还没加载完」时的正常快进也失效。
+ *
+ * ⚠️ 元数据都还没加载（readyState === HAVE_NOTHING）时**不下判断**：
+ * 那时候 duration 是 NaN、seekable 是空的，分不清「直播」与「还没加载完」。
  */
-const isUnseekableLiveStream = (video: HTMLVideoElement): boolean =>
-  video.duration === Number.POSITIVE_INFINITY && video.seekable.length === 0;
+const isUnseekableLiveStream = (video: HTMLVideoElement): boolean => {
+  // 浏览器明确说了「这个媒体没有尽头」→ 直播流，一定 seek 不了。
+  if (video.duration === Number.POSITIVE_INFINITY) {
+    return true;
+  }
+
+  // HAVE_NOTHING = 0：连元数据都没有，任何关于「能不能 seek」的判断都是猜。
+  if (video.readyState === 0) {
+    return false;
+  }
+
+  // 时长不是有限数（NaN = MSE 直播的常态）或根本没有可 seek 的区间（DRM）。
+  return !Number.isFinite(video.duration) || video.seekable.length === 0;
+};
 
 /**
- * YouTube 站点例外：它的播放器对空格有完整原生处理，且实现挂在 keyup 上。
- * 我们在 keydown 拦截切换一次、它的 keyup 再切换一次，一次空格就等于两次切换
- * （暂停停不住、或暂停后不放），stopImmediatePropagation 挡不住跨事件的第二次。
- * 所以 YouTube 上把"裸空格"完全放行给站点原生处理；用户若把播放/暂停改绑到
- * 别的键，那个键在 YouTube 上照常工作。
+ * 这次 seek 到底「动」了没有。
+ *
+ * 为什么需要它：判据说「能 seek」不等于真能 seek。
+ * 有些流（DRM、部分 MSE 流）在判据上完全正常（duration 有限、seekable 非空），
+ * 但 `video.currentTime = x` 会被浏览器**忽略** —— 位置一动不动。
+ * 那种情况下吞键 = 用户既没 seek 到、页面也没滚动（键被吃了）。
+ *
+ * ⚠️ 判据是「**朝那个方向**动了」：
+ * 浏览器有时会把位置夹到别处（例如夹回可 seek 区间的起点）——
+ * 那是往**反方向**动，不是「快进了 5 秒」。
+ * 按绝对值判断会把这种反向位移当成成功，然后播报一句假话
+ * （「快进 5 秒」而实际往回跳了 30 秒）。
+ * 一句话：动了**且方向对**才算这次快进真的发生了；
+ * 没动（或方向不对）就**放行键**，让页面自己滚。
  */
-const isYouTube = () => /(^|\.)youtube\.com$/.test(window.location.hostname);
+const hasActuallyMoved = (
+  before: number,
+  after: number,
+  direction: 'forward' | 'back',
+): boolean => {
+  const delta = after - before;
+  return direction === 'forward' ? delta > 0.001 : delta < -0.001;
+};
 
 /**
  * 键盘控制器：只认用户在设置页里绑定的键。没有内置的"顺手按键"，
@@ -323,9 +419,20 @@ const isYouTube = () => /(^|\.)youtube\.com$/.test(window.location.hostname);
 export class KeyboardController {
   private readonly options: KeyboardControllerOptions;
   private readonly isTrustedEvent: (event: KeyboardEvent) => boolean;
+  private readonly resolveSiteAdapter: (hostname: string) => SiteAdapter;
   private repeatDelayTimer: ReturnType<typeof setTimeout> | null = null;
   private repeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
   private repeatingShortcut: 'increaseSpeed' | 'decreaseSpeed' | null = null;
+  /**
+   * 正在跑的长按重复是**哪个键**发起的。
+   *
+   * ⚠️ 必须记「按下时那个键」，不能用当前绑定去反查：
+   * 绑定一旦被改掉或清空，`matchesShortcut(event, shortcuts[repeatingShortcut])`
+   * 就永远匹配不上这个 keyup → `clearRepeat()` 不会被调用 →
+   * 那个 120ms 的重复定时器会一直跑到页面销毁。
+   * 表现是：用户松手了，速度却还在自己往上飘，而且再也停不下来。
+   */
+  private repeatKey: string | null = null;
   /**
    * 当前这次「按住」我们是否拥有这个键。
    *
@@ -338,6 +445,24 @@ export class KeyboardController {
    * 所以判据是「上一次我们接管的是哪个动作」，而不是「这次页面上有没有视频」。
    */
   private holdOwner: ShortcutAction | null = null;
+  /**
+   * 「按住」的那个键**当时**的名字。
+   *
+   * ⚠️ 同 repeatKey：不能靠当前绑定反查。
+   * 绑定被改掉之后，`matchesShortcut(event, shortcuts[holdOwner])` 永远匹配不上，
+   * `holdOwner` 就再也清不掉 —— 长按的归属会一直挂着。
+   */
+  private holdKey: string | null = null;
+  /**
+   * 我们最后一次**自己**写进去的倍速。
+   *
+   * 用途：长按重复的兜底 —— 发现当前倍速与这个值对不上，
+   * 就说明倍速被**外部**改写了（用户拖了速度条、站点自己重置了速度），
+   * 「按住」这个前提已经不成立，继续加只会把用户的设置冲掉。
+   */
+  private lastAppliedRate: number | null = null;
+  /** 站点适配器缓存（hostname 在一个文档的生命周期里不会变）。 */
+  private adapterCache: { hostname: string; adapter: SiteAdapter } | null = null;
   private readonly boundHandleKeyDown = (event: KeyboardEvent) => this.handleKeyDown(event);
   private readonly boundHandleKeyUp = (event: KeyboardEvent) => this.handleKeyUp(event);
   /**
@@ -347,12 +472,13 @@ export class KeyboardController {
   private readonly boundHandleFocusLoss = () => {
     this.clearRepeat();
     // keyup 不会来了，「按住」的归属也就无从解除 —— 只能在这儿清掉。
-    this.holdOwner = null;
+    this.clearHold();
   };
 
   constructor(options: KeyboardControllerOptions) {
     this.options = options;
     this.isTrustedEvent = options.isTrustedEvent ?? ((event) => event.isTrusted);
+    this.resolveSiteAdapter = options.getSiteAdapter ?? lookupSiteAdapter;
   }
 
   /**
@@ -368,7 +494,49 @@ export class KeyboardController {
 
     if (action) {
       this.holdOwner = action;
+      // 记下**按下时**这个键的名字：之后靠它认「松手的是不是同一个键」，
+      // 而不是靠当前绑定（绑定随时可能被改掉）。
+      this.holdKey = event.key;
     }
+  }
+
+  /**
+   * 「这个站点自己会用哪些键」—— 站点适配器（按 hostname 缓存）。
+   */
+  private getSiteAdapterFor(hostname: string): SiteAdapter {
+    if (this.adapterCache?.hostname !== hostname) {
+      this.adapterCache = {
+        hostname,
+        adapter: this.resolveSiteAdapter(hostname),
+      };
+    }
+
+    return this.adapterCache.adapter;
+  }
+
+  /**
+   * 这个键是不是「站点自己在 **keyup** 上处理」的。
+   *
+   * 命中 → **keydown 与 keyup 一起放行**。
+   *
+   * 为什么必须放行：我们在 keydown 上拦截 = 页面收不到 keydown，
+   * 而 keyup 是另一次派发、页面照收不误 —— 于是站点只拿到**半截按键**，
+   * 它的「切播放/暂停」照样跑一遍，与我们的那次叠加 = 一次按键两次切换 = 净效果为零。
+   * 放行整个键，站点才拿得到完整的一次按键。
+   *
+   * ⚠️ 判据是「**裸键**」：带修饰键的组合（ctrl+空格）不是站点的那个键 ——
+   * 站点监听的是裸空格，ctrl+空格它根本不会处理。
+   * 那种组合如果也让路，扩展就会白白丢掉一批快捷键。
+   *
+   * 站点名单与理由见 siteAdapters 的 `nativeKeyHandling`。
+   */
+  private isSiteOwnedKey(event: KeyboardEvent): boolean {
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+      return false;
+    }
+
+    const adapter = this.getSiteAdapterFor(window.location.hostname);
+    return adapter.nativeKeyHandling.includes(event.key);
   }
 
   /**
@@ -388,15 +556,44 @@ export class KeyboardController {
     return null;
   }
 
-  /** 松手了就不再拥有这个键。 */
+  /**
+   * 清掉「我们拥有这个按住中的键」的记录。
+   *
+   * holdOwner 与 holdKey 必须**一起**清：
+   * 只清一个会让下一次 keyup 匹配到一个早就放弃的键（或永远匹配不上）。
+   */
+  private clearHold() {
+    this.holdOwner = null;
+    this.holdKey = null;
+  }
+
+  /**
+   * 放行这个键时，只清掉**属于这个动作**的那一份「按住」归属。
+   *
+   * 为什么不全清：holdOwner 只有一个槽位 —— 用户可能正按着 '='（加速）
+   * 又点了 '→'，后者放行不该把 '=' 的归属一起抹掉
+   * （抹掉之后 '=' 长按的自动重复就不再被我们吞掉，页面会跟着滚）。
+   */
+  private releaseOwnership(action: ShortcutAction) {
+    if (this.holdOwner === action) {
+      this.clearHold();
+    }
+  }
+
+  /**
+   * 松手了就不再拥有这个键。
+   *
+   * ⚠️ 判据是「**按下时记下的 key**」，不是当前绑定：
+   * 绑定被改掉或清空之后，当前绑定永远匹配不上这个 keyup，
+   * `holdOwner` 就再也清不掉 —— 长按的归属会一直挂着。
+   */
   private releaseHold(event: KeyboardEvent) {
     if (!this.holdOwner) {
       return;
     }
 
-    const shortcuts = this.options.getSettings().shortcuts;
-    if (matchesShortcut(event, shortcuts[this.holdOwner])) {
-      this.holdOwner = null;
+    if (this.holdKey !== null && event.key === this.holdKey) {
+      this.clearHold();
     }
   }
 
@@ -412,6 +609,7 @@ export class KeyboardController {
     }
 
     this.repeatingShortcut = null;
+    this.repeatKey = null;
   }
 
   /**
@@ -426,22 +624,79 @@ export class KeyboardController {
       ? resetPlaybackRate(video)
       : stepPlaybackRate(video, delta);
 
+    // 记住「我们自己写进去的倍速」：长按重复的兜底要靠它发现外部改写。
+    this.lastAppliedRate = rate;
     this.options.showSpeedFeedback(rate, video);
+  }
+
+  /**
+   * 长按重复还要继续吗？
+   *
+   * ⚠️ 这一条是长按加速的**第二道防线**，不能只靠 keyup 与设置变更停下来：
+   * - keyup 可能不来（窗口失焦 → 有 blur 兜底，但页面被换掉/标签页被关也有别的洞）；
+   * - 设置变更那条路走的是**异步**的 storage 读，读失败时被 `.catch(() => {})`
+   *   静默吞掉 → `onSettingsChanged()` 根本不会被调用 → 没人喊停。
+   * 一旦停不下来，用户松手了速度却还在自己往上飘，而且再也停不下来。
+   *
+   * 两种「该停」：
+   * 1. 倍速被**外部**改写了（用户拖了速度条、站点自己重置了速度）
+   *    → 「按住」这个前提已经不成立，继续加只会把用户的设置冲掉。
+   * 2. 倍速已经到上限/下限 → 再加也不会变（stepPlaybackRate 会夹住），
+   *    继续跑只是白跑 120ms 的定时器。
+   */
+  private shouldContinueRepeat(video: HTMLVideoElement, delta: number): boolean {
+    const rate = video.playbackRate;
+
+    if (this.lastAppliedRate !== null && Math.abs(rate - this.lastAppliedRate) > 0.001) {
+      return false;
+    }
+
+    if (delta > 0 && rate >= MAX_PLAYBACK_RATE - 0.001) {
+      return false;
+    }
+
+    if (delta < 0 && rate <= MIN_PLAYBACK_RATE + 0.001) {
+      return false;
+    }
+
+    return true;
   }
 
   private startRepeat(
     shortcutId: 'increaseSpeed' | 'decreaseSpeed',
     delta: number,
     video: HTMLVideoElement,
+    key: string,
   ) {
     this.clearRepeat();
     this.repeatingShortcut = shortcutId;
+    // 记下发起这次重复的键：松手时靠它认「是不是同一个键」，
+    // 而不是靠当前绑定（绑定随时可能被改掉）。
+    this.repeatKey = key;
     this.repeatDelayTimer = setTimeout(() => {
+      // 守卫：若本轮重复已被别的路径接管（设置中途变更等），
+      // 先清干净再退出，避免留下孤儿定时器。
+      if (this.repeatingShortcut !== shortcutId) {
+        this.clearRepeat();
+        return;
+      }
+
+      if (!this.shouldContinueRepeat(video, delta)) {
+        this.clearRepeat();
+        return;
+      }
+
       this.runSpeedChange(delta, video);
       this.repeatIntervalTimer = setInterval(() => {
         // 守卫：若本轮重复已被别的路径接管（设置中途变更等），
         // 先清干净再退出，避免留下孤儿定时器。
         if (this.repeatingShortcut !== shortcutId) {
+          this.clearRepeat();
+          return;
+        }
+
+        // 兜底：自己判断「还该不该继续」（见 shouldContinueRepeat 的说明）。
+        if (!this.shouldContinueRepeat(video, delta)) {
           this.clearRepeat();
           return;
         }
@@ -514,6 +769,22 @@ export class KeyboardController {
       return false;
     }
 
+    // ⚠️ 站点自己在 **keyup** 上处理这个键 → **keydown 与 keyup 一起放行**。
+    //
+    // 我们在 keydown 上拦截 = 页面收不到 keydown；而 keyup 是另一次派发，
+    // 页面照收不误 —— 于是站点只拿到**半截按键**，它的处理照样跑一遍。
+    // 我们的「切播放/暂停」在 keydown 跑一次、站点的在 keyup 再跑一次
+    // = 一次按键两次切换 = 净效果为零（视频闪一下又回到原状，页面也不滚动）。
+    //
+    // 判据放在这里（而不是某个站点名上）：「站点自己处理哪些键」是**站点的事实**，
+    // 归 siteAdapters 管（见 nativeKeyHandling 的说明）。
+    //
+    // ⚠️ 放行时**不要**动 holdOwner：用户可能正按着别的键（'=' 加速），
+    // 这里放行的是另一个键 —— 抹掉 '=' 的归属会让它的长按重复不再被吞掉。
+    if (this.isSiteOwnedKey(event)) {
+      return false;
+    }
+
     // ⚠️ 物理按键按住期间，浏览器会持续派发 keydown（`event.repeat === true`）。
     //
     // 这些重复事件**不能重复执行动作**：
@@ -547,7 +818,10 @@ export class KeyboardController {
     // 没有明确目标就**完全穿透**给页面 —— 宁可不接管，也不要接管错对象。
     const target = this.options.getWatchedTarget();
     if (!target) {
-      this.holdOwner = null;
+      this.clearHold();
+      // 放行不等于「什么都没发生」：这一层没有视频，不代表整个页面没有。
+      // 让运行时去说明原因（见 notifyNoVideoHere 的说明）。
+      this.options.notifyNoVideoHere?.();
       return false;
     }
 
@@ -562,7 +836,7 @@ export class KeyboardController {
     if (target.permission === 'no-space' && action === 'togglePlay') {
       // 放行 → holdOwner 保持为空 → 长按空格时后续的 repeat 事件也不会被我们吞掉
       // （repeat 分支要求 holdOwner === action 才拦），页面照常滚动。
-      this.holdOwner = null;
+      this.clearHold();
       return false;
     }
 
@@ -572,38 +846,58 @@ export class KeyboardController {
       // 直播流根本没法 seek：吞掉键只会让用户看到「按了 → 什么都没发生」。
       // 这种时候把键放回页面，用户至少还能滚动。
       if (isUnseekableLiveStream(video)) {
-        this.holdOwner = null;
+        this.releaseOwnership(action);
+        return false;
+      }
+
+      // ⚠️ 先真的 seek 一次，再决定要不要吞键。
+      //
+      // 判据说「能 seek」不等于真能 seek：有些流（DRM、部分 MSE 流）
+      // 的 duration 有限、seekable 非空，判据完全正常，
+      // 但 `video.currentTime = x` 会被浏览器**忽略** —— 位置一动不动。
+      // 那种情况下吞键 = 用户既没 seek 到、页面也没滚动（键被吃了）。
+      //
+      // 所以：动了才吞键并播报；没动就放行键（让页面自己滚），不播报
+      // （动作没发生，播报「快进 5 秒」就是撒谎）。
+      const before = video.currentTime;
+      const position = seekBy(video, -SEEK_STEP_SECONDS);
+      if (!hasActuallyMoved(before, position, 'back')) {
+        this.releaseOwnership(action);
         return false;
       }
 
       this.intercept(event, action);
       this.clearRepeat();
-      seekBy(video, -SEEK_STEP_SECONDS);
+      this.options.onSeek?.(position, position - before, 'back');
       return true;
     }
 
     if (action === 'seekForward') {
       if (isUnseekableLiveStream(video)) {
-        this.holdOwner = null;
+        this.releaseOwnership(action);
+        return false;
+      }
+
+      const before = video.currentTime;
+      const position = seekBy(video, SEEK_STEP_SECONDS);
+      if (!hasActuallyMoved(before, position, 'forward')) {
+        this.releaseOwnership(action);
         return false;
       }
 
       this.intercept(event, action);
       this.clearRepeat();
-      seekBy(video, SEEK_STEP_SECONDS);
+      this.options.onSeek?.(position, position - before, 'forward');
       return true;
     }
 
     if (action === 'togglePlay') {
-      // 裸空格 + YouTube：放行给站点原生处理，避免双重切换。
-      if (isYouTube() && shortcuts.togglePlay === ' ') {
-        this.holdOwner = null;
-        return false;
-      }
-
+      // 「站点自己在 keyup 上处理这个键」的情况在前面已经整体放行了
+      // （见 isSiteOwnedKey）—— 这里不再写某个站点的特判。
       this.intercept(event, action);
       this.clearRepeat();
-      togglePlayback(video);
+      const playing = togglePlayback(video);
+      this.options.onPlaybackStateChange?.(playing);
       return true;
     }
 
@@ -614,7 +908,7 @@ export class KeyboardController {
       }
 
       this.runSpeedChange(0.1, video);
-      this.startRepeat('increaseSpeed', 0.1, video);
+      this.startRepeat('increaseSpeed', 0.1, video, event.key);
       return true;
     }
 
@@ -625,7 +919,7 @@ export class KeyboardController {
       }
 
       this.runSpeedChange(-0.1, video);
-      this.startRepeat('decreaseSpeed', -0.1, video);
+      this.startRepeat('decreaseSpeed', -0.1, video, event.key);
       return true;
     }
 
@@ -650,7 +944,7 @@ export class KeyboardController {
     // 让页面自己处理，避免静默丢键。但放行必须配一句解释——否则在用户
     // 眼里「不吞键」和「扩展坏了」是同一件事。
     if (!this.options.canToggleFullscreen(video)) {
-      this.holdOwner = null;
+      this.clearHold();
       this.options.notifyTakeoverUnavailable(video);
       return false;
     }
@@ -668,6 +962,15 @@ export class KeyboardController {
       return false;
     }
 
+    // ⚠️ 站点自己在 **keyup** 上处理这个键 → 整个键归它，我们不碰。
+    //
+    // 放行 keydown 之后，站点要拿到**完整**的一次按键 ——
+    // 它的处理本来就挂在 keyup 上，我们不能在这里动它。
+    // （我们也不该在这里动我们自己的状态：这个键从头到尾就不是我们的。）
+    if (this.isSiteOwnedKey(event)) {
+      return false;
+    }
+
     // 松手了就不再拥有这个键：之后的长按重复不该再被我们吞掉。
     this.releaseHold(event);
 
@@ -676,8 +979,18 @@ export class KeyboardController {
       return false;
     }
 
-    const shortcuts = this.options.getSettings().shortcuts;
-    if (!matchesShortcut(event, shortcuts[repeatingShortcut])) {
+    // ⚠️ 判据是「**按下时记下的键**」，不是当前绑定。
+    //
+    // 原来这里读的是 `matchesShortcut(event, shortcuts[repeatingShortcut])`：
+    // 用户按着 `=` 的过程中改了键（设置页在另一个标签页保存，sync 存储变更
+    // 会实时推过来），`=` 不再绑在加速上 —— keyup 永远匹配不上，
+    // `clearRepeat()` 不会被调用，**那个 120ms 的重复定时器会一直跑到页面销毁**。
+    // 表现是：用户松手了，速度却还在自己往上飘，而且再也停不下来。
+    //
+    // 而那条唯一的止损点（onSettingsChanged）走的是**异步**的 storage 读，
+    // 读失败时被 `.catch(() => {})` 静默吞掉 → 根本不会有人喊停。
+    // 所以「松手」这件事必须只依赖按键本身，不依赖任何外部状态。
+    if (this.repeatKey === null || event.key !== this.repeatKey) {
       return false;
     }
 
@@ -693,12 +1006,17 @@ export class KeyboardController {
    * sync 存储变更会实时推过来），`=` 不再绑在加速上 —— 于是 keyup 匹配不上，
    * `clearRepeat()` 不会被调用，**那个 120ms 的重复定时器会一直跑到页面销毁**。
    * 表现是：用户松手了，速度却还在自己往上飘，而且再也停不下来。
+   *
+   * ⚠️ 这一条**不是唯一的防线**：
+   * 那条 storage 读是异步的，失败时被静默吞掉 → 这个方法根本不会被调用。
+   * 所以「松手」改成只认按键本身（见 handleKeyUp），
+   * 重复定时器里另有一道兜底（见 shouldContinueRepeat）。
    */
   onSettingsChanged() {
     this.clearRepeat();
     // 绑定变了，「按住」的归属也作废：holdOwner 记的是动作名，
     // 而动作名对应的绑定可能已经不是刚才那条了。
-    this.holdOwner = null;
+    this.clearHold();
   }
 
   start() {
@@ -724,7 +1042,7 @@ export class KeyboardController {
 
   stop() {
     this.clearRepeat();
-    this.holdOwner = null;
+    this.clearHold();
     const bridgeWindow = window as typeof window & {
       __vscRegisterKeyboard?: (type: 'keydown' | 'keyup', handler: ((event: KeyboardEvent) => void) | null) => void;
     };

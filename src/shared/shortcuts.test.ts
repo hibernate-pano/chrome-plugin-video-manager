@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatShortcut,
+  formatShortcutForPlatform,
   keyboardEventToShortcut,
   matchesShortcut,
   normalizeShortcut,
   normalizeShortcutSettings,
+  splitShortcut,
 } from './shortcuts';
 import { DEFAULT_SHORTCUTS } from './types';
 
@@ -322,5 +324,55 @@ describe('「+」键的绑定', () => {
     expect(
       keyboardEventToShortcut(new KeyboardEvent('keydown', { key: '+', ctrlKey: true })),
     ).toBe('ctrl+plus');
+  });
+});
+
+/**
+ * macOS 上的显示。
+ *
+ * 背景：macOS 的键帽上印的是 ⌘ / ⌥ / ⌃ / ⇧，界面上写 "Meta" 用户得自己换算。
+ * 旧实现把渲染结果按 '+' 切一遍再查符号表 ——
+ * 而渲染结果本身是 `Ctrl++`（主键是加号键），
+ * 切完得到 `['Ctrl', '', '']`，那个键**整个消失**：
+ * 符号表里查不到空串，于是 macOS 用户看到的是「⌃」，
+ * 键位不见了，看起来像「这条绑定没保存上」。
+ *
+ * 现在的约定：**先按「修饰键 / 主键」拆开，再逐段查表**，绝不切渲染结果。
+ */
+describe('macOS 上的快捷键显示', () => {
+  it('修饰键用符号，符号之间不加「+」', () => {
+    // macOS 的通用写法（系统设置、VS Code、Chrome 自己都这么写）。
+    expect(formatShortcutForPlatform('meta+shift+k', true)).toBe('⌘⇧k');
+    expect(formatShortcutForPlatform('ctrl+alt+k', true)).toBe('⌃⌥k');
+  });
+
+  it('「+」键在 macOS 上不会消失', () => {
+    // 变异打穿点：若渲染改成按 '+' 切分渲染结果，
+    // 'ctrl+plus' 会得到 ['Ctrl','','']，主键消失。
+    expect(formatShortcutForPlatform('plus', true)).toBe('+');
+    expect(formatShortcutForPlatform('ctrl+plus', true)).toBe('⌃+');
+    expect(formatShortcutForPlatform('ctrl+shift+plus', true)).toBe('⌃⇧+');
+  });
+
+  it('「+」键在 Windows / Linux 上同样不会消失', () => {
+    expect(formatShortcutForPlatform('plus', false)).toBe('+');
+    expect(formatShortcutForPlatform('ctrl+plus', false)).toBe('Ctrl++');
+  });
+
+  it('空绑定渲染成空串（不渲染出一个孤零零的符号）', () => {
+    expect(formatShortcutForPlatform('', true)).toBe('');
+    expect(formatShortcutForPlatform('', false)).toBe('');
+  });
+
+  it('拆分是结构性的：修饰键与主键分开，加号键是主键', () => {
+    // 这条是上面几条的地基：拆出来的**主键**必须是 'plus'，
+    // 绝不能是 '' —— 那个空串就是「键消失」的元凶。
+    expect(splitShortcut('ctrl+plus')).toEqual({ modifiers: ['ctrl'], mainKey: 'plus' });
+    expect(splitShortcut('ctrl+shift+plus')).toEqual({
+      modifiers: ['ctrl', 'shift'],
+      mainKey: 'plus',
+    });
+    expect(splitShortcut('plus')).toEqual({ modifiers: [], mainKey: 'plus' });
+    expect(splitShortcut('')).toEqual({ modifiers: [], mainKey: '' });
   });
 });

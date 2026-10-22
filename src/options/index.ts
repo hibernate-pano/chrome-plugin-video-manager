@@ -1,6 +1,13 @@
 import { currentLocale, t } from '../shared/i18n';
 import { keyboardEventToShortcut } from '../shared/shortcuts';
-import { loadSettings, saveSettings } from '../shared/settings';
+import {
+  FIRST_RUN_HINT_MAX_FAILED_ATTEMPTS,
+  loadSettings,
+  readFirstRunHintCooldownUntil,
+  readFirstRunHintFailedAttempts,
+  resetFirstRunHintState,
+  saveSettings,
+} from '../shared/settings';
 import {
   DEFAULT_SHORTCUTS,
   SHORTCUT_DEFINITIONS,
@@ -27,16 +34,17 @@ const TEXTS: Record<keyof ShortcutSettings, { label: string; description: string
 
 const FALLBACKS: Record<string, string> = {
   optSubtitle: '快捷键',
-  optLead: '每个动作都可以改键。留空表示禁用该动作，保存后已打开的页面会立即生效。',
+  optLead: '每个动作都可以改键。在输入框里按 Backspace / Delete 清空绑定 = 禁用该动作，保存后已打开的页面会立即生效。',
   optSave: '保存',
   optReset: '恢复默认',
-  optPressKey: '按下要绑定的键',
+  optPressKey: '按下要绑定的键 · Backspace 清空',
   optDisabled: '未绑定（已禁用）',
   optSaved: '已保存',
   optRestored: '已恢复默认',
   optSaveFailed: '保存失败，请重试',
   optUnsaved: '有未保存的更改',
-  optDuplicate: '有按键被重复绑定，每个动作必须不同',
+  optDuplicate: '『$1』与『$2』绑定了同一个键，每个动作必须不同',
+  optDuplicateRow: '与『$1』重复',
   optReserved: '这个键被浏览器占用，换一个',
   optSelfConflict: '这个键是扩展自己的命令，换一个',
   optProductName: 'Video Speed Controller — Fullscreen & Keys',
@@ -46,6 +54,13 @@ const FALLBACKS: Record<string, string> = {
   optVersion: '版本',
   optTipsToolbar: '点击工具栏图标可切换网页全屏',
   optTipsOptions: '按 $1 打开设置页',
+  optionFirstRunHintTitle: '使用引导',
+  optionResetFirstRunHintDesc: '引导只出现一次。点这里重置后，回到视频页遇到视频时会再出现一次 —— 已经打开的标签页也会，不用刷新页面。',
+  optionResetFirstRunHint: '重新显示使用引导',
+  optionResetFirstRunHintDone: '已重置',
+  optionResetFirstRunHintFailed: '重置失败，请重试',
+  optionFirstRunHintFailed: '已关闭 $1 次（再关闭 $2 次将暂时不再出现）',
+  optionFirstRunHintCooldown: '冷却中，$1 之后会再次出现',
   actionIncrease: '加速',
   actionIncreaseDesc: '加快播放速度（+0.1，长按连续）',
   actionDecrease: '减速',
@@ -59,7 +74,7 @@ const FALLBACKS: Record<string, string> = {
   actionSeekForward: '快进 5 秒',
   actionSeekForwardDesc: '前进 5 秒',
   actionFullscreen: '网页全屏',
-  actionFullscreenDesc: '进入或退出网页全屏',
+  actionFullscreenDesc: '切换网页全屏',
 };
 
 const tr = (key: string): string => t(key, FALLBACKS[key] ?? key);
@@ -154,6 +169,32 @@ root.innerHTML = `
       <span class="vsc__tips-item">${trWith('optTipsOptions', [formatExtensionCommandLabel(OPEN_OPTIONS_COMMAND)])}</span>
     </p>
     <section class="vsc__card" id="rows"></section>
+    <!--
+      「重新显示使用引导」。
+
+      引导是整个产品**唯一**的可见入口，而它只出现一次 —— 用户在它出现之前
+      关掉页面、或读着读着按错了键关掉它，就再也看不到它了。
+      这个按钮是那条**唯一的出口**：清掉「已展示 / 失败次数 / 冷却」三个标记，
+      下次遇到视频时引导会再出现一次。
+
+      ⚠️ 三个标记必须一起清（settings.ts 的 resetFirstRunHintState）：
+      只清「已展示」的话，处在冷却期的用户点了按钮仍然看不到引导 ——
+      那等于给了一个不兑现的按钮。
+
+      ⚠️ 下面那一行（#hint-state）把「失败次数 / 冷却中」显示出来：
+      冷却期原本是**完全静默**的 —— 引导不出现，界面上一个字都没有，
+      用户只能猜「为什么它不出现」。
+    -->
+    <section class="vsc__card">
+      <div class="vsc__row">
+        <div>
+          <p class="vsc__row-label" id="label-first-run-hint">${tr('optionFirstRunHintTitle')}</p>
+          <p class="vsc__row-desc">${tr('optionResetFirstRunHintDesc')}</p>
+          <p class="vsc__row-note" id="hint-state"></p>
+        </div>
+        <button type="button" class="vsc__button" id="reset-hint">${tr('optionResetFirstRunHint')}</button>
+      </div>
+    </section>
     <div class="vsc__actions">
       <span class="vsc__status" id="status" role="status" aria-live="polite"></span>
       <button type="button" class="vsc__button" id="reset">${tr('optReset')}</button>
@@ -173,6 +214,8 @@ const rowsRoot = document.getElementById('rows')!;
 const statusNode = document.getElementById('status')!;
 const saveButton = document.getElementById('save') as HTMLButtonElement;
 const resetButton = document.getElementById('reset') as HTMLButtonElement;
+const resetHintButton = document.getElementById('reset-hint') as HTMLButtonElement;
+const hintStateNode = document.getElementById('hint-state');
 
 const inputs = {} as Record<keyof ShortcutSettings, HTMLInputElement>;
 
@@ -227,7 +270,7 @@ const renderInput = (input: HTMLInputElement) => {
   const display = formatShortcutLabel(draft);
   input.value = display;
   input.placeholder = '';
-  // ⚠️ title 与 aria-label 都要带**完整**绑定：输入框只有 200px 宽，
+  // ⚠️ title 与 aria-label 都要带**完整**绑定：输入框只有 250px 宽，
   // 最长的组合（Ctrl+Alt+Shift+Meta+PgDn）装不下会被裁掉，
   // 光看框里的字分不清自己绑了什么。
   input.title = display;
@@ -238,10 +281,15 @@ SHORTCUT_DEFINITIONS.forEach((definition) => {
   const texts = TEXTS[definition.id];
   const row = document.createElement('div');
   row.className = 'vsc__row';
+  // ⚠️ 每一行都挂一个**就地渲染**的错误节点：
+  // 状态栏在页面**最底部**，出错的行在最上面 —— 读屏用户听到「有按键被重复绑定」
+  // 却不知道是哪一行、跟谁撞了；视觉用户也可能隔着十几屏。
+  // 输入框用 aria-describedby 指向这个节点，读屏聚焦时就会念出来。
   row.innerHTML = `
     <div>
       <p class="vsc__row-label" id="label-${definition.id}">${tr(texts.label)}</p>
-      <p class="vsc__row-desc">${tr(texts.description)}</p>
+      <p class="vsc__row-desc" id="desc-${definition.id}">${tr(texts.description)}</p>
+      <p class="vsc__row-error" id="error-${definition.id}"></p>
     </div>
   `;
 
@@ -252,6 +300,15 @@ SHORTCUT_DEFINITIONS.forEach((definition) => {
   input.dataset.action = definition.id;
   input.dataset.shortcut = DEFAULT_SHORTCUTS[definition.id];
   input.setAttribute('aria-labelledby', `label-${definition.id}`);
+  // ⚠️ 那一行下面那行说明（「加快播放速度（+0.1，长按连续）」）必须**跟着输入框**。
+  //
+  // 之前它只是个 <p>：读屏用户在表单模式（焦点模式）里聚焦输入框时，
+  // 听到的只有动作名与当前绑定 —— 「这个动作到底做什么」这句话他听不到，
+  // 只能靠浏览模式整页读过去。视觉用户一眼就看到了，读屏用户没有。
+  //
+  // 出错时这一句与就地渲染的错误句**都**在 describedby 里（错误在后）：
+  // 读者先听到「这个动作是什么」，再听到「哪里不对」。
+  input.setAttribute('aria-describedby', `desc-${definition.id}`);
   renderInput(input);
 
   input.addEventListener('keydown', (event) => {
@@ -317,7 +374,13 @@ SHORTCUT_DEFINITIONS.forEach((definition) => {
 
   input.addEventListener('focus', () => {
     input.value = '';
+    // ⚠️ 聚焦时的占位符必须说清**怎么清空**：输入框是只读的（readOnly），
+    // 用户只能看到自己绑的键，却看不到「怎么变成空」——
+    // 而「留空 = 禁用该动作」是设置页明写着的规则。
+    // 原来这里只写「按下要绑定的键」，Backspace 这件事一个字都没提。
     input.placeholder = tr('optPressKey');
+    // 框只有 250px 宽，长文案放不下 —— title 兜底（鼠标悬停 / 读屏）。
+    input.title = tr('optPressKey');
   });
 
   input.addEventListener('blur', () => {
@@ -348,6 +411,13 @@ interface Validation {
   isError: boolean;
   /** 冲突的动作（用于把那一行标红）。 */
   conflicts: Array<keyof ShortcutSettings>;
+  /**
+   * 每个出错的动作 → 就地渲染的错误文案。
+   *
+   * ⚠️ 必须**逐行**给：只说「有按键被重复绑定」的话，用户既不知道是哪一行，
+   * 也不知道跟**谁**撞了 —— 而错误就在他眼前的那一格。
+   */
+  fieldErrors: Partial<Record<keyof ShortcutSettings, string>>;
 }
 
 /**
@@ -373,16 +443,41 @@ const evaluate = (): Validation => {
   });
 
   const duplicates: Array<keyof ShortcutSettings> = [];
+  /** 每一行跟**谁**撞了 —— 错误文案要指名道姓，不能只说「有重复」。 */
+  const duplicatePartners = new Map<keyof ShortcutSettings, keyof ShortcutSettings>();
   seen.forEach((ids) => {
     if (ids.length < 2) {
       return;
     }
     duplicates.push(...ids);
+    ids.forEach((id, index) => {
+      duplicatePartners.set(id, ids[(index + 1) % ids.length]!);
+    });
   });
 
   if (duplicates.length > 0) {
-    duplicates.forEach((id) => inputs[id].classList.add('vsc--conflict'));
-    return { canSave: false, message: tr('optDuplicate'), isError: true, conflicts: duplicates };
+    const fieldErrors: Partial<Record<keyof ShortcutSettings, string>> = {};
+
+    duplicates.forEach((id) => {
+      inputs[id].classList.add('vsc--conflict');
+      const other = duplicatePartners.get(id);
+      fieldErrors[id] = other
+        ? trWith('optDuplicateRow', [tr(TEXTS[other].label)])
+        : tr('optDuplicateRow');
+    });
+
+    const first = duplicates[0]!;
+    const second = duplicatePartners.get(first) ?? first;
+
+    return {
+      canSave: false,
+      // ⚠️ 底部状态栏也要带动作名：读屏用户听到的是一句飘上来的话，
+      // 没有名字他就不知道要去改哪两行。
+      message: trWith('optDuplicate', [tr(TEXTS[first].label), tr(TEXTS[second].label)]),
+      isError: true,
+      conflicts: duplicates,
+      fieldErrors,
+    };
   }
 
   const commands = extensionCommandShortcuts();
@@ -395,20 +490,86 @@ const evaluate = (): Validation => {
     // 那条提示比「浏览器占用」更具体：用户能立刻明白自己撞的是哪个。
     if (commands.includes(canonicalShortcut(shortcut)) || isExtensionCommandShortcut(shortcut)) {
       inputs[id].classList.add('vsc--conflict');
-      return { canSave: false, message: tr('optSelfConflict'), isError: true, conflicts: [id] };
+      return {
+        canSave: false,
+        message: tr('optSelfConflict'),
+        isError: true,
+        conflicts: [id],
+        fieldErrors: { [id]: tr('optSelfConflict') },
+      };
     }
 
     if (isBrowserReservedShortcut(shortcut)) {
       inputs[id].classList.add('vsc--conflict');
-      return { canSave: false, message: tr('optReserved'), isError: true, conflicts: [id] };
+      return {
+        canSave: false,
+        message: tr('optReserved'),
+        isError: true,
+        conflicts: [id],
+        fieldErrors: { [id]: tr('optReserved') },
+      };
     }
   }
 
   if (isDirty()) {
-    return { canSave: true, message: tr('optUnsaved'), isError: false, conflicts: [] };
+    return { canSave: true, message: tr('optUnsaved'), isError: false, conflicts: [], fieldErrors: {} };
   }
 
-  return { canSave: true, message: '', isError: false, conflicts: [] };
+  return { canSave: true, message: '', isError: false, conflicts: [], fieldErrors: {} };
+};
+
+/**
+ * 把逐行错误渲染到输入框旁边，并把输入框标成「无效」。
+ *
+ * ⚠️ aria-describedby 指向的是**就地渲染**的那一条：
+ * 读屏用户聚焦到出错的输入框时，错误就在他耳边念出来 ——
+ * 而状态栏在页面最底部，指不出是哪一行。
+ */
+const applyFieldErrors = (fieldErrors: Partial<Record<keyof ShortcutSettings, string>>) => {
+  (Object.keys(inputs) as Array<keyof ShortcutSettings>).forEach((id) => {
+    const input = inputs[id];
+    const message = fieldErrors[id];
+    const errorNode = document.getElementById(`error-${id}`);
+
+    if (errorNode) {
+      errorNode.textContent = message ?? '';
+    }
+
+    if (message) {
+      input.setAttribute('aria-invalid', 'true');
+      // 描述在前、错误在后：读者先听到「这个动作是什么」，再听到「哪里不对」。
+      input.setAttribute('aria-describedby', `desc-${id} error-${id}`);
+    } else {
+      input.removeAttribute('aria-invalid');
+      // ⚠️ 这里**不能**把 aria-describedby 整个摘掉：那会让「这一行在做什么」
+      // 又从读屏用户的耳朵里消失（它是无条件存在的行说明，不是错误信息）。
+      input.setAttribute('aria-describedby', `desc-${id}`);
+    }
+  });
+};
+
+/**
+ * 把焦点移到**第一个**出错的输入框。
+ *
+ * ⚠️ 键盘用户不用自己找：状态栏在页面最底部，光标还停在「保存」按钮上，
+ * 他根本不知道该往哪儿挪。
+ *
+ * ⚠️ 但**不能**在每次改键时都抢焦点 —— 用户正在输入框里打字时，
+ * 焦点被抢走就等于「打不了字」。所以只在「焦点不在任何输入框里」时挪。
+ */
+const focusFirstConflict = (conflicts: Array<keyof ShortcutSettings>) => {
+  const first = conflicts[0];
+  if (!first) {
+    return;
+  }
+
+  const active = document.activeElement;
+  const isTyping = active instanceof HTMLInputElement;
+  if (isTyping) {
+    return;
+  }
+
+  inputs[first]?.focus();
 };
 
 const clearStatusOverride = () => {
@@ -423,6 +584,10 @@ const clearStatusOverride = () => {
  */
 const refreshStatus = () => {
   const result = evaluate();
+
+  // ⚠️ 逐行错误必须**跟着草稿走**：改完键冲突消失了，那一行的红框与
+  // 错误文案就要一起消失（否则上一轮的错一直挂在界面上）。
+  applyFieldErrors(result.fieldErrors);
 
   if (statusOverride) {
     setStatus(statusOverride.message, statusOverride.isError);
@@ -484,6 +649,11 @@ const save = () => {
     // 之前点一次「保存」就被「已保存」盖掉，用户根本不知道自己存了个冲突的键。
     clearStatusOverride();
     setStatus(result.message, true);
+    // 逐行错误也要在保存失败时立刻渲染（用户可能直接点「保存」，
+    // 还没触发过任何改键事件）。
+    applyFieldErrors(result.fieldErrors);
+    // ⚠️ 焦点挪到第一个出错的输入框：键盘用户不用自己找。
+    focusFirstConflict(result.conflicts);
     return;
   }
 
@@ -508,3 +678,95 @@ const save = () => {
 saveButton.addEventListener('click', () => {
   save();
 });
+
+/**
+ * 「重新显示使用引导」按钮。
+ *
+ * ⚠️ 反馈必须**看得见**：引导本来就是一次性、错过就没了的东西，
+ * 用户点完这个按钮如果什么都没发生，他只会以为按钮坏了 ——
+ * 而他没看到引导这件事本身正是他要解决的问题。
+ * 所以按钮文案当场变成「已重置」，状态栏（role=status，live region）
+ * 也说一句，读屏用户同样能听到确认。
+ */
+let hintResetTimer: number | null = null;
+
+/**
+ * 把引导的状态（失败次数 / 冷却）显示出来。
+ *
+ * ⚠️ 冷却期原本是**完全静默**的：引导不出现，界面上一个字都没有。
+ * 用户只能猜「为什么它不出现」—— 而引导是这个产品唯一的入口。
+ * 把状态摊开，他至少知道自己是被「冷却」挡住的，而不是以为功能坏了。
+ */
+const renderHintState = async () => {
+  if (!hintStateNode) {
+    return;
+  }
+
+  const [attempts, cooldownUntil] = await Promise.all([
+    readFirstRunHintFailedAttempts(),
+    readFirstRunHintCooldownUntil(),
+  ]);
+
+  if (cooldownUntil !== null) {
+    hintStateNode.textContent = trWith('optionFirstRunHintCooldown', [formatDateTime(cooldownUntil)]);
+    return;
+  }
+
+  if (attempts > 0) {
+    hintStateNode.textContent = trWith('optionFirstRunHintFailed', [
+      String(attempts),
+      String(Math.max(0, FIRST_RUN_HINT_MAX_FAILED_ATTEMPTS - attempts)),
+    ]);
+    return;
+  }
+
+  hintStateNode.textContent = '';
+};
+
+/** 冷却结束时间（本地化格式）。 */
+const formatDateTime = (timestamp: number): string => {
+  try {
+    return new Date(timestamp).toLocaleString();
+  } catch {
+    return String(timestamp);
+  }
+};
+
+const restoreHintButton = () => {
+  resetHintButton.textContent = tr('optionResetFirstRunHint');
+  if (hintResetTimer !== null) {
+    window.clearTimeout(hintResetTimer);
+    hintResetTimer = null;
+  }
+};
+
+resetHintButton.addEventListener('click', () => {
+  void resetFirstRunHintState()
+    .then(() => {
+      resetHintButton.textContent = tr('optionResetFirstRunHintDone');
+      statusOverride = { message: tr('optionResetFirstRunHintDone'), isError: false };
+      refreshStatus();
+      // 重置之后失败次数与冷却都没了，那一行状态也要跟着清掉。
+      void renderHintState();
+
+      // 几秒后把按钮文案放回去：一直写着「已重置」是**假话** ——
+      // 用户第二次点它时，它其实什么都不会发生（状态早就清了）。
+      if (hintResetTimer !== null) {
+        window.clearTimeout(hintResetTimer);
+      }
+      hintResetTimer = window.setTimeout(() => {
+        restoreHintButton();
+        clearStatusOverride();
+        refreshStatus();
+      }, 2400);
+    })
+    .catch((error) => {
+      console.error('Failed to reset the first-run hint state', error);
+      restoreHintButton();
+      clearStatusOverride();
+      setStatus(tr('optionResetFirstRunHintFailed'), true);
+    });
+});
+
+// 页面一打开就把引导的状态摊开（用户还没点任何按钮时也该看得见）。
+void renderHintState();

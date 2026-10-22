@@ -1,7 +1,5 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { test, expect } from '@playwright/test';
+import { launchExtension } from './helpers/launch.js';
 
 /**
  * 工具栏图标标题 = 当前标签页的倍速。
@@ -12,82 +10,6 @@ import { join, resolve } from 'node:path';
  *
  * 断言方式：从 service worker 里查 `chrome.action.getTitle({ tabId })`。
  */
-
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
-
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-};
-
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-];
-
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-title-'));
-  const executablePath = findChromium();
-  const candidates = [
-    { options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-
-  const failures = [];
-  for (const candidate of candidates) {
-    if (
-      'executablePath' in candidate.options &&
-      candidate.options.executablePath === undefined
-    ) {
-      continue;
-    }
-
-    try {
-      const context = await chromium.launchPersistentContext(profile, candidate.options);
-      const worker = context.serviceWorkers()[0]
-        ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-      if (!worker) {
-        await context.close();
-        continue;
-      }
-
-      return {
-        context,
-        worker: () => context.serviceWorkers()[0] ?? worker,
-        async close() {
-          await context.close();
-          rmSync(profile, { recursive: true, force: true });
-        },
-      };
-    } catch (error) {
-      failures.push(String(error).slice(0, 200));
-    }
-  }
-
-  rmSync(profile, { recursive: true, force: true });
-  throw new Error(`无法启动带扩展的浏览器：\n${failures.join('\n')}`);
-};
 
 const testHtml = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>vsc toolbar title</title>
@@ -125,7 +47,7 @@ test.describe('工具栏图标标题显示当前倍速', () => {
       await page.goto('http://vsc-title.test/');
       await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
 
-      const worker = ext.worker();
+      const worker = ext.serviceWorker;
       // 必须按 URL 找标签页：launchPersistentContext 会自带一个空白页，
       // tabs[0] 未必是我们在用的那个。
       const tabId = await worker.evaluate(async () => {

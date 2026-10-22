@@ -1,8 +1,7 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { test, expect } from '@playwright/test';
+import { resolve } from 'node:path';
 import { SD_4X3_MP4_BASE64 } from './fixtures/sd-4x3.ts';
+import { launchExtension } from './helpers/launch.js';
 
 /**
  * 「接管范围」：扩展到底对哪个视频生效。
@@ -22,78 +21,6 @@ import { SD_4X3_MP4_BASE64 } from './fixtures/sd-4x3.ts';
  * 而我们自己注入的 runtimeStyles 里有 `.vsc-page-fullscreen-video { display: block }`
  * —— 一进全屏判定就翻转，快捷键在全屏里彻底失灵。这个 bug 只有真浏览器能测出来。
  */
-
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
-
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-};
-
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--autoplay-policy=no-user-gesture-required',
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-];
-
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-scope-'));
-  const executablePath = findChromium();
-  const candidates = [
-    { options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-  let context = null;
-  for (const candidate of candidates) {
-    if ('executablePath' in candidate.options && candidate.options.executablePath === undefined) continue;
-    try {
-      context = await chromium.launchPersistentContext(profile, candidate.options);
-      break;
-    } catch {
-      // 换下一个候选
-    }
-  }
-  if (!context) {
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('无法启动带扩展的浏览器');
-  }
-  const sw = context.serviceWorkers()[0]
-    ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-  if (!sw) {
-    await context.close();
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('扩展没加载：没有等到 background service worker');
-  }
-  return {
-    context,
-    sw,
-    async close() {
-      await context.close();
-      rmSync(profile, { recursive: true, force: true });
-    },
-  };
-};
 
 const serve = (page, body, contentType = 'text/html') =>
   page.route('**/*', (route) => {
@@ -444,14 +371,14 @@ test.describe('接管范围：工具栏图标路径', () => {
   test.setTimeout(60_000);
 
   /** 找当前标签页的 id（launchPersistentContext 会自带一个空白页）。 */
-  const currentTabId = (ext) => ext.sw.evaluate(async () => {
+  const currentTabId = (ext) => ext.serviceWorker.evaluate(async () => {
     const tabs = await chrome.tabs.query({});
     return tabs.find((tab) => tab.url?.startsWith('http://127.0.0.1'))?.id ?? null;
   });
 
   /** 点工具栏图标（经 background 转发成内容脚本消息）。 */
   const clickToolbarIcon = async (ext, tabId) => {
-    await ext.sw.evaluate(async (id) => {
+    await ext.serviceWorker.evaluate(async (id) => {
       await chrome.tabs.sendMessage(id, { type: 'vsc-toggle-fullscreen' });
     }, tabId);
     await new Promise((resolve) => setTimeout(resolve, 900));

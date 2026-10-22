@@ -303,3 +303,66 @@ describe('macOS 上的按键显示', () => {
     expect(formatShortcutLabel('ctrl+shift+,')).toBe('⌃⇧,');
   });
 });
+
+/**
+ * 「怎么把绑定清空」必须**看得见**。
+ *
+ * 背景：输入框是只读的（readOnly），用户只能看到自己绑的键，
+ * 却看不到「怎么变成空」—— 而「留空 = 禁用该动作」是设置页明写着的规则。
+ * 原来聚焦时的占位符只有「按下要绑定的键」五个字，Backspace 这件事
+ * 一个字都没提；用户于是以为这个动作没法禁用。
+ */
+describe('设置页：怎么清空绑定', () => {
+  const rowInputs = (root: HTMLElement) =>
+    Array.from(root.querySelectorAll('.vsc__key')) as HTMLInputElement[];
+
+  const inputOf = (root: HTMLElement, id: keyof typeof DEFAULT_SHORTCUTS): HTMLInputElement => {
+    const index = SHORTCUT_DEFINITIONS.findIndex((definition) => definition.id === id);
+    return rowInputs(root)[index]!;
+  };
+
+  const press = (input: HTMLInputElement, key: string) => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  };
+
+  it('聚焦时的占位符说清「按 Backspace 清除」', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    const input = inputOf(root, 'fullscreen');
+    input.dispatchEvent(new FocusEvent('focus'));
+
+    // 占位符与 title 都要说 —— 框只有 250px 宽，鼠标用户看的是 title。
+    expect(input.placeholder).toMatch(/Backspace/);
+    expect(input.title).toMatch(/Backspace/);
+  });
+
+  it('Backspace 真的清空绑定（= 禁用该动作），而且框里显示「已禁用」', async () => {
+    const { render, sync } = createChromeMock();
+    const root = await render();
+
+    const input = inputOf(root, 'fullscreen');
+    press(input, 'Backspace');
+    expect(input.dataset.shortcut).toBe('');
+
+    // 失焦后回填：空绑定要显示成「未绑定（已禁用）」，
+    // 而不是留一个完全空白的框（用户看不出是「本来没绑」还是「刚被我删了」）。
+    input.dispatchEvent(new FocusEvent('blur'));
+    expect(input.value).toBe('');
+    expect(input.placeholder).toContain('禁用');
+
+    (root.querySelector('#save') as HTMLButtonElement).click();
+    await flush();
+    const saved = sync['vsc-settings'] as { shortcuts: typeof DEFAULT_SHORTCUTS };
+    expect(saved.shortcuts.fullscreen).toBe('');
+  });
+
+  it('Delete 也能清空（笔记本上 Fn+Delete 走的就是它）', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    const input = inputOf(root, 'fullscreen');
+    press(input, 'Delete');
+    expect(input.dataset.shortcut).toBe('');
+  });
+});

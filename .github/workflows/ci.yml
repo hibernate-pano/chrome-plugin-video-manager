@@ -1,8 +1,15 @@
 name: CI/CD Pipeline
 
+# ⚠️ push **不限定分支**：任何分支的每一次推送都要跑全套（包括真浏览器的
+# e2e），否则「本地全绿」与「CI 会绿」就是两件事。
+#
+# 代价是每次推送多花约 2 分钟（e2e 要拉起真实 Chromium）。换来的是「绿色」
+# 重新等于「真浏览器里还能用」—— 2026-10-21 之前的触发条件只认 main/develop，
+# 于是 6.1.0 与 6.2.0 的全部工作（含 6 个新 e2e spec、重写过的设置页与
+# 全屏控制器）**从未进过 CI**：最后一次绿的 e2e 作业还是 2026-10-08 跑的
+# 6.0.8 那棵树。这条不变式由 scripts/ci-workflow.test.ts 守着。
 on:
   push:
-    branches: [main, develop]
   pull_request:
     branches: [main]
 

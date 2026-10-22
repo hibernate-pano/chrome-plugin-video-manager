@@ -11,13 +11,14 @@
 ```bash
 pnpm test          # 单元测试 + 契约测试
 pnpm test:e2e      # 全部 Playwright（会先 pnpm build）
-pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
+pnpm test:e2e:ext  # CI 跑的那些（会先 pnpm build）
 ```
 
-> `test:e2e:ext` 是 CI 实际执行的入口，包含 `real-extension` / `boundary` /
-> `fullscreen-regression` / `subtitle-visibility` / `style-isolation` 五个文件。
+> `test:e2e:ext` 是 CI 实际执行的入口，**包含每一个 `tests/e2e/*.spec.js`**
+> （当前 17 个文件）。
 > 新增 spec 时**必须**加进它，否则 CI 永远不会执行。
-> `scripts/ci-workflow.test.ts` 会用文件系统核对这一点，漏加会直接报错。
+> `scripts/ci-workflow.test.ts` 会用文件系统核对这一点，漏加会直接报错 ——
+> 那道守卫存在的理由就是：漏加的 spec 在本地全绿、在 CI 上从不存在。
 
 ## 当前覆盖范围
 
@@ -43,6 +44,9 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 - 设置页渲染、快捷键绑定校验与无障碍属性
 - 全屏控制条与极简调速提示
 - 影响边界回归（无 `document.body`、shadow DOM 编辑态、不可见视频过滤、iframe 坐标换算、样式自愈）
+- **页面把 DOM 原型改坏时的退化**（`matches` / `closest` / `safeMatches`），
+  以及一条**结构守卫**：生产代码里不许出现裸调的 `matches(` / `closest(`
+  （见 `src/shared/domMatches.test.ts`）
 - CI 工作流配置契约（见下）
 
 > 新增 `*.test.ts` 时注意：`vitest.config.ts` 的 `include` 是逐条枚举的，
@@ -66,11 +70,35 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 
 改 CI 时这个测试会先于 GitHub 告诉你结果。
 
+### 发布内容契约测试
+
+[scripts/release-content.test.ts](./scripts/release-content.test.ts)
+
+README 与商店文案里写着三句承诺：**产物里没有第三方库**、**不发起任何网络请求**、
+**只申请必要的权限**。这些是给用户看的信任、给审核员看的承诺 ——
+而**承诺会过期**：某天加个依赖、引入个 CDN 脚本、或多要一个权限，
+那句话就悄悄变成了谎话（而且用户解包就能看到）。
+
+所以有一道守卫盯住它们：
+
+- `package.json` 里**没有运行时依赖**（只有 devDependencies）
+- 沿**构建入口的 import 图**走一遍，确认真正会进产物的代码里
+  没有外部包、没有网络 API、没有本仓库之外的 URL
+  （⚠️ 不按目录扫整个 `src/` —— 住在 `src/` 里但只被测试引用的文件并不进产物，
+  按目录扫会误报，而**误报一次守卫就再也没人信了**）
+- `manifest.json` 的权限白名单（只许 `storage` + `<all_urls>`）与 CSP 不被放宽
+- 反向守卫：README 与商店文案里那几句话**还在** ——
+  实现改了忘改文案会红，文案删了没改实现也会红
+
+> 产物层面的那道闸在 `scripts/package-extension.js`：
+> **出包前**扫一遍真实产物内容（构建工具自己注入的东西也在里面）。
+> 那是真正拦住上传的那一步。
+
 ### Playwright
 
 配置文件：[playwright.config.js](./playwright.config.js)
 
-**五套用例的性质不同，不要混淆：**
+**这些用例的性质不同，不要混淆：**
 
 | 用例 | 是否加载扩展 | 覆盖 |
 |------|-------------|------|
@@ -78,7 +106,38 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 | `real-extension.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 隔离世界、document_start 桥接、真实 `chrome.storage` |
 | `boundary.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 非正常文档与元素上的失败模式（见下） |
 | `subtitle-visibility.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 网页全屏里字幕**真的**看得见（6.0.8 号称修好、实测从未生效） |
-| `style-isolation.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 站点的 CSS 打不穿控制条（shadow root 隔离） |
+| `style-isolation.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 站点的 CSS 打不穿控制条（shadow root 隔离）+ 页面级提示的样式隔离 |
+| `fullscreen-controls.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 控制条自身的视觉与交互（进度条步长、时间标签宽度、轨道对比度） |
+| `takeover-rules.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 接管规则的分层证据（按 `f` 之后到底谁在吃键） |
+| `takeover-scope.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 接管范围：只对「用户正在看的」那个视频生效 |
+| `speed-menu.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 全屏控制条里的倍速档位菜单 |
+| `options-page.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 设置页（改键、持久化、可访问性） |
+| `toolbar-title.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 工具栏图标标题 = 当前倍速 |
+| `frame-scope.spec.js` | ✅ `--load-extension` 真加载 `dist/` | **帧的归属**：快捷键该作用在哪个视频上（见下） |
+| `frame-scale.spec.js` | ✅ `--load-extension` 真加载 `dist/` | iframe 被缩放时，提示的坐标换算（见下） |
+| `video-owner.spec.js` | ✅ `--load-extension` 真加载 `dist/` | **视频在别处时不能静默**：跨 frame 的「谁有视频」协议（见下） |
+| `first-run-hint.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 首次使用引导：小视口（嵌入框）里退到精简版 |
+| `iframe-fullscreen.spec.js` | ✅ `--load-extension` 真加载 `dist/` | iframe 里的网页全屏要铺满**整个页面**，不是铺满那个框 |
+| `speed-toast.spec.js` | ✅ `--load-extension` 真加载 `dist/` | 调速胶囊/角标的可见性与坐标 |
+
+> ⚠️ 所有「真加载扩展」的 spec **共用** `tests/e2e/helpers/launch.js` 启动浏览器 ——
+> 不要再在 spec 里自己抄一份启动样板（见下文「e2e 的浏览器启动」）。
+
+> ⚠️ 每一个 `tests/e2e/*.spec.js` 都必须被 `package.json` 的 `test:e2e:ext`
+> 列进去 —— 这条由 `scripts/ci-workflow.test.ts` 守着（漏一个 = CI 里没人跑它，
+> 而它看起来还是在仓库里）。
+
+> ⚠️ **`workers: 2` 不是随手填的，别改成「CPU 数的一半」。**
+> 每个 worker 都会拉起一个**完整的 Chromium**，而这套用例里有大量与时序有关的
+> 断言（等动画结束、等跨进程的一问一答回来）。
+> 实测（本地 12 核、机器本身还有别的负载时）：6 个 worker 时**每次全量跑都有 1 条
+> 用例随机失败**，而失败的**位置每次都不一样**（帧归属那条、控制条宽度那条、
+> 接管提示那条轮着来）—— 那不是回归，是抢不到 CPU。
+> 2 个 worker 是「够快又不打架」的值：全量跑约 2 分钟，CI（4 核）上也是 2 个。
+>
+> **判断「随机失败」是不是抢 CPU 的办法**：连着跑三次全量，
+> 三次都绿 → 之前那次的失败是负载，不是回归；
+> 三次都红在**同一条** → 那是真回归，去查。
 
 `fullscreen-regression.spec.js` 覆盖的还包括**点击语义的所有权**：网页全屏内
 左键点击视频画面要能切换播放/暂停（v6.0.4 的修复点）、右键不触发、退出全屏后
@@ -105,6 +164,40 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 - 页面摘掉 `#vsc-runtime-styles` 后能自愈
 - 网页全屏接管不了时给出提示，而不是静默失败（v6.0.5 的修复点）
 - 首次使用引导只在播放一会儿后出现一次，之后不再打扰
+
+`frame-scope.spec.js` 守的是「帧的归属」这条**架构级**承诺。内容脚本注入到
+所有 frame（manifest 的 `all_frames`）之后，最容易出的错就是**串台**：
+
+- 焦点在 iframe 里 → 只有 iframe 里的视频变速，顶层的视频不许动
+- 焦点在顶层文档 → 只有顶层的视频变速，iframe 里的视频不许动
+- 点扩展图标 → 只有被 background 点名的那个 frame 执行，其余 frame 袖手旁观
+
+> ⚠️ **Chrome 的 frameId 不是连号的。** 实测：顶层是 0，同源 iframe 是 **2**，
+> 1 号根本不存在。写死一个数 = 把用例绑在一个跟实现无关的巧合上。
+> 真实 frameId 从 background 自己记下的那份「用户此刻在哪个 frame」里取
+> （`chrome.storage.session` 的 `vsc-tab-focus-frame:{tabId}`）——
+> 这条链路（焦点上报 → 记住 → 寻址）本身也是要验的东西。
+
+`frame-scale.spec.js` 守的是「iframe 被缩放时坐标换算还对」。这类断言**不用
+自己算自己验**：夹具里的视频带一圈绿色边框，用例直接量**浏览器画出来的像素**
+当基准，再比提示的位置 —— 公式错了就是公式错了，不会被公式自己掩盖。
+
+`video-owner.spec.js` 守的是「按了快捷键却毫无反应」这条**静默失败**。6.1.0 之后
+每个 frame 只管自己 document 里的视频，于是顶层看不见嵌入框里的视频 ——
+顶层没有明确目标时，键按原则要放行给页面，页面没绑定，于是**什么都不会发生**。
+用户能得出的唯一结论是「扩展坏了」。
+
+- 焦点在顶层、视频在嵌入框里 → 按快捷键必须说明「视频在嵌入框里」
+- 整个页面都没有视频 → **不许**弹那句话（没有视频的页面上说「视频在嵌入框里」
+  是假消息，比不弹更糟）
+- 「谁有视频」的广播 → 嵌入框里的那个 frame 真的会回答（守的是这条协议本身：
+  回答走 `chrome.runtime.sendMessage`，不是 `tabs.sendMessage` 的响应 ——
+  一次广播只保留一个响应，其余会被丢掉）
+
+> ⚠️ 「点工具栏图标 → 发给视频所在的那个 frame」这条路由**没有 e2e**：
+> 浏览器工具栏上的图标在 Playwright 里点不到（浏览器 UI 不在页面的可及范围内）。
+> 那条路由由 `src/background/action.test.ts` 守住（带变异验证：把路由改回
+> 「只发给焦点所在的那个 frame」，用例会红）。
 
 > 写这类用例时注意：`waitForSelector('#vsc-runtime-styles')` 会在页面 `<body>`
 > 内联脚本执行之前就返回。把辅助函数定义在 `<body>` 里会和这个等待形成竞态，
@@ -168,8 +261,9 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 
 > ⚠️ **同源 iframe 里的 video，在顶层文档里定位要用换算后的坐标。**
 > iframe 内元素的 `getBoundingClientRect()` 是相对 iframe 视口的。扩展侧统一
-> 走 `frameOffset.topLevelOffset()`；用例断言提示位置时也要按
-> `iframe.top + 视频在 iframe 内的 top` 来算，别拿未换算的值去比。
+> 走 `frameOffset.topLevelRect()`（它会一路向上换算，**并且处理 iframe 被缩放
+> 的情况**：缩放时 `frameRect.width / frame.offsetWidth` 就是缩放比）；
+> 用例断言提示位置时也要按换算后的坐标来算，别拿未换算的值去比。
 
 > ⚠️ **`chrome.i18n` 选哪个 locale 目录，不看 `getUILanguage()`。**
 > `getUILanguage()` 返回的是**浏览器界面语言**；Chrome 挑 `_locales` 下的目录
@@ -187,6 +281,120 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 视频」场景，夹具得让点击落在顶层、同时保证视频本身可被选中，别假设父文档一定
 选得到子框架里的元素。
 
+## CDP 派发按键：`nativeVirtualKeyCode` 是最贵的一个参数
+
+> ⚠️ **用 CDP 的 `Input.dispatchKeyEvent` 模拟按键时，不要传 `nativeVirtualKeyCode`。**
+
+实测（真实 Chromium + CDP，A/B 对照，每档 1.5 秒）：
+
+| payload | 页面收到的 keydown 数量 |
+| --- | --- |
+| 带 `nativeVirtualKeyCode` | **18 528** |
+| 不带 | **1** |
+
+带上它，浏览器就把这个按键当成「用户真的按住了」——
+自己的**按键重复生成器**随即开工，而它不是按操作系统的节奏（30 次/秒），
+而是**按渲染器能确认多快就多快**（实测上万次/秒）。
+补一个 `keyUp` 也**停不下来**（实测补了之后照样每秒 5000+）。
+
+后果不是「慢」，是「塌」：
+
+- 扩展的每个 keydown 都要重扫整页视频列表 → 渲染器主线程被占满；
+- seek / 全屏这些跨进程动作全部排队，CDP 往返实测到 **37 秒**；
+- 用例跑到 100 秒以上，而扩展「用户选过它」的证据只保留 60 秒 ——
+  视频不再被认作接管目标，seek 静默失效，断言超时。
+  **失败原因与产品无关**，症状却像产品坏了。
+
+只传 `windowsVirtualKeyCode` 就够：它只影响 DOM 里那个已废弃的
+`event.keyCode`，而扩展匹配快捷键用的是 `event.key`。
+
+**判断一个失败是不是这个坑**：看那条用例的耗时。
+正常情况下单个按键的往返是 **1~5 毫秒**；一旦变成秒级，就是它。
+
+> 💡 同一族的坑：`page.keyboard.press()` **不会**触发这个洪水
+> （Playwright 自己派发时用的是同一套 CDP，但不带 `nativeVirtualKeyCode`）。
+> 所以「Playwright 的 press 好好的，我们自己派发就炸」这种差异，
+> 先去看 payload 的差异，别急着怀疑产品。
+
+## 断言文案前，先搞清楚 `chrome.i18n` 到底跟谁走
+
+> ⚠️ **`chrome.i18n` 挑 `_locales` 下的哪个目录，跟着的是「系统 locale」** ——
+> 不是 `--lang`，也不是浏览器界面语言。
+
+实测（真实 Chromium，A/B 对照，macOS 系统语言 = 中文）：
+
+| 启动方式 | `chrome.i18n.getMessage('optSubtitle')` |
+| --- | --- |
+| 默认 | `快捷键`（中文） |
+| `--lang=en-US` | `快捷键`（**仍然是中文**） |
+| `LANG=en_US.UTF-8` | `快捷键`（**仍然是中文**） |
+
+也就是说：**写死中文的断言只在中文系统的机器上成立**。
+开发机是中文系统、CI 容器（`ubuntu-latest`）是英文环境 ——
+于是「本地过、CI 挂」。
+
+这个坑本仓库**踩过两次**（见 2026-10-06 那次提交「接管提示断言不再依赖机器
+语言」）。但那次只补了**一条**断言，没有解决**结构**问题，于是下一次新增
+断言又踩一遍 —— 2026-10-21 的审查里又找出 13 处。
+
+**结构性的解法**（`tests/e2e/helpers/i18n.js`）：
+
+```js
+import { anyLocale, anyLocaleFragment } from './helpers/i18n.js';
+
+// 全等断言：接受任意一种已翻译文案
+await expect(page.locator('#status')).toHaveText(anyLocale('optUnsaved'));
+
+// 片段断言（含否定）：占位符 $1 会被换成通配
+expect(hint.text).not.toMatch(anyLocaleFragment('hintToolbar'));
+```
+
+它仍然验的是「界面显示的是**这条消息**对应的内容」，只是不关心它被翻译成了
+哪种语言。**消息键才是契约，翻译不是。**
+
+> ⚠️ 两个实现细节，写错了会静默失配：
+> 1. 占位符必须在**转义之前**换掉。先 `escapeRegExp` 的话，`$1` 变成 `\$1`，
+>    后面再找 `$1` 就找不到了 —— 通配符永远替换不进去。
+> 2. 否定断言要用 `not.toMatch`，不能用 `not.toContain` —— 后者只接受字符串。
+
+> ⚠️ **别再用 `--lang=zh-CN` 来固定界面语言**：它对 `chrome.i18n` **无效**
+> （见上表）。`options-page.spec.js` 里曾经有一处，注释还写着「固定界面语言」，
+> 实际什么都没固定 —— 中文断言能过，纯粹是因为那台机器的系统语言是中文。
+
+## e2e 的浏览器启动：只有 `tests/e2e/helpers/launch.js` 一处
+
+13 个 spec 曾经各抄一份启动样板（≈700 行），抄着抄着就**漂移**了：
+
+- 有的把「等 background service worker」放在重试循环**外面**（浏览器起来了但
+  扩展没加载就直接失败，不再试下一个候选），有的放在**里面**（会重试）；
+- `--no-sandbox` 是 **Linux CI** 的需要，却被抄进了 macOS 的本机运行 ——
+  开发机白白少了一层浏览器沙箱隔离；
+- `findChromium()` 写死了 macOS 的缓存路径，在 Linux 上恒返回 `undefined`，
+  那个「按可执行文件路径兜底」的候选**从来没生效过**；
+- 拿 worker 的入口有三种叫法：`ext.serviceWorker` / `ext.sw` / `ext.worker()`。
+
+重复本身不贵，**漂移**才贵 —— 它让「同一个测试环境」在不同 spec 里表现不同，
+于是失败时分不清是产品坏了还是环境不一样。现在统一到 `helpers/launch.js`：
+**改一处，全部 17 个 spec 同时生效**。
+
+> 💡 `--no-sandbox` 现在**只在 Linux 上加**：CI 容器里以 root 跑 Chrome 必须加
+> （否则沙箱起不来），`/dev/shm` 也要换成 `/tmp`；但 macOS 上 Chrome 的沙箱
+> 本来就能用，关掉它只会让开发机少一层隔离。
+
+> ⚠️ `helpers/launch.js` 里 `DIST` 是**按本文件位置**推出来的（仓库根在三层之上）。
+> 少退一级会指向 `tests/dist`，扩展加载不上 —— 症状是「浏览器起来了但没有
+> service worker」，很难往路径上想。所以那里有一道「路径不对就立刻报错」的护栏。
+
+## CI 什么时候真的会跑 e2e
+
+> ⚠️ **e2e 作业只在 push 到 `main` / `develop`、或往 `main` 开 PR 时才跑。**
+> 在功能分支上改代码，**本地不跑**的话，CI 一路绿灯 —— 绿灯只说明
+> 「单元测试和 CI 契约测试过了」，不代表「真浏览器里还能用」。
+
+> ⚠️ **2026-10-21 的实况**：6.1.0 与 6.2.0 的全部工作（含 6 个新 e2e spec、
+> 重写过的设置页与全屏控制器）**从未进过 CI** —— 最后一次绿的 e2e 作业是
+> 2026-10-08 跑的 6.0.8 那棵树。分支上「测试全绿」与「CI 会绿」是两件事。
+
 ## 测试资源
 
 - [tests/e2e/test-page.html](./tests/e2e/test-page.html): 注入式用例使用的本地测试页面。
@@ -198,6 +406,13 @@ pnpm test:e2e:ext  # CI 跑的那五套（会先 pnpm build）
 - [tests/e2e/real-extension.spec.js](./tests/e2e/real-extension.spec.js): 真加载扩展的用例，页面由路由拦截现造
 - [tests/e2e/subtitle-visibility.spec.js](./tests/e2e/subtitle-visibility.spec.js): 字幕可见性回归守卫
 - [tests/e2e/style-isolation.spec.js](./tests/e2e/style-isolation.spec.js): 站点 CSS 打不穿控制条
+- [tests/e2e/frame-scope.spec.js](./tests/e2e/frame-scope.spec.js): 帧的归属 —— 快捷键/图标该作用在哪个视频上
+- [tests/e2e/frame-scale.spec.js](./tests/e2e/frame-scale.spec.js): 缩放 iframe 里的坐标换算（以浏览器画出的像素为基准）
+- [tests/e2e/first-run-hint.spec.js](./tests/e2e/first-run-hint.spec.js): 首次引导在小视口（嵌入框）里的「放得下」契约
+- [tests/e2e/speed-toast.spec.js](./tests/e2e/speed-toast.spec.js): 倍速胶囊与角标 —— 暂停后自己回来、进/出全屏重新贴位
+- [tests/e2e/video-owner.spec.js](./tests/e2e/video-owner.spec.js): 「视频在嵌入框里」不能静默 + 「谁有视频」的广播
+- [tests/e2e/iframe-fullscreen.spec.js](./tests/e2e/iframe-fullscreen.spec.js): 嵌入框里的网页全屏要**铺满整个页面**
+- [tests/e2e/helpers/png.js](./tests/e2e/helpers/png.js): 共享的 PNG 解码工具 —— 用例要量「浏览器真的画在哪」时用它
 - [tests/e2e/fixtures/sd-4x3.ts](./tests/e2e/fixtures/sd-4x3.ts): 一个**真的** 4:3（640×480）mp4，
   以 base64 内联（2KB）。必须用真媒体：mock `videoWidth` 在隔离世界里无效（见上面的坑）。
 - [tests/e2e/iframe-outer.html](./tests/e2e/iframe-outer.html) + [iframe-inner.html](./tests/e2e/iframe-inner.html):

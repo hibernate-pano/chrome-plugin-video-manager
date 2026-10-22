@@ -52,6 +52,46 @@ describe('locale 文件', () => {
     });
   });
 
+  it('en 与 zh_CN 的占位符完全一致（否则替换值会错位）', () => {
+    // 为什么这条要单独守：key 集合一致 ≠ 替换值数量一致。
+    //
+    // Chrome 的位置占位符（$1 / $2）是**按位置**替换的：
+    // 英文写 "$1 加快 / $2 减慢"、中文只写 "$1 调速" 时，
+    // 界面上会显示「= 加快 /  减慢」——第二个替换值被塞进了不存在的位置。
+    // 更糟的是它**不报错**：Chrome 拿到的 replacements 数量由调用点决定，
+    // 少一个就静默渲染成空串。
+    //
+    // 这类问题在浏览器里极难看出是哪一条文案错了，
+    // 所以在**改文案**的那一刻就把它挡住。
+    const en = readMessages('en');
+    const zh = readMessages('zh_CN');
+
+    /** 取出 message 里用到的位置占位符编号（$1..$9），按升序。 */
+    const positional = (message: string): number[] =>
+      [...new Set([...message.matchAll(/\$([1-9])/g)].map((m) => Number(m[1])))].sort(
+        (a, b) => a - b,
+      );
+
+    const mismatched: string[] = [];
+
+    Object.keys(en).forEach((key) => {
+      const enSlots = positional(en[key].message ?? '');
+      const zhSlots = positional(zh[key]?.message ?? '');
+
+      if (enSlots.join(',') !== zhSlots.join(',')) {
+        mismatched.push(
+          `${key}: en 用 [${enSlots.join(',')}]，zh_CN 用 [${zhSlots.join(',')}]`,
+        );
+      }
+    });
+
+    expect(
+      mismatched,
+      `这些 key 的占位符在两种语言里对不上：\n${mismatched.join('\n')}\n` +
+        '替换值是按位置传的，一边多一个 $n 就把另一边整段错位。',
+    ).toEqual([]);
+  });
+
   it('每个 key 都真的被代码用上：没有悬空的文案', () => {
     // 悬空的 key 不会报错，只是永远不会被显示——
     // 它们会在 locale 文件里越攒越多，最后没人敢删（因为不知道谁在用）。
@@ -167,7 +207,7 @@ describe('t() 的占位符与回落', () => {
     // mock 模拟 Chrome 的行为：位置占位符由 Chrome 自己替换掉。
     // 这里读的是**真实的 locale 文件** —— 消息文本改了，这条会跟着红。
     withChrome(chromeI18nMock('zh_CN'), () => {
-      expect(t('hintSpeed', '$1 / $2 调速', ['=', '-'])).toBe('= / - 调速');
+      expect(t('hintSpeed', '调速 · $1 加快 / $2 减慢', ['=', '-'])).toBe('调速 · = 加快 / - 减慢');
     });
   });
 
@@ -198,9 +238,9 @@ describe('t() 的占位符与回落', () => {
   it('没传 replacements 时，具名 token 原样保留（供调用方自己 replace）', () => {
     withChrome(
       // 模拟 Chrome 把 $1 填成 token 本身的样子。
-      () => '{up} / {down} 调速',
+      () => '调速 · {up} / {down}',
       () => {
-        expect(t('hintSpeed', '{up} / {down} 调速')).toBe('{up} / {down} 调速');
+        expect(t('hintSpeed', '调速 · {up} / {down}')).toBe('调速 · {up} / {down}');
       },
     );
   });
@@ -232,13 +272,16 @@ describe('t() 的占位符与回落', () => {
   it('有 chrome.i18n 与没有 chrome.i18n 时渲染结果一致', () => {
     // 这是本模块最重要的一条不变式：
     // locale 用 "$1 / $2"、调用点还留在旧写法 `.replace('{up}', x)` 时，
-    // 两条路径都得渲染出「= / - 调速」，不能一边正常一边露出占位符。
+    // 两条路径都得渲染出「= 加快 / - 减慢」，不能一边正常一边露出占位符。
     //
     // ⚠️ 这里的 chrome mock **真的消费 substitutions**（见 chromeI18nMock）。
     // 早先的 mock 直接返回一串固定文本，于是这条断言恒成立 ——
     // 把 deriveValues 里的具名 token 分支删掉（Chrome 于是拿不到替换值、
     // 位置占位符原样留下）它照样绿。
-    const fallback = '{up} / {down} 调速';
+    // 回落文案用**具名 token** 形式：这条不变式守的是「locale 写 $1/$2、
+    // 调用点还在旧写法 .replace('{up}', x)」时两条路径仍然一致。
+    // 现在的 locale 文案是「调速 · $1 加快 / $2 减慢」，token 的顺序与它一致。
+    const fallback = '调速 · {up} 加快 / {down} 减慢';
 
     const original = (globalThis as Record<string, unknown>).chrome;
     (globalThis as Record<string, unknown>).chrome = {};
@@ -257,7 +300,7 @@ describe('t() 的占位符与回落', () => {
 
     expect(withI18n).toBe(withoutChrome);
     // 旧调用点后面对返回串做的 replace 依然有效。
-    expect(withoutChrome.replace('{up}', '=').replace('{down}', '-')).toBe('= / - 调速');
+    expect(withoutChrome.replace('{up}', '=').replace('{down}', '-')).toBe('调速 · = 加快 / - 减慢');
     // 而且**不能**露出字面量 $1 —— 那正是真实 Chrome 会给出的破绽。
     expect(withI18n, '不能露出字面量 $1').not.toContain('$1');
     expect(withI18n, '不能露出字面量 $2').not.toContain('$2');
@@ -268,7 +311,7 @@ describe('t() 的占位符与回落', () => {
     // 返回串里就真的出现了 "$2"。这时候再替一次位置占位符就会把它当成
     // 占位符替掉 —— 文案就乱了（"X / X 调速"）。
     withChrome(chromeI18nMock('zh_CN'), () => {
-      expect(t('hintSpeed', '$1 / $2 调速', ['$2', 'X'])).toBe('$2 / X 调速');
+      expect(t('hintSpeed', '调速 · $1 加快 / $2 减慢', ['$2', 'X'])).toBe('调速 · $2 加快 / X 减慢');
     });
   });
 

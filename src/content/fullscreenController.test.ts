@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FullscreenController } from './fullscreenController';
+import { FrameExpander } from './iframeExpansion';
+import { resetExtensionDom } from './testDom';
 
 /**
  * 造一个"站点播放器 + 字幕层"的真实结构：字幕是 video 的兄弟节点，
@@ -27,6 +29,8 @@ const createPlayerWithSubtitle = (
   } as DOMRect);
 
   const styleTable = new Map<Element, string>([[subtitle, 'absolute']]);
+  // 站点把字幕藏起来的状态（插件在视频被搬走时常见的做法）。
+  const subtitleState = { hidden: false };
   const originalGetComputedStyle = window.getComputedStyle;
   vi.spyOn(window, 'getComputedStyle').mockImplementation((target) => {
     const position = styleTable.get(target as Element);
@@ -34,10 +38,23 @@ const createPlayerWithSubtitle = (
     if (position === undefined) {
       return real;
     }
-    return { ...real, position, display: 'block', visibility: 'visible' } as CSSStyleDeclaration;
+    return {
+      ...real,
+      position,
+      display: subtitleState.hidden ? 'none' : 'block',
+      visibility: 'visible',
+    } as CSSStyleDeclaration;
   });
 
-  return { player, video, subtitle };
+  return {
+    player,
+    video,
+    subtitle,
+    /** 让站点把字幕藏起来 / 再放出来。 */
+    setSubtitleHidden: (hidden: boolean) => {
+      subtitleState.hidden = hidden;
+    },
+  };
 };
 
 const SUBTITLE_RECT = {
@@ -48,7 +65,7 @@ const stage = () => document.getElementById('vsc-page-fullscreen-stage');
 
 describe('FullscreenController', () => {
   beforeEach(() => {
-    document.body.innerHTML = '';
+    resetExtensionDom();
     document.body.style.overflow = '';
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -284,6 +301,12 @@ describe('FullscreenController', () => {
     expect(overlay).not.toBeNull();
     // 背板必须撤掉：css-cover 跨不过页面祖先的层叠上下文，留着只会盖住视频。
     expect(overlay?.classList.contains('vsc-active')).toBe(false);
+
+    // ⚠️ 必须收尾：这个控制器还「在全屏」（css-cover 模式）。
+    // 不退出的话，它会带着 fullscreenchange 监听器活到后面的用例里，
+    // 把那时新建的 overlay 按同一个 DOM id 摘掉 —— 那是测试之间的串扰，
+    // 不是产品行为。
+    controller.exit();
   });
 
   it('falls back to css-cover without throwing when the original next sibling was reordered away', () => {
@@ -428,6 +451,69 @@ describe('FullscreenController', () => {
 
     // 退出时站点把媒体弄停了（快照拍的是「在播」），必须补一次 play。
     expect(play).toHaveBeenCalled();
+  });
+
+  describe('iframe 里的网页全屏', () => {
+    /**
+     * 撑大与还原必须**成对**：父文档那边被撑大的 iframe 元素若不还原，
+     * 用户页面就被永久改成「一个巨大的 iframe」。
+     *
+     * 这条断言盯的是控制器与撑大机制之间的**契约**（进全屏 → 请求撑大，
+     * 退出全屏 → 请求还原），具体的样式与消息协议在 iframeExpansion.test.ts。
+     */
+    it('进全屏时请求撑大，退出时请求还原', () => {
+      const setOwnFullscreen = vi.spyOn(FrameExpander.prototype, 'setOwnFullscreen');
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      expect(controller.enter(video)).toBe(true);
+      expect(setOwnFullscreen).toHaveBeenCalledWith(true);
+
+      controller.exit();
+      expect(setOwnFullscreen).toHaveBeenCalledWith(false);
+    });
+
+    it('视频被页面丢弃时也要把撑大撤销掉', () => {
+      const setOwnFullscreen = vi.spyOn(FrameExpander.prototype, 'setOwnFullscreen');
+      vi.useFakeTimers();
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      // 先让 180ms 的探测窗口过去（它会把视频放回站点 DOM）。
+      vi.advanceTimersByTime(200);
+      setOwnFullscreen.mockClear();
+
+      // 页面把这个节点从文档里丢掉了 → 健康检查走 release()。
+      video.remove();
+      vi.advanceTimersByTime(600);
+
+      expect(setOwnFullscreen).toHaveBeenCalledWith(false);
+      vi.useRealTimers();
+    });
+
+    it('顶层文档自己进全屏时不去麻烦任何父文档', () => {
+      // 顶层文档的 parent 就是自己：撑大机制必须直接短路，
+      // 顶层自己进全屏的老路径一行都不该变。
+      const spy = vi.spyOn(window, 'postMessage');
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      controller.exit();
+
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
   });
 
   describe('字幕等浮层', () => {
@@ -643,6 +729,231 @@ describe('FullscreenController', () => {
 
       expect(stage()?.contains(video)).toBe(true);
       controller.exit();
+    });
+  });
+
+  /**
+   * B1：页面重渲染后退出全屏 —— 视频与字幕不能被塞回一个**已脱离文档**的容器。
+   *
+   * ## 要守住的承诺
+   *
+   * 按 f 进全屏 → 站点重渲染（React/Vue 换清晰度、SPA 虚拟列表把旧的播放器
+   * 容器丢掉）→ 按 Esc 退出 → 视频与字幕必须回到**用户看得见**的地方。
+   *
+   * 旧实现只校验了「sibling 还挂在原父节点下」，没校验**原父节点自己还在不在
+   * 文档里** —— 那个容器早已被站点丢掉，于是节点被插进一个没人看得见的地方：
+   * 站点播放器变成黑框，字幕从此永久消失。
+   */
+  describe('页面重渲染后退出全屏', () => {
+    it('视频不会被塞进已经脱离文档的旧容器，而是落到看得见的兜底位置', () => {
+      const { player, video } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      const controller = new FullscreenController();
+
+      expect(controller.enter(video)).toBe(true);
+      expect(stage()?.contains(video)).toBe(true);
+
+      // 站点重渲染：旧的播放器容器被整个丢掉（此时视频还在我们的 overlay 里）。
+      player.remove();
+      expect(player.isConnected, '前置条件：旧容器已经脱离文档').toBe(false);
+
+      expect(() => controller.exit()).not.toThrow();
+
+      // ⚠️ 关键回归：不能把视频插回那个游离容器 —— 站点会变成黑框。
+      expect(player.contains(video), '视频不能回到已经脱离文档的旧容器').toBe(false);
+      // 落点必须用户看得见：body 是页面里唯一一直可见的容器。
+      expect(video.parentElement, '视频必须落到看得见的兜底位置').toBe(document.body);
+      expect(video.isConnected, '视频必须还在文档里').toBe(true);
+
+      // 全屏状态必须完全复位。
+      expect(controller.isActive()).toBe(false);
+      expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    });
+
+    it('字幕跟着视频一起落到同一个可见落点（不能单独消失）', () => {
+      const { player, video, subtitle } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+      player.remove();
+
+      controller.exit();
+
+      // 字幕原来也在那个被丢掉的容器里 —— 塞回去等于字幕从此消失。
+      expect(player.contains(subtitle), '字幕不能回到已经脱离文档的旧容器').toBe(false);
+      expect(subtitle.parentElement, '字幕必须与视频落到同一个可见落点').toBe(document.body);
+      expect(subtitle.isConnected, '字幕必须还在文档里').toBe(true);
+    });
+
+    it('退出流程不抛异常，滚动锁与 overlay 都复位', () => {
+      const { player, video } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      document.body.style.overflow = 'auto';
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+      player.remove();
+
+      expect(() => controller.exit()).not.toThrow();
+
+      expect(controller.isActive()).toBe(false);
+      expect(controller.getActiveVideo()).toBeNull();
+      expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+      expect(document.getElementById('vsc-controls')).toBeNull();
+      expect(document.body.style.overflow, 'body 的滚动锁必须解除').toBe('auto');
+    });
+
+    it('兜底落点上被站点藏起来的字幕会被拉回可见', () => {
+      // 站点（或字幕插件）在全屏期间把字幕 display:none 掉了。
+      // 字幕落到 body 之后它仍然不可见 —— 那与「字幕消失」是同一种故障。
+      const { player, video, subtitle, setSubtitleHidden } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+      // 字幕进全屏时是可见的（所以被搬进了 overlay）……
+      expect(stage()?.contains(subtitle)).toBe(true);
+
+      // ……全屏期间站点把它藏了起来。
+      setSubtitleHidden(true);
+      player.remove();
+      controller.exit();
+
+      expect(subtitle.parentElement).toBe(document.body);
+      expect(
+        subtitle.style.getPropertyValue('display'),
+        '兜底落点上的字幕必须被拉回可见',
+      ).toBe('block');
+    });
+
+    it('站点把视频拿回它的新播放器容器时，我们不再把它拔出来', () => {
+      // 站点重渲染时可能把 <video> 节点插回它的新播放器容器 ——
+      // 那时视频仍然 connected，但它已经不在我们手上了。
+      // 这时候再把它「还原」到原位置，等于把站点刚建好的播放器掏空。
+      const { video } = createPlayerWithSubtitle(SUBTITLE_RECT);
+      const controller = new FullscreenController();
+
+      controller.enter(video);
+
+      const newPlayer = document.createElement('div');
+      document.body.appendChild(newPlayer);
+      newPlayer.appendChild(video);
+      // 站点给它的新播放器写了尺寸 —— 我们退出时一个字都不许碰它。
+      video.style.setProperty('width', '640px');
+
+      controller.exit();
+
+      expect(newPlayer.contains(video), '不能把视频从站点的新播放器里拔出来').toBe(true);
+      // 我们写在它身上的全屏样式必须撤掉（否则新播放器里躺着一个满屏大的视频）。
+      expect(video.style.getPropertyValue('position')).not.toBe('fixed');
+      expect(video.style.getPropertyValue('width')).not.toBe('100vw');
+      expect(video.classList.contains('vsc-page-fullscreen-video')).toBe(false);
+      // 站点自己写的尺寸必须原样保留（不能被「整个 style 属性还原」抹掉）。
+      expect(video.style.getPropertyValue('width'), '站点自己写的样式不能被抹掉').toBe('640px');
+    });
+  });
+
+  /**
+   * B3：扩展的网页全屏与站点的原生全屏不能同时存在。
+   *
+   * 产品决策（已定）：扩展**保留自己的网页全屏**（干净的全屏 + 字幕跟随 +
+   * 统一控制条），不退回站点原生全屏 —— 但两层不能叠着。
+   */
+  describe('站点原生全屏与网页全屏', () => {
+    /** 伪造「文档正处于原生全屏」，并记录我们退原生全屏的次数。 */
+    const stubNativeFullscreen = () => {
+      const state = { element: null as Element | null };
+      const exitFullscreen = vi.fn(() => Promise.resolve());
+      Object.defineProperty(document, 'fullscreenElement', {
+        configurable: true,
+        get: () => state.element,
+      });
+      Object.defineProperty(document, 'exitFullscreen', {
+        configurable: true,
+        value: exitFullscreen,
+      });
+      return { state, exitFullscreen };
+    };
+
+    afterEach(() => {
+      delete (document as unknown as { fullscreenElement?: unknown }).fullscreenElement;
+      delete (document as unknown as { exitFullscreen?: unknown }).exitFullscreen;
+    });
+
+    it('进网页全屏时退掉站点的原生全屏（两层不能同时存在）', () => {
+      const { state, exitFullscreen } = stubNativeFullscreen();
+      state.element = document.body;
+
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+
+      expect(exitFullscreen, '必须先退掉站点的原生全屏').toHaveBeenCalledTimes(1);
+      expect(controller.isActive()).toBe(true);
+      controller.exit();
+    });
+
+    it('退网页全屏时不会把用户踢出别的全屏', () => {
+      const { state, exitFullscreen } = stubNativeFullscreen();
+      state.element = document.body;
+
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      controller.exit();
+
+      // 进全屏时退过一次就**够了**：退出我们的全屏不许再去动原生全屏，
+      // 否则用户会被从别的全屏里踢出来。
+      expect(exitFullscreen).toHaveBeenCalledTimes(1);
+    });
+
+    it('我们自己退掉原生全屏时，不会顺手把自己也退掉', () => {
+      const { state, exitFullscreen } = stubNativeFullscreen();
+      state.element = document.body;
+
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      expect(exitFullscreen).toHaveBeenCalledTimes(1);
+
+      // 浏览器把我们自己的 exitFullscreen 兑现了 → fullscreenchange，
+      // 而 fullscreenElement 变回 null。
+      state.element = null;
+      document.dispatchEvent(new Event('fullscreenchange'));
+
+      expect(controller.isActive(), '不能把我们自己的全屏退掉').toBe(true);
+      controller.exit();
+    });
+
+    it('站点在我们的全屏期间进原生全屏时，我们让位退出', () => {
+      const { state, exitFullscreen } = stubNativeFullscreen();
+
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = document.createElement('video');
+      parent.appendChild(video);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      expect(controller.isActive()).toBe(true);
+
+      // 站点点了它自己的全屏按钮 → 原生全屏的 top layer 会压在我们的 overlay 之上。
+      state.element = document.body;
+      document.dispatchEvent(new Event('fullscreenchange'));
+
+      expect(controller.isActive(), '两层不能叠着：让位退出').toBe(false);
+      expect(exitFullscreen, '绝不能把站点的原生全屏退掉').not.toHaveBeenCalled();
+      // 视频还给站点，站点的新播放器因此不是空壳。
+      expect(parent.contains(video)).toBe(true);
     });
   });
 });

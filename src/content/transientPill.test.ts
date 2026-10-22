@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { destroyLiveRegion } from './liveRegion';
 import { TransientPill } from './transientPill';
+import { resetExtensionDom } from './testDom';
 
 const PILL_ID = 'vsc-test-pill';
 const LIVE_REGION_ID = 'vsc-live-region';
@@ -17,7 +18,7 @@ describe('TransientPill', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    document.body.innerHTML = '';
+    resetExtensionDom();
     pill = new TransientPill({
       id: PILL_ID,
       visibleClass: 'vsc-visible',

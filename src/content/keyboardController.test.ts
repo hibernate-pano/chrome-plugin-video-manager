@@ -2,6 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { KeyboardController } from './keyboardController';
 import { DEFAULT_SHORTCUTS, PersistedSettings, ShortcutSettings } from '../shared/types';
 
+/**
+ * 造一个「可 seek 区间」，模拟浏览器里已经加载完元数据的点播视频。
+ *
+ * ⚠️ jsdom **不实现** HTMLMediaElement 的 seekable/readyState：
+ * `video.seekable` 恒是长度 0 的空壳，`video.readyState` 恒是 0（HAVE_NOTHING）。
+ * 不显式摆出来的话，「这个流能不能 seek」那条判据在单测里永远是
+ * 「不能」——于是「快进到底该不该被吞掉」这条契约根本测不到。
+ */
+const seekableRange = (start: number, end: number) => ({
+  length: 1,
+  start: (index: number) => (index === 0 ? start : 0),
+  end: (index: number) => (index === 0 ? end : 0),
+});
+
 const createVideo = () => {
   const video = document.createElement('video');
   let paused = false;
@@ -17,6 +31,15 @@ const createVideo = () => {
   });
   Object.defineProperty(video, 'duration', {
     value: 100,
+    configurable: true,
+  });
+  // HAVE_METADATA = 1：元数据已到，duration 与 seekable 都可信。
+  Object.defineProperty(video, 'readyState', {
+    value: 1,
+    configurable: true,
+  });
+  Object.defineProperty(video, 'seekable', {
+    value: seekableRange(0, 100),
     configurable: true,
   });
   Object.defineProperty(video, 'paused', {
@@ -566,6 +589,121 @@ describe('KeyboardController', () => {
     expect(video?.pause).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * 「站点自己处理哪些键」是一等公民，而不是某个站点的特判。
+   *
+   * 根因：扩展在 window 捕获阶段拦下 keydown（页面收不到 keydown），
+   * 而 keyup 是**另一次事件派发**、页面照收不误 ——
+   * 对「在 keyup 上处理按键」的站点，我们拦掉的不是一次按键，而是**半截按键**：
+   * 它只收到 keyup，于是它的处理照样跑一遍。
+   * 我们的「切播放/暂停」在 keydown 跑一次、站点的在 keyup 再跑一次
+   * = 一次按键两次切换 = **净效果为零**。
+   *
+   * 这里用**注入的适配器**造出「某个站点在 keyup 上处理空格」这种形状：
+   * 仓库里没有一份可信的「各站点键位表」可以当夹具 ——
+   * 凭空写一个真实站点的键位，等于往产品里塞一条没核实过的事实。
+   * 真实站点的那份数据由 siteAdapters.test.ts 单独守。
+   */
+  describe('站点自己处理某些键（nativeKeyHandling）', () => {
+    const nativeSpaceAdapter = {
+      selectors: ['video'],
+      mainSelectors: [],
+      nativeKeyHandling: [' '],
+    };
+
+    const useNativeSite = () => {
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        isTrustedEvent: () => true,
+        getSiteAdapter: () => nativeSpaceAdapter,
+      });
+    };
+
+    it('keydown 放行：不切换播放，也不吞掉按键', () => {
+      useNativeSite();
+
+      const event = keyEvent(' ');
+      const preventDefault = vi.spyOn(event, 'preventDefault');
+      const stopPropagation = vi.spyOn(event, 'stopPropagation');
+
+      expect(controller.handleKeyDown(event)).toBe(false);
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(stopPropagation).not.toHaveBeenCalled();
+      expect(video?.pause).not.toHaveBeenCalled();
+      expect(video?.play).not.toHaveBeenCalled();
+    });
+
+    it('keyup 一起放行：站点要拿到完整的一次按键', () => {
+      useNativeSite();
+
+      const event = keyUpEvent(' ');
+      const preventDefault = vi.spyOn(event, 'preventDefault');
+      const stopPropagation = vi.spyOn(event, 'stopPropagation');
+
+      expect(controller.handleKeyUp(event)).toBe(false);
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(stopPropagation).not.toHaveBeenCalled();
+    });
+
+    it('只让路那一个键：别的快捷键照常接管', () => {
+      useNativeSite();
+
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+      expect(showSpeedFeedback).toHaveBeenCalled();
+    });
+
+    it('让路的那次按住不算我们的归属（长按空格页面照样能滚）', () => {
+      // 放行之后「按住」的归属必须保持为空 ——
+      // 否则浏览器长按派发的 repeat 事件会被我们吞掉，页面滚不动。
+      useNativeSite();
+
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+      expect(controller.handleKeyDown(keyEvent(' ', { repeat: true }))).toBe(false);
+    });
+
+    it('带修饰键的组合不让路（站点处理的是裸键）', () => {
+      // 站点监听的是裸空格 —— ctrl+空格它根本不会处理。
+      // 如果连组合也让路，扩展就会白白丢掉一批快捷键。
+      settings = createSettings({ togglePlay: 'ctrl+ ' });
+      useNativeSite();
+
+      expect(controller.handleKeyDown(keyEvent(' ', { ctrlKey: true }))).toBe(true);
+      expect(video?.pause).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('YouTube 上「k」也整体放行（站点在 keyup 上处理它）', () => {
+    // 'k' 是 YouTube 的播放/暂停键，与空格走同一条路径。
+    // 用户把播放/暂停改绑到 'k' 时，同样不能出现「切两次」。
+    settings = createSettings({ togglePlay: 'k' });
+    setHostname('www.youtube.com');
+    createController();
+
+    expect(controller.handleKeyDown(keyEvent('k'))).toBe(false);
+    expect(video?.pause).not.toHaveBeenCalled();
+    expect(video?.play).not.toHaveBeenCalled();
+  });
+
+  it('YouTube 上没被站点接管的键仍然归我们（方向键/全屏不受让路影响）', () => {
+    // ⚠️ 让路是**按键**级的、且只针对站点真的在 keyup 上处理的那几个键。
+    // 如果把方向键也列进去，扩展在 YouTube 上就彻底失去快进与网页全屏
+    // —— 那是最不该被牺牲的两项。
+    setHostname('www.youtube.com');
+    createController();
+
+    expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(true);
+    expect(video?.currentTime).toBe(17);
+    expect(controller.handleKeyDown(keyEvent('f'))).toBe(true);
+    expect(lastToggledVideo).toBe(video);
+  });
+
   it('keeps repeating while a speed key is held, and stops on keyup', () => {
     vi.useFakeTimers();
     try {
@@ -626,6 +764,108 @@ describe('KeyboardController', () => {
       controller.stop();
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * 改快捷键之后，长按加速必须**停得下来**。
+   *
+   * 根因：松手的判定读的是**当前**的绑定。
+   * 用户按着 `=` 的过程中改了键（设置页在另一个标签页保存），
+   * `=` 不再绑在加速上 —— keyup 永远匹配不上 → `clearRepeat()` 不执行
+   * → 那个 120ms 的重复定时器一直跑到页面销毁。
+   * 表现是：用户松手了，速度却还在自己往上飘，而且再也停不下来。
+   *
+   * 而唯一那条止损点（onSettingsChanged）走的是**异步**的 storage 读，
+   * 读失败时被 `.catch(() => {})` 静默吞掉 → 它根本不会被调用。
+   * 所以「松手」这件事必须**只依赖按键本身**。
+   */
+  describe('长按加速停不下来', () => {
+    it('绑定被改掉之后，松手仍然停得住（不再依赖设置变更事件）', () => {
+      vi.useFakeTimers();
+      try {
+        controller.start();
+        expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+        vi.advanceTimersByTime(1000);
+        const callsBefore = showSpeedFeedback.mock.calls.length;
+        expect(callsBefore).toBeGreaterThan(1);
+
+        // 用户在另一个标签页改了绑定 —— 但那次存储变更**读失败了**
+        // （readSettings 的失败被 .catch(() => {}) 静默吞掉），
+        // 于是 onSettingsChanged 根本不会被调用。
+        settings = createSettings({ increaseSpeed: 'k' });
+
+        // 松手。判据是「按下时记下的键」，不是当前绑定
+        // （当前绑定已经不认识 '=' 了）。
+        expect(controller.handleKeyUp(keyUpEvent('='))).toBe(true);
+
+        vi.advanceTimersByTime(1000);
+        expect(showSpeedFeedback, '松手之后不该再自己往上飘').toHaveBeenCalledTimes(callsBefore);
+        controller.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('倍速被外部改写时，长按加速自动停下', () => {
+      // 第二道防线：用户拖了速度条、或站点自己重置了速度 ——
+      // 「按住」这个前提已经不成立，继续加只会把用户的设置冲掉。
+      vi.useFakeTimers();
+      try {
+        if (!video) throw new Error('video missing');
+        controller.start();
+        expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+        vi.advanceTimersByTime(1000);
+        const callsBefore = showSpeedFeedback.mock.calls.length;
+        expect(callsBefore).toBeGreaterThan(1);
+
+        // 外部改写倍速。
+        video.playbackRate = 3;
+
+        vi.advanceTimersByTime(1000);
+        expect(showSpeedFeedback, '倍速被改写后不该继续加').toHaveBeenCalledTimes(callsBefore);
+        expect(video.playbackRate).toBe(3);
+        controller.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('倍速到上限时，长按加速自动停下（再加也不会变）', () => {
+      vi.useFakeTimers();
+      try {
+        if (!video) throw new Error('video missing');
+        video.playbackRate = 16;
+        controller.start();
+
+        expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+        vi.advanceTimersByTime(1000);
+
+        // 只有「按下那一下」的反馈，后面不该再有连发。
+        expect(showSpeedFeedback).toHaveBeenCalledTimes(1);
+        expect(video.playbackRate).toBe(16);
+        controller.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('倍速到下限时，长按减速自动停下', () => {
+      vi.useFakeTimers();
+      try {
+        if (!video) throw new Error('video missing');
+        video.playbackRate = 0.1;
+        controller.start();
+
+        expect(controller.handleKeyDown(keyEvent('-'))).toBe(true);
+        vi.advanceTimersByTime(1000);
+
+        expect(showSpeedFeedback).toHaveBeenCalledTimes(1);
+        expect(video.playbackRate).toBe(0.1);
+        controller.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('ignores synthesized repeat events for speed keys', () => {
@@ -838,6 +1078,137 @@ describe('KeyboardController', () => {
   });
 
   /**
+   * 直播 / 不可 seek 的流：判据必须**放宽**，而且要有第二道防线。
+   *
+   * 早先的判据要求 `duration === Infinity` **且** `seekable` 为空，
+   * 两个条件同时成立才算直播 —— 于是两种最常见的直播流都判不出来：
+   * - MSE 直播：duration 是 NaN（第一个条件不成立）
+   * - 有 DVR 窗口的直播：duration 是 Infinity 但 seekable 有一档（第二个不成立）
+   * 判不出来 = 键被吞掉 = 用户看到「按了 → 什么都没发生，页面也没滚动」。
+   */
+  describe('直播 / 不可 seek 的流', () => {
+    it('MSE 直播（duration 是 NaN）不吞快进键', () => {
+      if (!video) throw new Error('video missing');
+
+      Object.defineProperty(video, 'duration', { value: Number.NaN, configurable: true });
+      Object.defineProperty(video, 'seekable', { value: [], configurable: true });
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+    });
+
+    it('有 DVR 窗口的直播（duration 是 Infinity 但 seekable 非空）不吞快进键', () => {
+      if (!video) throw new Error('video missing');
+
+      Object.defineProperty(video, 'duration', { value: Number.POSITIVE_INFINITY, configurable: true });
+      Object.defineProperty(video, 'seekable', { value: seekableRange(0, 60), configurable: true });
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+    });
+
+    it('DRM 流（seekable 是空的）不吞快进键', () => {
+      if (!video) throw new Error('video missing');
+
+      Object.defineProperty(video, 'seekable', { value: [], configurable: true });
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+    });
+
+    it('判据说能 seek、但位置实际没动 → 放行键，也不播报', () => {
+      // 判据只说明「看起来能 seek」：DRM、部分 MSE 流在判据上完全正常
+      // （duration 有限、seekable 非空），但 `video.currentTime = x`
+      // 会被浏览器**忽略** —— 位置一动不动。
+      // 那种情况下吞键 = 用户既没 seek 到、页面也没滚动（键被吃了）。
+      const onSeek = vi.fn();
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        onSeek,
+        isTrustedEvent: () => true,
+      });
+
+      // 造一个「写不进去」的 currentTime（浏览器忽略了这次赋值）。
+      Object.defineProperty(video, 'currentTime', {
+        get: () => 12,
+        set: () => {},
+        configurable: true,
+      });
+
+      const event = keyEvent('ArrowRight');
+      const preventDefault = vi.spyOn(event, 'preventDefault');
+
+      expect(controller.handleKeyDown(event)).toBe(false);
+      expect(preventDefault, '没动就不该吞键').not.toHaveBeenCalled();
+      expect(onSeek, '动作没发生就不该播报').not.toHaveBeenCalled();
+    });
+
+    it('真的 seek 成功了才吞键并播报', () => {
+      if (!video) throw new Error('video missing');
+
+      const onSeek = vi.fn();
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        onSeek,
+        isTrustedEvent: () => true,
+      });
+
+      const event = keyEvent('ArrowRight');
+      const preventDefault = vi.spyOn(event, 'preventDefault');
+
+      expect(controller.handleKeyDown(event)).toBe(true);
+      expect(preventDefault).toHaveBeenCalled();
+      expect(onSeek).toHaveBeenCalledWith(17, 5, 'forward');
+    });
+
+    it('位置被夹到反方向时不算成功（不能播报一句假话）', () => {
+      // 有些流会把位置夹回可 seek 区间的起点 —— 那是往**反方向**动。
+      // 按绝对值判断会把它当成「快进成功」，然后播报「快进 5 秒」
+      // 而实际往回跳了 30 秒。
+      if (!video) throw new Error('video missing');
+
+      const onSeek = vi.fn();
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        onSeek,
+        isTrustedEvent: () => true,
+      });
+
+      // 浏览器把位置夹回了 0（往回跳）。
+      Object.defineProperty(video, 'currentTime', {
+        get: () => 0,
+        set: () => {},
+        configurable: true,
+      });
+
+      const event = keyEvent('ArrowRight');
+      const preventDefault = vi.spyOn(event, 'preventDefault');
+
+      expect(controller.handleKeyDown(event)).toBe(false);
+      expect(preventDefault, '没往目标方向动就不该吞键').not.toHaveBeenCalled();
+      expect(onSeek).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
    * 「部分接管」：视频可以调速/seek/全屏，但**空格必须还给页面**。
    *
    * 空格在页面上首先是「往下翻页」。用户在一篇长文里按空格，期望的是翻页，
@@ -887,6 +1258,138 @@ describe('KeyboardController', () => {
 
       expect(controller.handleKeyDown(keyEvent('f'))).toBe(true);
       expect(lastToggledVideo).toBe(video);
+    });
+  });
+
+  /**
+   * 动作的**语义**回报。
+   *
+   * 播放/暂停与快进快退在设计上没有任何视觉提示（非全屏时控制条根本不存在），
+   * 所以读屏用户按了空格什么也听不到。这两条回调是那条通道的入口：
+   * 键盘控制器只负责说「发生了什么」，文案由运行时决定。
+   */
+  describe('动作语义的回报', () => {
+    let onPlaybackStateChange: ReturnType<typeof vi.fn>;
+    let onSeek: ReturnType<typeof vi.fn>;
+
+    const useReportingController = () => {
+      onPlaybackStateChange = vi.fn();
+      onSeek = vi.fn();
+      controller = new KeyboardController({
+        getSettings: () => settings,
+        getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
+        isFullscreenActive: () => false,
+        canToggleFullscreen,
+        toggleFullscreen,
+        exitFullscreen,
+        showSpeedFeedback,
+        notifyTakeoverUnavailable,
+        onPlaybackStateChange,
+        onSeek,
+        isTrustedEvent: () => true,
+      });
+    };
+
+    it('空格切到播放时报「正在播放」', () => {
+      useReportingController();
+
+      // 测试用的视频一开始就是「正在播放」的状态，所以第一下空格是暂停。
+      controller.handleKeyDown(keyEvent(' '));
+      onPlaybackStateChange.mockClear();
+
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+
+      expect(onPlaybackStateChange).toHaveBeenCalledTimes(1);
+      expect(onPlaybackStateChange).toHaveBeenCalledWith(true);
+    });
+
+    it('空格切到暂停时报「已暂停」', () => {
+      useReportingController();
+
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(true);
+
+      expect(onPlaybackStateChange).toHaveBeenCalledTimes(1);
+      expect(onPlaybackStateChange).toHaveBeenCalledWith(false);
+    });
+
+    it('快进回报新位置、实际跳过的秒数与方向', () => {
+      useReportingController();
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(true);
+
+      expect(onSeek).toHaveBeenCalledTimes(1);
+      expect(onSeek).toHaveBeenCalledWith(17, 5, 'forward');
+    });
+
+    it('快退回报新位置、实际跳过的秒数与方向', () => {
+      useReportingController();
+
+      expect(controller.handleKeyDown(keyEvent('ArrowLeft'))).toBe(true);
+
+      expect(onSeek).toHaveBeenCalledTimes(1);
+      expect(onSeek).toHaveBeenCalledWith(7, -5, 'back');
+    });
+
+    it('被时长夹住时回报的是**实际**跳过的秒数', () => {
+      // 播到 98 秒时按快进：只跳了 2 秒就到头了。
+      // 报「快进 5 秒」是假话 —— 读屏用户会以为视频多出了 3 秒。
+      useReportingController();
+      if (!video) throw new Error('video missing');
+      video.currentTime = 98;
+
+      controller.handleKeyDown(keyEvent('ArrowRight'));
+
+      expect(onSeek).toHaveBeenCalledWith(100, 2, 'forward');
+    });
+
+    it('被起点夹住时同样回报实际秒数', () => {
+      useReportingController();
+      if (!video) throw new Error('video missing');
+      video.currentTime = 2;
+
+      controller.handleKeyDown(keyEvent('ArrowLeft'));
+
+      expect(onSeek).toHaveBeenCalledWith(0, -2, 'back');
+    });
+
+    it('动作没发生时什么都不回报', () => {
+      // 页面上没有视频 / 动作没绑定：
+      // 这些情况下动作**没有发生**，回报一句「快进 5 秒」就是撒谎。
+      useReportingController();
+
+      // 页面上没有视频。
+      video = null;
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+
+      // 动作没绑定（同一个控制器、同一组 spy —— 换控制器会把调用记到别处）。
+      video = createVideo();
+      settings = createSettings({ togglePlay: '', seekForward: '' });
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+
+      expect(onPlaybackStateChange).not.toHaveBeenCalled();
+      expect(onSeek).not.toHaveBeenCalled();
+    });
+
+    it('直播流上不回报 seek（那个动作根本没发生）', () => {
+      useReportingController();
+      if (!video) throw new Error('video missing');
+      Object.defineProperty(video, 'duration', { value: Number.POSITIVE_INFINITY, configurable: true });
+      Object.defineProperty(video, 'seekable', { value: [], configurable: true });
+
+      expect(controller.handleKeyDown(keyEvent('ArrowRight'))).toBe(false);
+      expect(onSeek).not.toHaveBeenCalled();
+    });
+
+    it('长按自动重复不重复回报（动作只发生了一次）', () => {
+      useReportingController();
+
+      controller.handleKeyDown(keyEvent(' '));
+      controller.handleKeyDown(keyEvent(' ', { repeat: true }));
+      controller.handleKeyDown(keyEvent(' ', { repeat: true }));
+
+      expect(onPlaybackStateChange).toHaveBeenCalledTimes(1);
     });
   });
 });

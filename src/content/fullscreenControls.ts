@@ -2,12 +2,68 @@ import { t } from '../shared/i18n';
 import { SPEED_CHANGE_EVENT } from '../shared/types';
 import { formatRate } from '../shared/rate';
 import { togglePlayback } from './playback';
+import {
+  CONTROL_BAR_BREAKPOINTS,
+  CONTROL_BAR_NARROW_PADDING,
+  CONTROL_BAR_WIDE_PADDING,
+} from './controlBarLayout';
 import { controlsStyles } from './controlsStyles';
 import { setSubtitleOffset } from './subtitleOffset';
 import type { OverlayLayer } from './overlayLayers';
+import { mountViewportRoot } from './viewportRoot';
 
 const CONTROLS_ID = 'vsc-controls';
 const IDLE_HIDE_DELAY = 3000;
+
+/**
+ * 收起态那枚独立退出钮的 data-role。
+ *
+ * ⚠️ 它**不在** `.bar` 子树里 —— 这是刻意的：
+ * 控制条一收（`visibility: hidden`），它里面的东西全都跟着不可见、
+ * 不可聚焦。退出入口必须**永远在**，所以它是 shadow root 里的另一个元素，
+ * 位置与控制条里的退出按钮重合（用户看到的还是同一个地方）。
+ */
+const COLLAPSED_EXIT_ROLE = 'exit-collapsed';
+
+/**
+ * 收起态退出钮的边长（px）。
+ *
+ * 不超过控制条里的 `.button`（34×34），但也不能太小：
+ * WCAG 2.2 § 2.5.8 要求触控目标至少 24×24。
+ */
+const COLLAPSED_EXIT_SIZE = 28;
+
+/**
+ * 收起态退出钮的常态不透明度。
+ *
+ * 产品调性是「用完即忘，不打扰」：0.5 让它**看得见但不抢注意力**，
+ * hover / focus 时回到 1。
+ */
+const COLLAPSED_EXIT_IDLE_OPACITY = 0.5;
+
+/**
+ * 收起态退出钮的常态过渡时长（ms）。
+ */
+const COLLAPSED_EXIT_TRANSITION_MS = 160;
+
+/**
+ * 收起态退出钮的位置：与控制条里的退出按钮**同一个角**。
+ *
+ * 控制条的 padding 是 `20px 18px 12px`（窄屏时是 `12px 10px 8px`），
+ * 退出按钮是 flex 里的最后一项 → 它的右下角就在视口右下角往里
+ * 18px（右）/ 12px（下）处。收起态的按钮小一号（28 vs 34），
+ * 于是把它的**右下角**对齐到同一个点：视觉上就是同一个位置，
+ * 肌肉记忆接得上。
+ *
+ * ⚠️ 这几个数**不是在这里定的**：它们从 controlsStyles.ts 来 ——
+ * 那边才是控制条 padding 与断点的真源。两边各写一份的话，
+ * 改了一处忘了另一处 → 窄屏下两个按钮错开，而**没有任何测试会红**
+ * （它们各自都「对」，只是不再一致）。
+ */
+const COLLAPSED_EXIT_RIGHT = CONTROL_BAR_WIDE_PADDING.right;
+const COLLAPSED_EXIT_BOTTOM = CONTROL_BAR_WIDE_PADDING.bottom;
+const COLLAPSED_EXIT_RIGHT_NARROW = CONTROL_BAR_NARROW_PADDING.right;
+const COLLAPSED_EXIT_BOTTOM_NARROW = CONTROL_BAR_NARROW_PADDING.bottom;
 
 /**
  * 跳转「钉住」滑块的最长时间。
@@ -121,6 +177,13 @@ interface ControlsElements {
   /** 倍速徽标外面那层（定位菜单用）。 */
   speedWrap: HTMLSpanElement;
   speedMenu: HTMLDivElement;
+  /**
+   * 收起态的独立退出钮。
+   *
+   * ⚠️ 它**不在** `root`（.bar）子树里 —— 控制条一藏，里面的东西
+   * 跟着一起不可见、不可聚焦，而退出入口必须永远在。
+   */
+  collapsedExit: HTMLButtonElement;
 }
 
 export interface FullscreenControlsOptions {
@@ -186,6 +249,18 @@ export class FullscreenControls {
   private sliderKeyboardDriven = false;
   /** focusFirst() 之前的焦点，unmount 时还回去。 */
   private previousFocus: HTMLElement | null = null;
+  /**
+   * 收起态的退出钮现在是不是「亮着」。
+   *
+   * null = 还没初始化过（第一次调用 setCollapsedExitVisible 要真的写一次样式）。
+   * 用它做守卫是因为 show() 由 pointermove 驱动（每秒几十次），
+   * 每一次都重写一遍样式等于每次都触发一次样式重算。
+   */
+  private collapsedExitShown: boolean | null = null;
+  /** 指针此刻是不是压在收起态的退出钮上（hover 时恢复正常不透明度）。 */
+  private collapsedExitHovered = false;
+  /** 「降低动效」的媒体查询：变了要重算过渡。 */
+  private reducedMotionQuery: MediaQueryList | null = null;
   private readonly boundPointerMove = () => this.show();
   /** 任何按键都唤醒控制条 —— 纯键盘用户没有鼠标可动。 */
   private readonly boundHandleKeyWake = () => this.show();
@@ -206,6 +281,16 @@ export class FullscreenControls {
   private readonly boundHandleMenuKeyDown = (event: KeyboardEvent) => this.handleMenuKeyDown(event);
   private readonly boundHandleDocumentPointerDown = (event: Event) => {
     this.handleDocumentPointerDown(event);
+  };
+  /** 窗口尺寸变了：收起态的按钮要跟着换位置（窄屏的 padding 不一样）。 */
+  private readonly boundApplyCollapsedExitPosition = () => this.applyCollapsedExitPosition();
+  /** 系统改了「降低动效」：过渡要立刻跟着换。 */
+  private readonly boundHandleMotionPreferenceChange = () => {
+    const button = this.elements?.collapsedExit;
+    if (!button) {
+      return;
+    }
+    button.style.transition = this.collapsedExitTransition(this.collapsedExitShown === true);
   };
 
   constructor(video: HTMLVideoElement, options: FullscreenControlsOptions) {
@@ -408,9 +493,32 @@ export class FullscreenControls {
       </span>
       <button type="button" class="button" data-role="exit" aria-label="${t('ctlExit', '退出全屏 (Esc)')}">${ICONS.exit}</button>
     `;
+
+    // 收起态的独立退出钮。
+    //
+    // ⚠️ 它是 shadow root 里的**另一个**元素，不在 .bar 子树里：
+    // 控制条一收（visibility: hidden），里面的东西跟着一起不可见、不可聚焦，
+    // 而退出入口必须永远在（用户不知道「鼠标动一动能把控制条唤回来」，
+    // 更不知道「这是扩展的全屏」）。
+    //
+    // ⚠️ 它挂在 .bar **之前**：控制条淡入时会盖在它上面 ——
+    // 收起态的按钮是「融进」控制条的，不是叠在控制条上面的。
+    const collapsedExit = document.createElement('button');
+    collapsedExit.type = 'button';
+    collapsedExit.dataset.role = COLLAPSED_EXIT_ROLE;
+    // 可访问名与控制条里的退出按钮完全一致（复用同一个 i18n 键）。
+    collapsedExit.setAttribute('aria-label', t('ctlExit', '退出全屏 (Esc)'));
+    collapsedExit.innerHTML = ICONS.exit;
+    this.applyCollapsedExitBaseStyles(collapsedExit);
+    shadow.appendChild(collapsedExit);
+
     shadow.appendChild(root);
 
-    document.body.appendChild(host);
+    // ⚠️ 挂到 <html> 而不是 <body>：body 带 transform 时它会变成
+    // fixed 后代的包含块，控制条与收起态那枚退出钮会落到 body 的盒子
+    // 里（常常在视口之外）—— 全屏里就没有任何可见的出口了。
+    // 详见 viewportRoot.ts。
+    mountViewportRoot(host);
 
     const query = <T extends HTMLElement>(role: string) =>
       root.querySelector<T>(`[data-role="${role}"]`);
@@ -429,6 +537,7 @@ export class FullscreenControls {
       speed: query<HTMLButtonElement>('speed')!,
       speedWrap: query<HTMLSpanElement>('speed-wrap')!,
       speedMenu: query<HTMLDivElement>('speed-menu')!,
+      collapsedExit,
     };
     this.elements = elements;
 
@@ -476,6 +585,38 @@ export class FullscreenControls {
     });
     elements.exitButton.addEventListener('click', () => {
       this.onExit();
+    });
+
+    // --- 收起态的独立退出钮 ---
+
+    // 点击 = 与控制条里的退出按钮**同一个动作**。
+    elements.collapsedExit.addEventListener('click', () => {
+      this.onExit();
+    });
+
+    // 指针点击不让按钮拿走焦点。
+    //
+    // ⚠️ 为什么：焦点一进来就会 promote（控制条回来、退出钮藏起来）——
+    // 那样 mouseup 时按钮已经不在了，click 不会落在它身上，
+    // 退出全屏就**静悄悄地失败**了（用户点了，什么也没发生）。
+    // 拦下 mousedown 的默认行为（聚焦）即可：click 照样派发。
+    elements.collapsedExit.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
+
+    // 键盘焦点落到它身上 → 完整控制条回来，焦点交接给控制条里的退出按钮。
+    elements.collapsedExit.addEventListener('focus', () => {
+      this.promoteCollapsedExit();
+    });
+
+    // hover：恢复不透明度（常态低透明度，不抢注意力）。
+    elements.collapsedExit.addEventListener('mouseenter', () => {
+      this.collapsedExitHovered = true;
+      this.syncCollapsedExitOpacity();
+    });
+    elements.collapsedExit.addEventListener('mouseleave', () => {
+      this.collapsedExitHovered = false;
+      this.syncCollapsedExitOpacity();
     });
     elements.speed.addEventListener('click', (event) => {
       if (this.menuOpen) {
@@ -600,6 +741,14 @@ export class FullscreenControls {
 
     root.addEventListener('mouseenter', this.boundKeepVisible);
     root.addEventListener('mouseleave', this.boundScheduleHide);
+    // 收起态按钮的位置跟着视口宽度走（窄屏时控制条的 padding 不一样）。
+    window.addEventListener('resize', this.boundApplyCollapsedExitPosition);
+    // 「降低动效」变了要立刻换过渡（系统设置可以随时改）。
+    if (typeof window.matchMedia === 'function') {
+      this.reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+      this.reducedMotionQuery.addEventListener('change', this.boundHandleMotionPreferenceChange);
+    }
+    this.applyCollapsedExitPosition();
     window.addEventListener('pointermove', this.boundPointerMove, true);
     window.addEventListener('pointerup', this.boundHandlePointerUp, true);
     // ⚠️ 键盘也要能唤醒控制条。
@@ -608,19 +757,26 @@ export class FullscreenControls {
     // 实测：控制条淡出后，按方向键/空格/任何键都唤不回来，
     // 键盘用户就此失去了对进度条、音量、退出按钮的访问。
     //
-    // 监听挂在 **window 的捕获阶段**：内容脚本的键盘拦截也跑在捕获阶段，
-    // 顺序上我们必须**先于**它拿到事件，否则按键被扩展吞掉之后
-    // 根本到不了这里。
+    // 监听挂在 **window 的捕获阶段**。
+    //
+    // ⚠️ 但这条路只对「**我们没拦的键**」有效：扩展的键盘拦截跑在捕获阶段的
+    // 第一个（content-loader 在 document_start 注册的桥接），拦截成功时调
+    // stopImmediatePropagation()，而 stopImmediatePropagation 只挡住
+    // **同一个节点上后注册**的监听器 —— 后注册的我们这个就被挡掉了。
+    //
+    // 所以「我们自己的快捷键」唤醒控制条这件事，不能指望这条监听器：
+    // 改用视频自己的状态事件（见 boundHandleRateChange 的说明），
+    // 那条路不在被掐断的链路上。
     window.addEventListener('keydown', this.boundHandleKeyWake, true);
 
     // 视频事件 -> UI 同步。
     this.video.addEventListener('timeupdate', this.syncProgress);
     this.video.addEventListener('durationchange', this.syncProgress);
     this.video.addEventListener('loadedmetadata', this.syncProgress);
-    this.video.addEventListener('seeked', this.handleSeeked);
-    this.video.addEventListener('play', this.syncPlayState);
-    this.video.addEventListener('pause', this.syncPlayState);
-    this.video.addEventListener('ratechange', this.syncSpeed);
+    this.video.addEventListener('seeked', this.boundHandleSeeked);
+    this.video.addEventListener('play', this.boundHandlePlayStateChange);
+    this.video.addEventListener('pause', this.boundHandlePlayStateChange);
+    this.video.addEventListener('ratechange', this.boundHandleRateChange);
     this.video.addEventListener('volumechange', this.syncVolume);
 
     this.syncAll();
@@ -916,6 +1072,37 @@ export class FullscreenControls {
   };
 
   /**
+   * 视频状态变了 → 控制条必须醒过来。
+   *
+   * ⚠️ 为什么不能只靠「按键唤醒」那条路：
+   * 扩展的键盘拦截跑在 window 捕获阶段的**第一个**（content-loader 在
+   * document_start 注册的桥接监听器），而拦截成功时它会调
+   * stopImmediatePropagation() —— 后注册的按键监听器于是永远收不到事件。
+   *
+   * 实测后果：控制条淡出之后，用户按 `=` 调速、按空格播放暂停、
+   * 按方向键快进 —— 控制条**一点反应都没有**，倍速读数也停在旧值。
+   * 「全屏里键盘调速完全没反馈」就是这么来的。
+   *
+   * 而这些动作都会改视频的状态，状态一变视频就会发事件：
+   * 调速 → ratechange；播放/暂停 → play / pause；快进 → seeked。
+   * 视频自己的事件不经过那条被掐断的链路，一定到得了。
+   */
+  private readonly boundHandleRateChange = () => {
+    this.syncSpeed();
+    this.show();
+  };
+
+  private readonly boundHandlePlayStateChange = () => {
+    this.syncPlayState();
+    this.show();
+  };
+
+  private readonly boundHandleSeeked = () => {
+    this.handleSeeked();
+    this.show();
+  };
+
+  /**
    * 钉住滑块并起一个上限计时器（见 SEEK_PIN_TIMEOUT）。seeked 正常到达时由
    * handleSeeked 提前解除，计时器一并取消。
    */
@@ -1031,7 +1218,14 @@ export class FullscreenControls {
     );
   };
 
-  private show() {
+  /**
+   * 控制条叫回来。
+   *
+   * @param options.deferCollapseHide
+   *   true 时**不**立刻把收起态的退出钮藏起来 —— 调用方要先把焦点移走
+   *   （焦点在退出钮上时把它藏了，焦点会掉到 body 上，键盘用户凭空丢失位置）。
+   */
+  private show(options: { deferCollapseHide?: boolean } = {}) {
     const elements = this.elements;
     if (!elements) {
       return;
@@ -1039,7 +1233,194 @@ export class FullscreenControls {
 
     elements.root.classList.add('bar--visible');
     this.setSubtitleOffset(this.getSubtitleClearance());
+    if (!options.deferCollapseHide) {
+      // 控制条在 → 收起态的退出钮让位（两个退出钮不能同时在）。
+      this.setCollapsedExitVisible(false);
+    }
     this.scheduleHide();
+  }
+
+  /**
+   * 收起态退出钮的静态样式。
+   *
+   * 写在**内联 style** 里，不进 controlsStyles.ts：
+   *   - 那个文件正有别人在改，写进去会撞车；
+   *   - 退出钮的显隐是自己的状态机，与控制条的样式表分开，
+   *     两边才不会互相干扰（它刻意不在 .bar 子树里）。
+   *
+   * shadow root 里的内联样式完全安全：站点的 CSS 根本进不来。
+   */
+  private applyCollapsedExitBaseStyles(button: HTMLButtonElement) {
+    const style = button.style;
+    // 起始状态是「藏着的」：不进焦点序列（visibility: hidden 已经能把它
+    // 移出 Tab 序列，这里再钉一道 tabindex，避免任何状态下的漏网）。
+    button.tabIndex = -1;
+    style.position = 'fixed';
+    style.width = `${COLLAPSED_EXIT_SIZE}px`;
+    style.height = `${COLLAPSED_EXIT_SIZE}px`;
+    style.display = 'flex';
+    style.alignItems = 'center';
+    style.justifyContent = 'center';
+    style.padding = '0';
+    style.margin = '0';
+    style.border = '1px solid rgba(255, 255, 255, 0.18)';
+    style.borderRadius = '9px';
+    // 半透明深色底：视频画面不可控 —— 白底视频（录屏、PPT）上
+    // 浅色按钮会直接消失。
+    style.background = 'rgba(0, 0, 0, 0.55)';
+    // 图标与控制条一致。
+    style.color = '#f1f5f9';
+    style.opacity = '0';
+    style.visibility = 'hidden';
+    style.pointerEvents = 'none';
+    style.cursor = 'pointer';
+    style.webkitAppearance = 'none';
+    style.appearance = 'none';
+
+    // 图标尺寸也自己定：controlsStyles.ts 里的 `.button svg` 只作用于
+    // .button 子树，而退出钮不在那个子树里。
+    const icon = button.querySelector('svg');
+    if (icon) {
+      icon.style.width = '18px';
+      icon.style.height = '18px';
+      icon.style.display = 'block';
+    }
+  }
+
+  /**
+   * 收起态退出钮的位置：与控制条里的退出按钮同一个角。
+   *
+   * 窄屏（≤380px）时控制条的 padding 变了（`12px 10px 8px`），
+   * 按钮必须跟着换位置，否则窄屏下它跟退出按钮错开一截。
+   */
+  private applyCollapsedExitPosition() {
+    const button = this.elements?.collapsedExit;
+    if (!button) {
+      return;
+    }
+
+    const narrow = this.isNarrowViewport();
+    button.style.right = `${narrow ? COLLAPSED_EXIT_RIGHT_NARROW : COLLAPSED_EXIT_RIGHT}px`;
+    button.style.bottom = `${narrow ? COLLAPSED_EXIT_BOTTOM_NARROW : COLLAPSED_EXIT_BOTTOM}px`;
+  }
+
+  private isNarrowViewport(): boolean {
+    // jsdom 没有 matchMedia（测试环境里一律按宽屏算）。
+    if (typeof window.matchMedia !== 'function') {
+      return false;
+    }
+
+    try {
+      return window.matchMedia(`(max-width: ${CONTROL_BAR_BREAKPOINTS.compact}px)`).matches;
+    } catch {
+      return false;
+    }
+  }
+
+  private prefersReducedMotion(): boolean {
+    if (typeof window.matchMedia !== 'function') {
+      return false;
+    }
+
+    try {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 收起态退出钮的过渡。
+   *
+   * 与控制条 `.bar` 的做法一致：
+   *   - 显示时：过渡列表里**没有** visibility → 它立刻可见（只是淡入）；
+   *   - 隐藏时：visibility 延后到淡出结束 → 淡出动画不会整个消失。
+   *
+   * 「降低动效」时一律不要过渡。
+   */
+  private collapsedExitTransition(visible: boolean): string {
+    if (this.prefersReducedMotion()) {
+      return 'none';
+    }
+
+    return visible
+      ? `opacity ${COLLAPSED_EXIT_TRANSITION_MS}ms ease`
+      : `opacity ${COLLAPSED_EXIT_TRANSITION_MS}ms ease, visibility 0s linear ${COLLAPSED_EXIT_TRANSITION_MS}ms`;
+  }
+
+  /**
+   * 收起态退出钮的显隐。
+   *
+   * @param visible
+   *   true  = 控制条收着，退出钮顶上来（它必须**永远在**）；
+   *   false = 控制条在，退出钮让位（两个退出钮不能同时在）。
+   */
+  private setCollapsedExitVisible(visible: boolean) {
+    const button = this.elements?.collapsedExit;
+    if (!button || this.collapsedExitShown === visible) {
+      return;
+    }
+    this.collapsedExitShown = visible;
+
+    if (visible) {
+      // 焦点序列：可见时它必须能被 Tab 到（键盘用户要能不靠鼠标退出全屏）。
+      button.removeAttribute('tabindex');
+      button.style.transition = this.collapsedExitTransition(true);
+      button.style.visibility = 'visible';
+      button.style.pointerEvents = 'auto';
+      this.syncCollapsedExitOpacity();
+      return;
+    }
+
+    // 藏起来：移出焦点序列 + 不可点。
+    button.tabIndex = -1;
+    button.style.pointerEvents = 'none';
+    button.style.transition = this.collapsedExitTransition(false);
+    button.style.opacity = '0';
+    button.style.visibility = 'hidden';
+    // hover 状态要清掉：按钮藏起来时浏览器不一定派发 mouseleave，
+    // 留着这个陈旧标记会让它下次出现时莫名是全不透明的。
+    this.collapsedExitHovered = false;
+  }
+
+  /** 常态低透明度，hover 时恢复。 */
+  private syncCollapsedExitOpacity() {
+    const button = this.elements?.collapsedExit;
+    if (!button || this.collapsedExitShown !== true) {
+      return;
+    }
+
+    button.style.opacity = this.collapsedExitHovered
+      ? '1'
+      : String(COLLAPSED_EXIT_IDLE_OPACITY);
+  }
+
+  /**
+   * 焦点落到收起态的退出钮上 → 完整控制条回来，退出钮让位。
+   *
+   * ⚠️ 焦点必须**交接**给控制条里同一个动作的按钮（退出）：
+   * 收起态的退出钮马上要藏起来，焦点若还留在它身上，浏览器会把它扔回 body ——
+   * 键盘用户于是凭空丢失位置（Tab 要从头再来一遍）。
+   *
+   * ⚠️ 两侧的显隐必须**对齐**：controlsStyles.ts 里有
+   * `:host(:focus-within) .bar { …可见… }` —— 焦点一进 shadow root，
+   * 控制条就会回来；退出钮的显隐是我们自己的状态，不对齐的话
+   * 两个退出钮会同时出现在屏幕右下角。
+   */
+  private promoteCollapsedExit() {
+    const elements = this.elements;
+    if (!elements) {
+      return;
+    }
+
+    // 控制条先回来（.bar--visible 让 visibility 立刻变回 visible，
+    // 里面的按钮这才重新可聚焦）。
+    this.show({ deferCollapseHide: true });
+
+    // 焦点交接给控制条里的退出按钮（同一个动作、同一个位置）。
+    elements.exitButton.focus({ preventScroll: true });
+
+    this.setCollapsedExitVisible(false);
   }
 
   private cancelHide() {
@@ -1093,6 +1474,12 @@ export class FullscreenControls {
       this.elements?.root.classList.remove('bar--visible');
       // 控制条藏了，字幕立刻回到它原本的位置。
       this.setSubtitleOffset(0);
+      // 控制条收起了 → 退出入口必须**顶上来**。
+      //
+      // 这正是「永远在的退出入口」：控制条藏起来之后，屏幕上仍然留着
+      // 一枚扩展风格的按钮 —— 用户既知道「这是扩展的全屏」，
+      // 也不需要先知道「鼠标动一动能把控制条唤回来」才能找到出口。
+      this.setCollapsedExitVisible(true);
     }, IDLE_HIDE_DELAY);
   }
 
@@ -1131,15 +1518,18 @@ export class FullscreenControls {
     window.removeEventListener('pointermove', this.boundPointerMove, true);
     window.removeEventListener('pointerup', this.boundHandlePointerUp, true);
     window.removeEventListener('keydown', this.boundHandleKeyWake, true);
+    window.removeEventListener('resize', this.boundApplyCollapsedExitPosition);
+    this.reducedMotionQuery?.removeEventListener('change', this.boundHandleMotionPreferenceChange);
+    this.reducedMotionQuery = null;
     document.removeEventListener('pointerdown', this.boundHandleDocumentPointerDown, true);
 
     this.video.removeEventListener('timeupdate', this.syncProgress);
     this.video.removeEventListener('durationchange', this.syncProgress);
     this.video.removeEventListener('loadedmetadata', this.syncProgress);
-    this.video.removeEventListener('seeked', this.handleSeeked);
-    this.video.removeEventListener('play', this.syncPlayState);
-    this.video.removeEventListener('pause', this.syncPlayState);
-    this.video.removeEventListener('ratechange', this.syncSpeed);
+    this.video.removeEventListener('seeked', this.boundHandleSeeked);
+    this.video.removeEventListener('play', this.boundHandlePlayStateChange);
+    this.video.removeEventListener('pause', this.boundHandlePlayStateChange);
+    this.video.removeEventListener('ratechange', this.boundHandleRateChange);
     this.video.removeEventListener('volumechange', this.syncVolume);
     // 摘干净：unmount 后视频要交回站点，我们的点击切换必须一起走，
     // 否则退出全屏后站点自己的点击监听器会和这个残留监听器双重切换。

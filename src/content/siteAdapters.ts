@@ -22,6 +22,29 @@ export interface SiteAdapter {
    * （包括 hover 预览、推荐卡片）都拿到主播放器豁免。
    */
   mainSelectors: string[];
+  /**
+   * 「站点在 **keyup** 上处理这些键」—— 键名（`event.key` 的值：
+   * 空格是 `' '`，字母键是小写，方向键是 `'ArrowLeft'`）。
+   *
+   * 为什么需要它（这是「站点用 keyup 处理按键 → 快捷键彻底失灵」的根因）：
+   * 扩展在 window 捕获阶段拦下 keydown（preventDefault + stopImmediatePropagation），
+   * 页面就**收不到 keydown** —— 但 keyup 是**另一次事件派发**，页面照收不误。
+   * 于是对「在 keyup 上处理按键」的站点，我们拦掉的不是一次按键，而是**半截按键**：
+   * 它只收到 keyup，于是它的处理照样跑一遍。
+   * 我们的「切播放/暂停」在 keydown 跑一次、站点的「切播放/暂停」在 keyup 再跑一次
+   * = 一次按键两次切换 = **净效果为零**。
+   * 用户看到的现象是：视频闪一下又回到原状，页面也不滚动 ——
+   * 唯一的结论是「扩展坏了 / 空格被吃了」。
+   *
+   * 命中时 **keydown 与 keyup 一起放行**，让站点拿到完整的一次按键。
+   *
+   * ⚠️ 只列**站点在 keyup 上处理**的键：
+   * 站点在 keydown 上处理的键，我们抢在前面就等于替它做了 ——
+   * 站点根本收不到，不存在双重执行，不需要让路。
+   * （YouTube 的方向键与全屏键就属于这一类：列进来会让扩展在 YouTube 上
+   *   彻底失去快进与网页全屏这两项主力功能。）
+   */
+  nativeKeyHandling: string[];
 }
 
 /**
@@ -48,6 +71,16 @@ const adapters: Array<{
     adapter: {
       selectors: ['video.html5-main-video', '.html5-video-player video', 'video'],
       mainSelectors: ['video.html5-main-video', '.html5-video-player video'],
+      // YouTube 的播放/暂停有**完整**的原生实现，而它的实现挂在 **keyup** 上。
+      //
+      // 我们在 keydown 拦截切换一次、它的 keyup 再切换一次 = 一次空格两次切换
+      // = 净效果为零（暂停停不住、或暂停后不放）——
+      // stopImmediatePropagation 挡不住跨事件的第二次。
+      //
+      // 所以这两个键整体放行给站点原生处理（keydown 与 keyup 一起放），
+      // 让站点拿到完整的一次按键。用户若把播放/暂停改绑到别的键，
+      // 那个键不受这里影响（不在列表里就是我们的）。
+      nativeKeyHandling: [' ', 'k'],
     },
   },
   {
@@ -55,6 +88,9 @@ const adapters: Array<{
     adapter: {
       selectors: ['video.bpx-player-video-wrap-video', '.bilibili-player-video video', 'video'],
       mainSelectors: ['video.bpx-player-video-wrap-video', '.bilibili-player-video video'],
+      // 没有可核实的「站点在 keyup 上处理哪些键」的证据 → 不列。
+      // 宁可少让路（让路 = 扩展在那个键上失效），也不要瞎让。
+      nativeKeyHandling: [],
     },
   },
   {
@@ -75,6 +111,7 @@ const adapters: Array<{
     adapter: {
       selectors: ['.iq-player-cont video', 'video'],
       mainSelectors: ['.iq-player-cont video'],
+      nativeKeyHandling: [],
     },
   },
   {
@@ -88,6 +125,7 @@ const adapters: Array<{
     adapter: {
       selectors: ['video.tx-video-player-video', '.tx-video-player video', '#vod-focus-play-wrap video', 'video'],
       mainSelectors: ['video.tx-video-player-video', '.tx-video-player video', '#vod-focus-play-wrap video'],
+      nativeKeyHandling: [],
     },
   },
   {
@@ -96,6 +134,7 @@ const adapters: Array<{
     adapter: {
       selectors: ['video.yk-video-player-video', '.youku-player video', 'video'],
       mainSelectors: ['video.yk-video-player-video', '.youku-player video'],
+      nativeKeyHandling: [],
     },
   },
   {
@@ -104,6 +143,7 @@ const adapters: Array<{
     adapter: {
       selectors: ['video.mg-video-player-video', '.mg-video-player video', 'video'],
       mainSelectors: ['video.mg-video-player-video', '.mg-video-player video'],
+      nativeKeyHandling: [],
     },
   },
   {
@@ -111,6 +151,7 @@ const adapters: Array<{
     adapter: {
       selectors: ['video'],
       mainSelectors: [],
+      nativeKeyHandling: [],
     },
   },
 ];
@@ -118,6 +159,8 @@ const adapters: Array<{
 const genericAdapter: SiteAdapter = {
   selectors: ['video'],
   mainSelectors: [],
+  // 通用站点：没有可核实的「站点自己处理哪些键」的证据 → 不让路。
+  nativeKeyHandling: [],
 };
 
 export const getSiteAdapter = (hostname: string): SiteAdapter =>

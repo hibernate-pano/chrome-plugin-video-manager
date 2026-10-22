@@ -13,6 +13,8 @@
  * 判据只用 DOM 关系与几何位置——这两件事对所有"贴在视频旁边的浮层"都成立。
  */
 
+import { probeClosest } from '../shared/domMatches';
+
 export interface OverlayLayer {
   element: HTMLElement;
   /**
@@ -326,9 +328,19 @@ const isOverlayCandidate = (
   //
   // 早先提示贴左上角时侥幸没触发（重心在视频上半部分，不满足重心判据），
   // 所以这个洞一直没人看见 —— 直到它被挪到左下角。
-  if (element.closest(
+  //
+  // ⚠️ 页面可以把 `Element.prototype.closest` 换成会抛异常的版本。
+  // 这里抛了会一路冒到 `enter()` —— **网页全屏整个进不去**
+  // （用户按 f 什么反应也没有）。
+  //
+  // 判不出来时**保守**处理：当成「是我们自己的浮层」→ 不搬。
+  // 宁可少搬一层字幕，也不能把控制条或全屏背板搬进画面里
+  // （背板被搬走 = 画面没了）。
+  const ownOverlayProbe = probeClosest(
+    element,
     '#vsc-page-fullscreen-overlay, #vsc-controls, #vsc-speed-toast, #vsc-takeover-notice',
-  ) !== null) {
+  );
+  if (ownOverlayProbe !== 'absent') {
     return null;
   }
 

@@ -14,6 +14,17 @@ export default defineConfig({
   //   把它列进 testIgnore，守卫就与"这是不是临时脚本"无关了。
   testIgnore: ['basic.spec.js', '**/_*.spec.js', '**/tmp-*.spec.js'],
   fullyParallel: false,
+  // 每个 worker 都会拉起一个**完整的 Chromium**。默认的「CPU 数的一半」
+  // （12 核的机器上是 6 个）会把 CPU 抢光 —— 而这套用例里有大量与时序有关
+  // 的断言（等动画结束、等跨进程的一问一答回来），机器一忙就会随机翻车。
+  //
+  // 实测（本地 12 核、机器本身还有别的负载时）：6 个 worker 时每次全量跑
+  // 都有 1 条用例随机失败，失败的**位置每次都不一样**（帧归属那条、
+  // 控制条宽度那条、接管提示那条轮着来）—— 那不是回归，是抢不到 CPU。
+  //
+  // 2 个 worker 是「够快又不打架」的值：全量跑约 3 分钟，而 CI（4 核）
+  // 上也是 2 个。
+  workers: 2,
   reporter: 'line',
   use: {
     baseURL: 'http://127.0.0.1:4173',

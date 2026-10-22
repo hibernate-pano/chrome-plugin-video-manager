@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SHORTCUT_DEFINITIONS } from '../shared/types';
-import { createChromeMock } from './options-test-env';
+import { DEFAULT_SHORTCUTS, SHORTCUT_DEFINITIONS } from '../shared/types';
+import { createChromeMock, flush } from './options-test-env';
 
 /**
  * 设置页无障碍：每个快捷键输入框必须有一个非空的无障碍名字，
@@ -121,5 +121,205 @@ describe('options page identity', () => {
     await render();
 
     expect(document.title).toBe('Video Speed Controller — 全屏与快捷键');
+  });
+});
+
+/**
+ * 错误反馈必须**能定位到出错的那一行**。
+ *
+ * 背景：设置页原来只有页面**最底部**那一行状态栏。出错的那一行在最上面，
+ * 于是：
+ * - 读屏用户听到一句「有按键被重复绑定」，却不知道是**哪一行**、
+ *   跟**谁**撞了；
+ * - 视觉用户也可能隔着十几屏才看见那一句。
+ *
+ * 而且那句话里**没有动作名**（「有按键被重复绑定」而不是
+ * 「『加速』与『减速』绑定了同一个键」）—— 就算找到了那一行，
+ * 也不知道该改哪一个。
+ *
+ * 现在的约定：
+ * 1. 出错的输入框标 `aria-invalid="true"`，并用 `aria-describedby`
+ *    指向**就地渲染**的那一句；
+ * 2. 底部状态栏也带动作名；
+ * 3. 校验失败时焦点挪到**第一个**出错的输入框。
+ */
+describe('设置页的冲突反馈要能定位到行', () => {
+  const rowInputs = (root: HTMLElement) =>
+    Array.from(root.querySelectorAll('.vsc__key')) as HTMLInputElement[];
+
+  const inputOf = (root: HTMLElement, id: keyof typeof DEFAULT_SHORTCUTS): HTMLInputElement => {
+    const index = SHORTCUT_DEFINITIONS.findIndex((definition) => definition.id === id);
+    return rowInputs(root)[index]!;
+  };
+
+  const press = (input: HTMLInputElement, key: string) => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  };
+
+  const statusOf = (root: HTMLElement) => root.querySelector('#status')?.textContent?.trim() ?? '';
+
+  it('冲突的输入框标成 aria-invalid，并指向就地渲染的那一句', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'increaseSpeed'), 'k');
+    press(inputOf(root, 'decreaseSpeed'), 'k');
+
+    const input = inputOf(root, 'increaseSpeed');
+    expect(input.getAttribute('aria-invalid'), '出错的输入框必须被标成无效').toBe('true');
+
+    // ⚠️ aria-describedby 现在是**两个** id（行说明 + 就地错误），不是一个。
+    // 之前只有错误句：那一行下面「这个动作做什么」的说明对读屏用户是隐形的
+    // —— 视觉用户一眼看到了，聚焦输入框时却听不到。
+    const describedBy = (input.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
+    expect(describedBy.length, 'aria-describedby 必须同时指向行说明与错误句').toBeGreaterThan(1);
+
+    // 行说明永远在 referenced 列表里。
+    const descId = `desc-increaseSpeed`;
+    expect(describedBy, '行说明必须被引用').toContain(descId);
+    const descNode = document.getElementById(descId);
+    expect(descNode, '行说明节点必须存在').not.toBeNull();
+    expect(descNode!.textContent).toContain('加快播放速度');
+
+    // 错误句也在里面，且指向**真实存在**的节点。
+    const errorId = 'error-increaseSpeed';
+    expect(describedBy, '错误句必须被引用').toContain(errorId);
+    const errorNode = document.getElementById(errorId);
+    expect(errorNode, 'aria-describedby 指向的节点必须存在').not.toBeNull();
+    // 错误就地渲染在**那一行**里，不是页面底部。
+    expect(
+      input.closest('.vsc__row')?.contains(errorNode!),
+      '错误必须渲染在出错的那一行里',
+    ).toBe(true);
+    // 而且要指名道姓：跟谁撞了。
+    expect(errorNode!.textContent).toContain('减速');
+  });
+
+  it('没有错误时，行说明仍然被读屏引用（它是正文，不是错误信息）', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    const input = inputOf(root, 'increaseSpeed');
+    const describedBy = (input.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
+    expect(describedBy, '行说明必须始终被引用').toContain('desc-increaseSpeed');
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('两行撞了同一个键，两行都被标出来', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'increaseSpeed'), 'k');
+    press(inputOf(root, 'decreaseSpeed'), 'k');
+
+    expect(inputOf(root, 'increaseSpeed').getAttribute('aria-invalid')).toBe('true');
+    expect(inputOf(root, 'decreaseSpeed').getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('底部状态栏带上动作名（读屏用户要知道改哪两行）', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'increaseSpeed'), 'k');
+    press(inputOf(root, 'decreaseSpeed'), 'k');
+
+    const status = statusOf(root);
+    expect(status).toContain('加速');
+    expect(status).toContain('减速');
+  });
+
+  it('校验失败时焦点挪到第一个出错的输入框', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'increaseSpeed'), 'k');
+    press(inputOf(root, 'decreaseSpeed'), 'k');
+
+    // 用户直接点「保存」（还没改键，所以没触发过逐行错误）。
+    (root.querySelector('#save') as HTMLButtonElement).click();
+    await flush();
+
+    expect(document.activeElement, '焦点必须落在第一个出错的输入框上').toBe(
+      inputOf(root, 'increaseSpeed'),
+    );
+  });
+
+  it('冲突改掉之后，红框与就地错误一起消失', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'increaseSpeed'), 'k');
+    press(inputOf(root, 'decreaseSpeed'), 'k');
+    expect(inputOf(root, 'increaseSpeed').getAttribute('aria-invalid')).toBe('true');
+
+    // 把其中一行改掉 → 冲突消失。
+    press(inputOf(root, 'decreaseSpeed'), 'j');
+
+    expect(inputOf(root, 'increaseSpeed').getAttribute('aria-invalid')).toBeNull();
+    // ⚠️ aria-describedby **不会**整个消失：行说明（这一行在做什么）
+    // 是无条件存在的正文，只有错误句被摘掉。
+    const describedBy = (inputOf(root, 'increaseSpeed').getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter(Boolean);
+    expect(describedBy).toContain('desc-increaseSpeed');
+    expect(describedBy).not.toContain('error-increaseSpeed');
+    const errorNode = document.getElementById('error-increaseSpeed');
+    expect(errorNode?.textContent?.trim()).toBe('');
+  });
+
+  it('用户正在输入框里打字时不抢焦点', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    const input = inputOf(root, 'increaseSpeed');
+    input.focus();
+    press(inputOf(root, 'decreaseSpeed'), 'k');
+    press(input, 'k');
+
+    // 焦点还在他正在编辑的那一格 —— 抢走就等于「打不了字」。
+    expect(document.activeElement).toBe(input);
+  });
+});
+
+/**
+ * 引导的失败次数与冷却状态必须**看得见**。
+ *
+ * 背景：冷却期原本是**完全静默**的 —— 引导不出现，界面上一个字都没有。
+ * 用户只能猜「为什么它不出现」，而引导是这个产品唯一的入口。
+ */
+describe('设置页：引导的状态要看得见', () => {
+  const FAILED_ATTEMPTS_KEY = 'vsc-first-run-hint-failed-attempts';
+  const COOLDOWN_KEY = 'vsc-first-run-hint-cooldown-until';
+
+  const hintStateOf = (root: HTMLElement) =>
+    root.querySelector('#hint-state')?.textContent?.trim() ?? '';
+
+  it('冷却中：显示什么时候会再次出现', async () => {
+    const { render } = createChromeMock({
+      local: { [COOLDOWN_KEY]: Date.now() + 60 * 60 * 1000 },
+    });
+    const root = await render();
+    await flush();
+
+    expect(hintStateOf(root)).toContain('冷却中');
+  });
+
+  it('有过失败：显示已经失败几次、还剩几次', async () => {
+    const { render } = createChromeMock({ local: { [FAILED_ATTEMPTS_KEY]: 2 } });
+    const root = await render();
+    await flush();
+
+    const note = hintStateOf(root);
+    expect(note).toContain('2');
+    // 还剩几次也要说清楚 —— 用户不知道还差几次就会进冷却。
+    expect(note).toMatch(/1/);
+  });
+
+  it('从来没有失败过：这一行是空的（不占版面）', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+    await flush();
+
+    expect(hintStateOf(root)).toBe('');
   });
 });

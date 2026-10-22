@@ -298,12 +298,21 @@ try {
         page.on('pageerror', (e) => errors.push(e.message.slice(0, 120)));
         await page.goto(BASE + '/options.html', { waitUntil: 'networkidle' });
         await page.waitForTimeout(400);
-        const rows = await page.evaluate(() => document.querySelectorAll('.vsc__row').length);
-        if (rows < 7) throw new Error('options page did not render 7 rows: ' + errors.join('; '));
+        // ⚠️ 必须分别数两处：`.vsc__row` 一共 8 行（7 个可改键的动作 +
+        // 「重新显示使用引导」那一行），而**可改键的动作**是 7 行 ——
+        // 两者混在一起数，改键区少渲染一行也照样「通过」。
+        const rows = await page.evaluate(() => ({
+          shortcutRows: document.querySelectorAll('#rows .vsc__row').length,
+          allRows: document.querySelectorAll('.vsc__row').length,
+          resetHint: document.querySelectorAll('#reset-hint').length,
+        }));
+        if (rows.shortcutRows !== 7 || rows.resetHint !== 1) {
+          throw new Error('options page did not render 7 shortcut rows + reset hint: ' + JSON.stringify(rows) + ' ' + errors.join('; '));
+        }
         // 标题放**左侧空白**：bottom-center 会正好盖住「Restore defaults」。
         await addCaption(page, captions.options, 'top-left');
         await page.screenshot({ path: outPath('store-options', locale) });
-        console.log(`${label('store-options', locale)} done (rows=${rows}, locale=${locale})`);
+        console.log(`${label('store-options', locale)} done (shortcutRows=${rows.shortcutRows}, allRows=${rows.allRows}, locale=${locale})`);
       } finally {
         await context.close();
       }

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildGuideText, createFirstRunHint, FirstRunHint } from './firstRunHint';
-import { DEFAULT_SHORTCUTS, type ShortcutSettings } from '../shared/types';
+import { buildGuideText, createFirstRunHint, FirstRunHint, type HintClaimBroker } from './firstRunHint';
+import { NOTICE_CARD_TOKENS } from './runtimeStyles';
+import { VideoRegistry } from './videoRegistry';
+import { DEFAULT_SHORTCUTS, FIRST_RUN_HINT_KEY, type ShortcutSettings } from '../shared/types';
 
 // jsdom 的 location.hostname 是 [LegacyUnforgeable]，无法重定义；
 // 这里只把"hostname 从哪来"换成可变变量，选择器链仍走真实的 siteAdapters。
@@ -12,12 +14,36 @@ vi.mock('./siteAdapters', async (importOriginal) => {
   return { ...actual, getSiteAdapter: () => actual.getSiteAdapter(adapterHost.hostname) };
 });
 
+/**
+ * 把「我是不是顶层文档」永远答成 false —— 也就是**嵌在 iframe 里的那个 frame**。
+ *
+ * ⚠️ jsdom 的 `window.top` 是 non-configurable 的（改不了），所以只能把
+ * `isTopDocument` 换掉 —— 而那正是「只有顶层才能弹引导」那条限制的入口。
+ *
+ * 现在引导**不再**问这个问题（视频在哪个 frame，引导就该在哪个 frame 弹），
+ * 所以这个 mock 只是**回归守卫**：哪天有人又把顶层限制加回来，
+ * 「iframe 里的 frame 也能弹引导」那条用例会立刻变红。
+ */
+vi.mock('./frameScope', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./frameScope')>();
+  return { ...actual, isTopDocument: () => false };
+});
+
 const HINT_ID = 'vsc-first-run-hint';
 
 /** 提示出现的时间点（播放满 2.5 秒）。 */
 const WATCH_DELAY = 2500;
-/** 「用户读过了」的判据时长：提示出现后还要再等这么久。 */
-const READ_DELAY = 2000;
+/**
+ * 「用户读过了」的判据时长：提示出现后还要再等这么久。
+ *
+ * ⚠️ 它**按行数**算：完整版引导是 4 行（两行动作 + 工具栏 + 去哪儿改绑），
+ * 每行 1000ms → 4000ms。精简版只有 2 行 → 2000ms。
+ *
+ * 原来这里是个常量 2000ms（够读完两行短句），而完整版有 4 行 ——
+ * 计时器一满就落盘「已展示」，此后再也不出现，于是「读过」的判据
+ * 与用户实际要读的字数完全对不上。
+ */
+const READ_DELAY = 4000;
 /** flag 落盘的时间点：出现 + 读完。 */
 const SHOWN_AT = WATCH_DELAY + READ_DELAY;
 
@@ -100,6 +126,48 @@ const hintNode = () => document.getElementById(HINT_ID);
 const isVisible = () => hintNode()?.classList.contains('vsc-visible') ?? false;
 
 /**
+ * 把 CSS 的 `padding` **简写**展开成四条长写值。
+ *
+ * ⚠️ 为什么测试里要自己展开：断言必须与 **token** 对得上，
+ * 而 token 里写的是简写（'10px 16px'）。把 '10px' / '16px' 写死在断言里的话，
+ * token 一改它就红 —— 而红的时候看不出该改哪里（是 token 变了，
+ * 还是断言过期了？）。从 token 推导就没有这个歧义。
+ */
+const expandPadding = (shorthand: string) => {
+  const parts = shorthand.trim().split(/\s+/);
+  const [top, right = top, bottom = top, left = right] = parts;
+  return { top, right, bottom, left };
+};
+
+/**
+ * 一把测试用的认领锁：**跨实例共享**，模拟「同一个标签页里的两个 frame」。
+ *
+ * ⚠️ 生产实现靠扩展存储（chrome.storage.local）跨 frame 协调；jsdom 里既没有
+ * chrome 也没有第二个 document，所以这里用一把内存锁把两个运行时接起来。
+ */
+const makeTestClaimBroker = () => {
+  let owner: string | null = null;
+
+  return {
+    start: () => {},
+    tryClaim: (candidate: string) => {
+      if (owner !== null) {
+        return false;
+      }
+
+      owner = candidate;
+      return true;
+    },
+    release: (candidate: string) => {
+      if (owner === candidate) {
+        owner = null;
+      }
+    },
+    dispose: () => {},
+  };
+};
+
+/**
  * 等「能不能提示」这个异步判断落地。
  *
  * 判定要读两次异步存储（展示过没有 + 失败次数），所以要排空几轮微任务。
@@ -145,14 +213,26 @@ describe('buildGuideText', () => {
     // 所以显示成大写 F 会教用户按一个不生效的键。
     expect(text).toContain('f');
     expect(text).not.toContain('F');
-    expect(text).toContain('= / -');
+    // ⚠️ 调速那行必须带**方向**：原来只写「= / -」，
+    // 用户分不清哪个是加速、哪个是减速。
+    expect(text).toContain('= 加快');
+    expect(text).toContain('- 减慢');
     // 断言动作名本身：i18n 键名写错时会把**键名**渲染给用户（曾经就把
     // "fullscreen" 当动作名显示了出来），只断言键位是抓不到的。
     expect(text).toContain('网页全屏');
     expect(text).not.toContain('fullscreen');
     expect(text).toContain('调速');
-    // 动作名与键之间要有可见的间隔符：「网页全屏 · f」而不是「网页全屏f」。
+    // 动作名与键之间要有可见的间隔符：「调速 · …」而不是「调速…」。
     expect(text).toContain('·');
+  });
+
+  it('says the fullscreen key **toggles**（设置页与引导对同一个键的说法必须一致）', () => {
+    const text = buildGuideText(createShortcuts()) ?? '';
+
+    // 设置页原来写的是「进入或退出网页全屏」，引导原来只写「网页全屏」——
+    // 用户读到那儿根本不知道按下去会发生什么。
+    expect(text).toContain('切换网页全屏');
+    expect(text).toContain('按 f 切换网页全屏');
   });
 
   it('renders the user\'s own bindings instead of the defaults', () => {
@@ -161,9 +241,10 @@ describe('buildGuideText', () => {
     );
 
     // 照默认值写死的提示会教用户按一个已经改掉的键。
-    expect(text).toContain('q');
-    expect(text).toContain('] / [');
-    expect(text).not.toContain('= / -');
+    expect(text).toContain('按 q 切换网页全屏');
+    expect(text).toContain('] 加快');
+    expect(text).toContain('[ 减慢');
+    expect(text).not.toContain('= 加快');
   });
 
   it('omits the speed line when only one of the two step keys is bound', () => {
@@ -216,17 +297,20 @@ describe('buildGuideText', () => {
   });
 
   /**
-   * 英文引导必须**成句**。
+   * 英文引导的第二行必须与第一行**同构**：「动作名 · 键」。
    *
-   * 旧文案是 "$1 / $2 speed"，拼出来是 "= / - speed" —— 三个词不成句，
-   * 英文用户读不出这是「用这两个键调速」。
+   * 旧文案是 "$1 / $2 to change speed"，拼出来是 "= / - to change speed" ——
+   * 半句话：键名甩在前面，句子从中间才开始。而同一份文案的第一行是
+   * "Page fullscreen · f"，两行结构不一致，用户读第二行时得重新学一遍语法。
    */
-  it('英文引导读起来是一句话', () => {
+  it('英文引导的第二行与第一行同构：动作名 · 键', () => {
     withEnglishMessages(() => {
       const text = buildGuideText(createShortcuts()) ?? '';
 
-      expect(text).toContain('= / - to change speed');
-      expect(text).not.toContain('= / - speed');
+      expect(text).toContain('Press f to toggle page fullscreen');
+      expect(text).toContain('Speed · = faster / - slower');
+      // 旧写法：键名甩在前面，句子从中间开始。
+      expect(text).not.toContain('= / - to change speed');
       expect(text).not.toContain('$1');
       expect(text).not.toContain('$2');
     });
@@ -247,7 +331,7 @@ describe('buildGuideText', () => {
     (globalThis as Record<string, unknown>).chrome = {
       i18n: {
         getMessage: (_key: string, substitutions?: string[]) =>
-          '$1 / $2 调速'
+          '调速 · $1 加快 / $2 减慢'
             .replace('$1', substitutions?.[0] ?? '')
             .replace('$2', substitutions?.[1] ?? ''),
       },
@@ -262,7 +346,7 @@ describe('buildGuideText', () => {
 
     try {
       const text = buildGuideText(createShortcuts());
-      expect(text).toContain('= / -');
+      expect(text).toContain('= 加快');
       expect(text).not.toContain('$1');
       expect(text).not.toContain('{up}');
     } finally {
@@ -276,7 +360,7 @@ describe('FirstRunHint', () => {
   let wasShown: Mock<[], Promise<boolean>>;
   let markShown: Mock<[], Promise<void>>;
   let recordFailedAttempt: Mock<[], Promise<void>>;
-  let tooManyFailedAttempts: Mock<[], Promise<boolean>>;
+  let isInCooldown: Mock<[], Promise<boolean>>;
   let hint: FirstRunHint;
 
   const start = async (video: HTMLVideoElement) => {
@@ -285,7 +369,7 @@ describe('FirstRunHint', () => {
       wasShown,
       markShown,
       recordFailedAttempt,
-      tooManyFailedAttempts,
+      isInCooldown,
     });
     hint.start();
     await settle();
@@ -300,7 +384,7 @@ describe('FirstRunHint', () => {
     wasShown = vi.fn(async (): Promise<boolean> => false);
     markShown = vi.fn(async (): Promise<void> => {});
     recordFailedAttempt = vi.fn(async (): Promise<void> => {});
-    tooManyFailedAttempts = vi.fn(async (): Promise<boolean> => false);
+    isInCooldown = vi.fn(async (): Promise<boolean> => false);
   });
 
   afterEach(() => {
@@ -434,14 +518,18 @@ describe('FirstRunHint', () => {
     expect(isVisible()).toBe(false);
   });
 
-  it('disappears on a click too', async () => {
+  it('页面上的误点在阅读窗口之内**只算忽略**（连提示都不关）', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await start(video);
     vi.advanceTimersByTime(2600);
+    expect(isVisible()).toBe(true);
 
+    // ⚠️ 用户刚看到提示冒出来，随手点了页面（点视频、点按钮）。
+    // 原来这里会把提示关掉**并记一次失败** —— 三次误点就闭嘴一星期，
+    // 而引导是全键盘界面下唯一的入口。
     document.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-    expect(isVisible()).toBe(false);
+    expect(isVisible(), '阅读窗口之内的误点不该把提示关掉').toBe(true);
   });
 
   it('fades out on its own instead of staying on screen', async () => {
@@ -611,6 +699,55 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     expect(markShown).toHaveBeenCalledTimes(1);
   });
 
+  it('页面把 matches 改坏时：判定退化，而不是让这一轮引导崩掉', async () => {
+    // ⚠️ 页面可以把 `Element.prototype.matches` 换成会抛异常的版本。
+    //
+    // 「站点有没有点名它是主播放器」这条判据在装饰性判定的**核心路径**上
+    // （每次判定都要先问一遍），它一抛，`handlePlay` 就崩 ——
+    // 计时器根本没排上，引导永远不出现，而用户什么都看不出来。
+    //
+    // 所以它走的是**同一份**带 try/catch 的匹配器：判不出来就当「不匹配」
+    // （只少一条豁免，不崩）。这条用例守的就是那份 try/catch 还在。
+    //
+    // ⚠️ 为什么这条视频**又**是主播放器、**又**带原生 controls：
+    // - 「是主播放器」→ 站点适配器真的有 mainSelectors → `matches` **真的被调到**
+    //   （通用站点的 mainSelectors 是空的，`.some()` 根本不会回调，
+    //   于是那份 try/catch 永远走不到 —— 那样这条用例就成了假守卫）；
+    // - 「带 controls」→ 就算主播放器豁免因退化而失效，它仍然**不是装饰物** →
+    //   引导照样该出现。
+    // 于是「退化」与「抛异常」的结果**不一样**：退化 → 引导出现；
+    // 抛异常 → handlePlay 崩掉 → 引导永远不出现。
+    adapterHost.hostname = 'www.youtube.com';
+
+    const player = makeVisible(createVideo());
+    player.className = 'html5-main-video';
+    player.setAttribute('autoplay', '');
+    player.setAttribute('controls', '');
+    document.body.appendChild(player);
+    await create();
+
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, 'matches');
+    Object.defineProperty(Element.prototype, 'matches', {
+      value: () => {
+        throw new Error('页面把 matches 改坏了');
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      player.dispatchEvent(new Event('play', { bubbles: true }));
+      vi.advanceTimersByTime(SHOWN_AT);
+
+      expect(isVisible(), '判定退化之后，引导照样要为内容视频出现').toBe(true);
+      expect(markShown).toHaveBeenCalledTimes(1);
+    } finally {
+      if (original) {
+        Object.defineProperty(Element.prototype, 'matches', original);
+      }
+    }
+  });
+
   it('用户亲手点过预览之后，它就不再是「装饰的」—— 引导可以出现', async () => {
     // 用户点了 = 用户主动选了它 = 那可能正是他要看的视频。
     // 这条视频仍然是 autoplay + 无 controls（形状没变），变的是「用户选过」。
@@ -693,9 +830,16 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     expect(markShown).not.toHaveBeenCalled();
   });
 
-  it('「用户选过」只在新鲜期内有效', async () => {
-    // 用户点一下那个吵人的预览（把它暂停）然后继续读文章 ——
-    // 那次点击不该让他接下来半小时都享受「用户选过」的待遇。
+  it('用户碰过的视频**永远**不是装饰物（与 registry 的 wasEverTouched 同一份语义）', async () => {
+    // ⚠️ 「用户碰过」与「用户选过（10 秒窗口）」是**两件事**，不能混：
+    // - 10 秒窗口管的是「**接管**能不能抢空格」—— 抢按键的授权，越短越安全；
+    // - 「是不是装饰物」管的是「站点摆在那儿的装饰」—— 只要用户碰过一次，
+    //   它就不是装饰了，哪怕那次点击只是想把它按停。
+    //
+    // ⚠️ 兜底路径若在这里用短窗口，就会比 registry **更早**地把视频判成装饰物 ——
+    // 于是「接管了（对的），引导却永远不出现（错的）」，
+    // 正是本轮要消灭的那种**相反**结论。详见 firstRunHint.ts 的
+    // isDecorativeAutoplay 里逐条的对照。
     const preview = makeVisible(createDecorativePreview());
     document.body.appendChild(preview);
     await create();
@@ -704,13 +848,13 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
     // 站点把预览暂停了：取消这一次的等待。
     preview.dispatchEvent(new Event('pause', { bubbles: true }));
 
-    // 走过新鲜期（10 秒）之后，站点又让预览自动播 —— 不该再算「用户选过」。
-    vi.advanceTimersByTime(11_000);
+    // 走过任何时间窗之后，站点又让预览自动播 —— 它仍然不是「装饰的」。
+    vi.advanceTimersByTime(60_000);
     preview.dispatchEvent(new Event('play', { bubbles: true }));
-    vi.advanceTimersByTime(2600);
+    vi.advanceTimersByTime(SHOWN_AT);
 
-    expect(isVisible()).toBe(false);
-    expect(markShown).not.toHaveBeenCalled();
+    expect(isVisible()).toBe(true);
+    expect(markShown).toHaveBeenCalledTimes(1);
   });
 
   it('页面伪造的 pointerdown 不能把装饰预览伪装成「用户选过的」', async () => {
@@ -765,7 +909,7 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
   let wasShown: Mock<[], Promise<boolean>>;
   let markShown: Mock<[], Promise<void>>;
   let recordFailedAttempt: Mock<[], Promise<void>>;
-  let tooManyFailedAttempts: Mock<[], Promise<boolean>>;
+  let isInCooldown: Mock<[], Promise<boolean>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -774,7 +918,7 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
       wasShown,
       markShown,
       recordFailedAttempt,
-      tooManyFailedAttempts,
+      isInCooldown,
     });
     hint.start();
     await settle();
@@ -789,7 +933,7 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
     wasShown = vi.fn(async (): Promise<boolean> => false);
     markShown = vi.fn(async (): Promise<void> => {});
     recordFailedAttempt = vi.fn(async (): Promise<void> => {});
-    tooManyFailedAttempts = vi.fn(async (): Promise<boolean> => false);
+    isInCooldown = vi.fn(async (): Promise<boolean> => false);
   });
 
   afterEach(() => {
@@ -848,7 +992,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
   let wasShown: Mock<[], Promise<boolean>>;
   let markShown: Mock<[], Promise<void>>;
   let recordFailedAttempt: Mock<[], Promise<void>>;
-  let tooManyFailedAttempts: Mock<[], Promise<boolean>>;
+  let isInCooldown: Mock<[], Promise<boolean>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -857,7 +1001,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
       wasShown,
       markShown,
       recordFailedAttempt,
-      tooManyFailedAttempts,
+      isInCooldown,
     });
     hint.start();
     await settle();
@@ -872,7 +1016,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     wasShown = vi.fn(async (): Promise<boolean> => false);
     markShown = vi.fn(async (): Promise<void> => {});
     recordFailedAttempt = vi.fn(async (): Promise<void> => {});
-    tooManyFailedAttempts = vi.fn(async (): Promise<boolean> => false);
+    isInCooldown = vi.fn(async (): Promise<boolean> => false);
   });
 
   afterEach(() => {
@@ -894,6 +1038,27 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     expect(markShown).not.toHaveBeenCalled();
   });
 
+  it('阅读窗口按**行数**算：四行引导不能按两行的时间判「读过了」', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // ⚠️ 完整版引导是 4 行（两行动作 + 工具栏 + 去哪儿改绑）。
+    // 原来的判据是**固定两秒**（注释写着「2 秒够读完两行短句」）——
+    // 于是四行字只显示了它一半的时长就落盘「已展示」，
+    // 而用户还在读第三行。
+    vi.advanceTimersByTime(2000);
+    expect(markShown, '四行引导不能按两行的时间判「读过了」').not.toHaveBeenCalled();
+
+    // 再等两秒 → 累计四行的时间 → 落盘。
+    vi.advanceTimersByTime(2100);
+    expect(markShown).toHaveBeenCalledTimes(1);
+  });
+
   it('用户一直没打断：读够之后才写 flag', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
@@ -905,7 +1070,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     expect(markShown).toHaveBeenCalledTimes(1);
   });
 
-  it('用户立刻按了键打断：flag 不写，并记一次失败', async () => {
+  it('阅读窗口之内的误点：不算失败，也不消耗那次机会', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await create();
@@ -914,16 +1079,77 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     vi.advanceTimersByTime(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
-    // 用户马上按了个键 —— 提示被关掉，他多半没读完。
+    // ⚠️ 用户在页面上随手点了一下（点视频、点按钮）。
+    // 原来的判据是「读没读完」——而「读完」要到阅读窗口结束才成立，
+    // 于是**头两秒里的每一次点击都被记成拒绝**：三次误点就闭嘴 7 天。
+    document.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    vi.advanceTimersByTime(READ_DELAY * 2);
+
+    expect(recordFailedAttempt, '误点不是拒绝').not.toHaveBeenCalled();
+  });
+
+  it('点引导自己的「×」：算一次拒绝（用户故意关掉它）', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // ⚠️ 「×」是**唯一**的「我故意关掉它」的正路：
+    // 引导节点是 pointer-events: none + aria-hidden，用户点不到它、
+    // 选不中它，也没有第二个按钮可按 —— 于是拒绝只剩下「误点到页面」这一条路。
+    const close = document.getElementById('vsc-first-run-hint-close') as HTMLButtonElement | null;
+    expect(close, '引导必须有一个真正的关闭按钮').not.toBeNull();
+    close!.click();
+    await settle();
+
+    expect(isVisible()).toBe(false);
+    expect(recordFailedAttempt, '主动关掉引导 = 一次拒绝').toHaveBeenCalledTimes(1);
+  });
+
+  it('随手按一个键不算失败（碰键盘不是拒绝）', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // 用户碰了一下键盘（多半是想用某个快捷键），没读完提示。
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
     vi.advanceTimersByTime(READ_DELAY * 2);
 
     expect(markShown).not.toHaveBeenCalled();
-    expect(recordFailedAttempt).toHaveBeenCalledTimes(1);
+    // ⚠️ 核心断言：**不记失败**。旧契约是「任何一次 keydown 都记一次失败」，
+    // 于是按三下 Shift 就能把引导永久毁掉 —— 而引导是这个产品唯一的可见入口。
+    expect(recordFailedAttempt).not.toHaveBeenCalled();
+  });
+
+  it('按下扩展自己的快捷键算接受：不算失败，并立刻算「已读」', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // 按下扩展自己绑定的键（默认 increaseSpeed = '='）：
+    // 用户接受了这个功能 —— 不是失败，而且他显然已经看到这条引导了。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true }));
+    await settle();
+
+    expect(isVisible()).toBe(false);
+    expect(recordFailedAttempt).not.toHaveBeenCalled();
+    // ⚠️ 提示正显示着时按下扩展的键 → 立刻写「已展示」（用户已经读过了）。
+    expect(markShown).toHaveBeenCalledTimes(1);
   });
 
   it('连续失败超过上限后不再提示，而且 flag 始终不写', async () => {
-    tooManyFailedAttempts = vi.fn(async (): Promise<boolean> => true);
+    isInCooldown = vi.fn(async (): Promise<boolean> => true);
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await create();
@@ -946,7 +1172,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
  * storage.local，超过上限就闭嘴 —— 而「一辈子只提示一次」那个 flag
  * 始终不写。用户清掉本地数据、换台设备，仍会有下一次机会。
  *
- * ⚠️ 前面那些用例都把 recordFailedAttempt / tooManyFailedAttempts 注入成 mock，
+ * ⚠️ 前面那些用例都把 recordFailedAttempt / isInCooldown 注入成 mock，
  * 守的是「类」的行为；这一条守的是「接线」：mock 注入的那条缝
  * 本身也可能被写错（比如把上限写成 0）。
  */
@@ -992,7 +1218,7 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
     vi.useRealTimers();
   });
 
-  /** 跑一轮「视频播起来 → 提示出现 → 用户马上按了个键打断」。 */
+  /** 跑一轮「视频播起来 → 提示出现 → 用户主动关掉它（点 ×）」。 */
   const interruptedRound = async (video: HTMLVideoElement) => {
     hint = createFirstRunHint(() => shortcuts);
     hint.start();
@@ -1002,8 +1228,13 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
     vi.advanceTimersByTime(WATCH_DELAY);
     const appeared = isVisible();
 
-    // 用户马上按了个键：提示被关掉，他多半没读完。
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
+    // ⚠️ 必须是**主动关掉**（点引导自己的「×」）：那才是拒绝。
+    // （页面上误点一下不算 —— 见上面那条用例。）
+    const close = document.getElementById('vsc-first-run-hint-close') as HTMLButtonElement | null;
+    if (appeared) {
+      expect(close, '引导必须有一个真正的关闭按钮').not.toBeNull();
+      close!.click();
+    }
     vi.advanceTimersByTime(READ_DELAY * 2);
     await settle();
 
@@ -1215,3 +1446,677 @@ describe('FirstRunHint：面板位置', () => {
     expect(node?.style.right).toBe('16px');
   });
 });
+
+/**
+ * 引导归「拥有视频的那个 frame」—— 这是 6.1.0 带出来的**功能回归**的修复。
+ *
+ * 回归的形状：内容脚本注入到**所有** frame。6.1.0 之前顶层注册表会递归进
+ * 同源 iframe 找视频，所以引导（只跑在顶层）能发现 iframe 里的视频；
+ * 6.1.0 之后注册表不再钻进 iframe（免得两个运行时抢同一个 <video>），
+ * 于是引导只跑在顶层、顶层又看不见 iframe 的视频 ——
+ * **页面上唯一的视频在嵌入框里时，引导永远不出现**。
+ *
+ * 而引导是这个产品**唯一的可见入口**：它不出现，用户就永远发现不了
+ * `f`（网页全屏）与 `=`/`-`（调速）这些快捷键 —— 功能等于不存在。
+ */
+describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () => {
+  let shortcuts: ShortcutSettings;
+  let wasShown: Mock<[], Promise<boolean>>;
+  let markShown: Mock<[], Promise<void>>;
+  let hint: FirstRunHint;
+
+  /**
+   * jsdom 不做布局：`getBoundingClientRect()` 恒为 0。
+   * 而这条契约的判据正是「**量出来的**提示有多高」——
+   * 所以必须自己把高度喂进去，否则测的永远是「放得下」。
+   */
+  const stubViewport = (width: number, height: number) => {
+    Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+  };
+
+  /** 给提示节点一个高度：内容有 4 行时约 130px，2 行时约 64px（实测真实浏览器）。 */
+  const stubHintHeight = (height: number) => {
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function patched(this: Element) {
+      if (this.id === HINT_ID) {
+        return {
+          x: 0, y: 0, top: 0, left: 0, right: 288, bottom: height,
+          width: 288, height,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return original.call(this);
+    };
+    return () => {
+      Element.prototype.getBoundingClientRect = original;
+    };
+  };
+
+  const start = async (video: HTMLVideoElement) => {
+    hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+    });
+    hint.start();
+    await settle();
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    shortcuts = createShortcuts();
+    wasShown = vi.fn(async (): Promise<boolean> => false);
+    markShown = vi.fn(async (): Promise<void> => {});
+  });
+
+  afterEach(() => {
+    hint?.destroy();
+    vi.useRealTimers();
+  });
+
+  it('视口够大 → 显示完整版', async () => {
+    // 1280×720 的顶层页面：完整版（4 行，130px）只占 18%，放得下。
+    stubViewport(1280, 720);
+    const restore = stubHintHeight(130);
+
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await start(video);
+    vi.advanceTimersByTime(2600);
+
+    expect(hintNode()?.textContent).toContain('点扩展图标可切换网页全屏');
+    restore();
+  });
+
+  it('视口很小 → 退到精简版，但**读屏播报的仍是完整版**', async () => {
+    // 320×180 的嵌入框：完整版 130px 放得下，却盖住了播放器 72%
+    // （实测，真实 Chromium）—— 那不是贴片，是「画面被糊住了」。
+    stubViewport(320, 180);
+    const restore = stubHintHeight(130);
+
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await start(video);
+    vi.advanceTimersByTime(2600);
+
+    // 视觉上退到精简版：只留「按哪个键」那两行。
+    expect(hintNode()?.textContent).toContain('网页全屏');
+    expect(hintNode()?.textContent).not.toContain('点扩展图标可进入网页全屏');
+    restore();
+  });
+
+  it('连精简版都放不下 → 至少不显示被裁掉一半的那一版', async () => {
+    // 240×135 的框：完整版（130px）超出视口，顶部会被裁掉（实测 top = -11px）。
+    stubViewport(240, 135);
+    const restore = stubHintHeight(130);
+
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await start(video);
+    vi.advanceTimersByTime(2600);
+
+    // 退到精简版（64px）—— 135 - 64 = 71，装得下。
+    expect(hintNode()?.textContent).not.toContain('点扩展图标可进入网页全屏');
+    restore();
+  });
+});
+
+describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
+  let shortcuts: ShortcutSettings;
+  let wasShown: Mock<[], Promise<boolean>>;
+  let markShown: Mock<[], Promise<void>>;
+  let recordFailedAttempt: Mock<[], Promise<void>>;
+  let isInCooldown: Mock<[], Promise<boolean>>;
+  /** 本次用例里建过的运行时（afterEach 统一销毁）。 */
+  const hints: FirstRunHint[] = [];
+
+  const create = async (options: { claimBroker?: HintClaimBroker } = {}) => {
+    const hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+      recordFailedAttempt,
+      isInCooldown,
+      ...(options.claimBroker ? { claimBroker: options.claimBroker } : {}),
+    });
+    hints.push(hint);
+    hint.start();
+    await settle();
+    return hint;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    shortcuts = createShortcuts();
+    wasShown = vi.fn(async (): Promise<boolean> => false);
+    markShown = vi.fn(async (): Promise<void> => {});
+    recordFailedAttempt = vi.fn(async (): Promise<void> => {});
+    isInCooldown = vi.fn(async (): Promise<boolean> => false);
+  });
+
+  afterEach(() => {
+    hints.splice(0).forEach((hint) => hint.destroy());
+    (globalThis as Record<string, unknown>).chrome = undefined;
+    vi.useRealTimers();
+  });
+
+  it('嵌在 iframe 里的 frame 也能弹出引导（顶层限制已取消）', async () => {
+    // ⚠️ 这个文件把 isTopDocument 永久答成 false（见文件头的 mock），
+    // 也就是「我是一个嵌在 iframe 里的 frame」。旧实现在这里直接 return，
+    // 于是「视频在嵌入框里」时引导永远不出现 —— 用户完全无从发现这个扩展。
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+
+    expect(isVisible()).toBe(true);
+    expect(markShown).not.toHaveBeenCalled();
+  });
+
+  it('同一个标签页里同时只会弹一条引导', async () => {
+    // 两个运行时 = 同一个标签页里的两个 frame（顶层一个、iframe 一个），
+    // 它们共享同一把认领锁。
+    const broker = makeTestClaimBroker();
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+
+    await create({ claimBroker: broker });
+    await create({ claimBroker: broker });
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+
+    // ⚠️ jsdom 里两个 frame 共用同一个 document，所以只能**数节点**：
+    // 两个 frame 各弹一条的话，页面上会挂着两个提示。
+    expect(document.querySelectorAll(`#${HINT_ID}`).length).toBe(1);
+  });
+
+  it('引导关掉之后，认领标记就还回去了（别的 frame 还有机会）', async () => {
+    const broker = makeTestClaimBroker();
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create({ claimBroker: broker });
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // 用户点掉提示：锁必须被归还 —— 不然这个标签页再也弹不出引导。
+    // ⚠️ 必须用**主动关掉**（点「×」）：页面上误点一下现在只算忽略，
+    // 提示不会被关掉（也就没有「归还锁」这回事）。
+    const close = document.getElementById('vsc-first-run-hint-close') as HTMLButtonElement | null;
+    expect(close, '引导必须有一个真正的关闭按钮').not.toBeNull();
+    close!.click();
+    await settle();
+
+    // 归还之后，另一个 frame 就能抢到锁了。
+    const second = await create({ claimBroker: broker });
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+
+    // ⚠️ 这里数的是**看得见**的提示：被关掉的那条只是淡出，节点还留在
+    // document 里（TransientPill 复用自己的节点）。
+    expect(document.querySelectorAll(`#${HINT_ID}.vsc-visible`).length).toBe(1);
+    second.destroy();
+  });
+
+  it('认领标记写进共享存储（别的 frame 才看得到），读完之后清掉', async () => {
+    // 一份最小的 chrome.storage.local + onChanged：真实扩展里，
+    // 认领标记就靠它跨 frame 传递（内容脚本拿不到 chrome.tabs，
+    // 也就没有 tabId 可用 —— 见 firstRunHint.ts 里的说明）。
+    const data: Record<string, unknown> = {};
+    const listeners: ((changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void)[] = [];
+    const emit = (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>) => {
+      listeners.slice().forEach((listener) => listener(changes, 'local'));
+    };
+
+    (globalThis as Record<string, unknown>).chrome = {
+      runtime: { lastError: null },
+      storage: {
+        local: {
+          get: async (key: string) => (key in data ? { [key]: data[key] } : {}),
+          set: async (values: Record<string, unknown>) => {
+            const changes: Record<string, { oldValue?: unknown; newValue?: unknown }> = {};
+            Object.entries(values).forEach(([key, value]) => {
+              changes[key] = { oldValue: data[key], newValue: value };
+              data[key] = value;
+            });
+            emit(changes);
+          },
+          remove: async (key: string) => {
+            const changes = { [key]: { oldValue: data[key], newValue: undefined } };
+            delete data[key];
+            emit(changes);
+          },
+        },
+        onChanged: {
+          addListener: (listener: typeof listeners[number]) => { listeners.push(listener); },
+          removeListener: (listener: typeof listeners[number]) => {
+            const index = listeners.indexOf(listener);
+            if (index >= 0) {
+              listeners.splice(index, 1);
+            }
+          },
+        },
+      },
+    };
+
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // ⚠️ 标记必须真的落到**共享**存储里 —— 不然别的 frame 看不见，
+    // 顶层与 iframe 会各弹一条。
+    const claim = data['vsc-first-run-hint-claim'] as { owner?: unknown; claimedAt?: unknown } | undefined;
+    expect(typeof claim?.owner).toBe('string');
+    expect(typeof claim?.claimedAt).toBe('number');
+
+    // 读完（READ_DELAY 之后）→ 标记清掉，别的 frame 才有机会弹下一条。
+    vi.advanceTimersByTime(READ_DELAY);
+    await settle();
+    expect(data['vsc-first-run-hint-claim']).toBeUndefined();
+  });
+});
+
+/**
+ * 设置页的「重新显示使用引导」在**同一个标签页**里必须立刻生效。
+ *
+ * 背景：设置页那个按钮只做了一件事 —— 清掉 storage.local 里的
+ * 「已展示」标记。而内容脚本把「本会话已展示」记在**内存**里，从不复位；
+ * 又因为引导状态在 local，而 `subscribeToSettings` 只监听 sync 命名空间，
+ * 没有任何一条通道把「用户点了重置」告诉内容脚本。
+ *
+ * 结果：用户点了按钮、切回标签页，**什么都不会发生** ——
+ * 必须手动刷新页面，而界面从头到尾没说过这一点。
+ *
+ * 现在的约定：内容脚本订阅 storage.local 的变化（`subscribeToFirstRunHintState`），
+ * 收到「已展示标记被删了」就把内存里的会话状态复位，
+ * 下一次 reveal() 把整条流程原样重跑一遍。
+ */
+describe('FirstRunHint：设置页重置之后，同一个标签页里能再看到一次引导', () => {
+  let shortcuts: ShortcutSettings;
+  let wasShown: Mock<[], Promise<boolean>>;
+  let markShown: Mock<[], Promise<void>>;
+  let recordFailedAttempt: Mock<[], Promise<void>>;
+  let isInCooldown: Mock<[], Promise<boolean>>;
+  let hint: FirstRunHint;
+  let storageListeners: Array<
+    (changes: Record<string, chrome.storage.StorageChange>, namespace: string) => void
+  >;
+
+  const create = async () => {
+    hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+      recordFailedAttempt,
+      isInCooldown,
+    });
+    hint.start();
+    await settle();
+  };
+
+  /** 模拟设置页点了「重新显示使用引导」：storage.local 里的标记被删掉。 */
+  const fireShownCleared = () => {
+    storageListeners.forEach((listener) => {
+      listener({ [FIRST_RUN_HINT_KEY]: { oldValue: true } }, 'local');
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    shortcuts = createShortcuts();
+    wasShown = vi.fn(async (): Promise<boolean> => false);
+    markShown = vi.fn(async (): Promise<void> => {});
+    recordFailedAttempt = vi.fn(async (): Promise<void> => {});
+    isInCooldown = vi.fn(async (): Promise<boolean> => false);
+    storageListeners = [];
+
+    // 只给 storage.onChanged：内容脚本靠它知道「用户点了重置」。
+    vi.stubGlobal('chrome', {
+      storage: {
+        onChanged: {
+          addListener: (
+            listener: (
+              changes: Record<string, chrome.storage.StorageChange>,
+              namespace: string,
+            ) => void,
+          ) => {
+            storageListeners.push(listener);
+          },
+          removeListener: (
+            listener: (
+              changes: Record<string, chrome.storage.StorageChange>,
+              namespace: string,
+            ) => void,
+          ) => {
+            const index = storageListeners.indexOf(listener);
+            if (index >= 0) {
+              storageListeners.splice(index, 1);
+            }
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    hint?.destroy();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('重置之后引导在同一个标签页里再出现一次（不必刷新页面）', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    // 第一轮：引导出现 → 读完 → 落盘「已展示」。
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    vi.advanceTimersByTime(READ_DELAY);
+    expect(markShown).toHaveBeenCalledTimes(1);
+
+    // 用户在设置页点了「重新显示使用引导」。
+    fireShownCleared();
+
+    // 同一个标签页里，不刷新页面，引导应该再出现一次。
+    vi.advanceTimersByTime(WATCH_DELAY);
+    await settle();
+    expect(isVisible(), '重置之后引导必须再出现一次').toBe(true);
+
+    // ⚠️ 而且整条流程**重跑**：读完之后再次落盘「已展示」。
+    // 只把提示画出来不算数 —— 用户要的是「再走一遍」。
+    vi.advanceTimersByTime(READ_DELAY);
+    await settle();
+    expect(markShown).toHaveBeenCalledTimes(2);
+  });
+
+  it('用户主动关掉引导之后，重置同样能把它叫回来', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    // 用户点了引导自己的「×」（那是一次拒绝）。
+    const close = document.getElementById('vsc-first-run-hint-close') as HTMLButtonElement | null;
+    expect(close, '引导必须有一个真正的关闭按钮').not.toBeNull();
+    close!.click();
+    await settle();
+    expect(isVisible()).toBe(false);
+
+    // 设置页点「重新显示使用引导」。
+    fireShownCleared();
+
+    vi.advanceTimersByTime(WATCH_DELAY);
+    await settle();
+    expect(isVisible(), '被关掉之后也要能被叫回来').toBe(true);
+  });
+
+  it('没有重置信号时，引导不会自己再出现（守住「一次性」这条底线）', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+    vi.advanceTimersByTime(READ_DELAY);
+
+    // 视频再播一次、页面再等一会儿 —— 引导不该回来。
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(SHOWN_AT);
+    await settle();
+
+    expect(markShown).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+/**
+ * 接缝：VideoRegistry 与 FirstRunHint 对同一条视频必须给出**同一个**结论。
+ *
+ * ⚠️ 这条接缝曾经**存在却从未接上**：`createFirstRunHint` 的第二个参数
+ * （`isAmbientPreview`）一直没人传，于是引导退回自己那份更粗的兜底判据。
+ * 后果是同一条视频，两个模块给出**相反**的结论 ——
+ * 「要不要接管它」说它不是装饰（接管了，键盘能用），
+ * 「要不要给它弹引导」说它是装饰（引导永远不出现）。
+ * 而引导是这个产品**全部的可见入口**。
+ *
+ * 这组用例跑的是**真实的类**（VideoRegistry + FirstRunHint），
+ * 中间只隔那条接缝 —— 任何一方都不 mock。
+ */
+describe('接缝：判定只有一份（VideoRegistry 代答）', () => {
+  let registry: VideoRegistry;
+  let hint: FirstRunHint | undefined;
+  let shortcuts: ShortcutSettings;
+  let wasShown: Mock<[], Promise<boolean>>;
+  let markShown: Mock<[], Promise<void>>;
+
+  /** 按**生产接线**建一个引导：判定由 registry 代答。 */
+  const create = async () => {
+    hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+      isAmbientPreview: (video) => registry.isAmbientPreview(video),
+    });
+    hint.start();
+    await settle();
+    return hint;
+  };
+
+  /**
+   * 让一条视频播起来，然后把两边的结论摆在一起。
+   *
+   * 「引导有没有出现」就是 FirstRunHint 对这条视频的结论：
+   * 装饰物 → 不出现（不能把唯一一次机会烧在装饰预览上）；
+   * 内容视频 → 出现。
+   */
+  const verdictOf = async (video: HTMLVideoElement) => {
+    document.body.appendChild(video);
+    await create();
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(SHOWN_AT);
+
+    return {
+      decorative: registry.isAmbientPreview(video),
+      hintAppeared: isVisible(),
+    };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    shortcuts = createShortcuts();
+    wasShown = vi.fn(async (): Promise<boolean> => false);
+    markShown = vi.fn(async (): Promise<void> => {});
+    // isTrustedEvent 恒真：jsdom 造不出可信事件（isTrusted 是实例上的
+    // non-configurable 属性），而「用户碰过」「站点自己开的」这两条证据
+    // 靠事件判定 —— 合成事件在生产里会被正确地拒掉，这里放行。
+    registry = new VideoRegistry({ isTrustedEvent: () => true });
+    registry.start();
+  });
+
+  afterEach(() => {
+    hint?.destroy();
+    hint = undefined;
+    registry.stop();
+    vi.useRealTimers();
+  });
+
+  it('站点主播放器：两边都认为它不是装饰物，引导会出现', async () => {
+    // YouTube 的主播放器恰恰就是「静音自动播 + 没有原生 controls」——
+    // 形状与装饰性预览一模一样，只看属性分不出来。
+    adapterHost.hostname = 'www.youtube.com';
+    const main = makeVisible(createVideo());
+    main.className = 'html5-main-video';
+    main.setAttribute('autoplay', '');
+
+    const { decorative, hintAppeared } = await verdictOf(main);
+
+    expect(decorative, '站点点名的主播放器不是装饰物').toBe(false);
+    expect(hintAppeared, '引导必须为它出现').toBe(true);
+  });
+
+  it('装饰性预览：两边都认为它是装饰物，引导不出现', async () => {
+    const preview = makeVisible(createDecorativePreview());
+
+    const { decorative, hintAppeared } = await verdictOf(preview);
+
+    expect(decorative, 'autoplay + 无 controls + 没人碰过 = 装饰物').toBe(true);
+    expect(hintAppeared, '装饰物不该拿到引导（那会烧掉唯一一次机会）').toBe(false);
+  });
+
+  it('站点用 play() 启动的预览：两边都认为它是装饰物，引导不出现', async () => {
+    // ⚠️ 这条视频**没有** autoplay 属性 —— 它是被站点的 play() 启动的。
+    // 那条证据只有 registry 知道（它监听 play 事件），引导自己算不出来。
+    //
+    // 所以这条用例正是「接缝接上了没有」的判据：
+    // 没接上 → 引导退回自己的兜底判据（只认 autoplay 属性）
+    //        → 判成「不是装饰」→ 引导会为一条装饰物弹出，
+    //          还把「这辈子只提示一次」的机会烧掉。
+    const preview = makeVisible(createVideo());
+    document.body.appendChild(preview);
+    await create();
+
+    // 站点自己调 play()（没有任何用户手势做背景）。
+    preview.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(SHOWN_AT);
+
+    expect(
+      registry.isAmbientPreview(preview),
+      '站点自己播起来的预览是装饰物（公开判定）',
+    ).toBe(true);
+    expect(isVisible(), '装饰物不该拿到引导').toBe(false);
+  });
+
+  it('普通内容视频：两边都认为它不是装饰物，引导会出现', async () => {
+    // 一个**带原生 controls** 的正经播放器 —— 页面上最常见的形态。
+    //
+    // ⚠️ 注意这里不能拿「暂停着、没人开过」的视频当例子：
+    // 一旦它自己播起来（play 事件、没有用户手势做背景），
+    // registry 就认定「站点自己开的」（第 5 条成立）—— 而它既没有原生
+    // controls、又不是页面主角 → 它就是**装饰物**。这正是「先调速再播放」
+    // 那条用法要靠「用户点过」来豁免的原因。
+    const player = makeVisible(createVideo());
+    player.setAttribute('controls', '');
+
+    const { decorative, hintAppeared } = await verdictOf(player);
+
+    expect(decorative, '有原生 controls 的视频不是装饰物').toBe(false);
+    expect(hintAppeared, '引导必须为它出现').toBe(true);
+  });
+
+  it('runtime.ts 必须把 registry 的判定接到引导上（接缝不能被删掉）', () => {
+    // ⚠️ 这条断言守的是**接线本身**。
+    //
+    // 上面三条守的是「接上之后两边结论一致」；而「接上了没有」这件事
+    // 只有 runtime.ts 知道 —— 它是唯一调用 createFirstRunHint 的地方。
+    // 那行被删掉时，上面的用例**照样全绿**（它们自己接线），
+    // 于是断链会一路溜到线上：引导永远不出现，而用户什么都看不出来。
+    //
+    // 所以这里直接读源码，断言 createFirstRunHint 的实参里带着
+    // 「registry 的判定」。删掉那一行 → 这条立刻变红。
+    const source = readFileSync(resolve(process.cwd(), 'src/content/runtime.ts'), 'utf8');
+    const args = extractCallArguments(source, 'createFirstRunHint');
+
+    expect(args, 'runtime.ts 里必须调用 createFirstRunHint').not.toBeNull();
+    expect(
+      args,
+      'createFirstRunHint 必须拿到「这条视频是不是装饰物」的判定（第二个参数）',
+    ).toMatch(/isAmbientPreview/);
+    expect(
+      args,
+      '那条判定必须由 VideoRegistry 代答（证据只有 registry 知道）',
+    ).toMatch(/registry\s*\.\s*isAmbientPreview/);
+  });
+
+  it('引导用的是「卡片」token：与胶囊同一副嗓子，形状不同', async () => {
+    // 首次引导是**教学卡片**：它有自己的底色与更直的圆角（形状不同），
+    // 但字号/字重/行高/字体族必须与胶囊一致 —— 它是同一个产品的入口。
+    const player = makeVisible(createVideo());
+    player.setAttribute('controls', '');
+    document.body.appendChild(player);
+    await create();
+
+    player.dispatchEvent(new Event('play', { bubbles: true }));
+    vi.advanceTimersByTime(WATCH_DELAY);
+
+    const root = document.getElementById(HINT_ID)!;
+    expect(root.style.getPropertyValue('font-size')).toBe(NOTICE_CARD_TOKENS['font-size']);
+    expect(root.style.getPropertyValue('font-weight')).toBe(NOTICE_CARD_TOKENS['font-weight']);
+    expect(root.style.getPropertyValue('line-height')).toBe(NOTICE_CARD_TOKENS['line-height']);
+    // ⚠️ padding 用**长写**属性断言：jsdom 的 shorthand 读回来是空串。
+    //
+    // ⚠️ 断言必须**从 token 推导**：写死 '10px' / '16px' 的话，token 一改它就红，
+    // 而红的时候看不出该改哪里（是 token 变了，还是断言过期了？）。
+    const padding = expandPadding(NOTICE_CARD_TOKENS.padding);
+    expect(root.style.getPropertyValue('padding-top')).toBe(padding.top);
+    expect(root.style.getPropertyValue('padding-bottom')).toBe(padding.bottom);
+    expect(root.style.getPropertyValue('padding-left')).toBe(padding.left);
+    // ⚠️ 右侧由 token 的 'padding-right' **单独**给（给关闭按钮留位置）。
+    // 断言它存在，是为了「token 里那一项被删掉」这件事立刻变红 ——
+    // 否则断言会退化成简写里的 16px，从此什么也守不住。
+    expect(
+      NOTICE_CARD_TOKENS['padding-right'],
+      '关闭按钮的位置必须由 token 单独给',
+    ).toBeDefined();
+    expect(root.style.getPropertyValue('padding-right')).toBe(
+      NOTICE_CARD_TOKENS['padding-right'],
+    );
+    expect(root.style.getPropertyValue('border-radius')).toBe(NOTICE_CARD_TOKENS['border-radius']);
+    expect(root.style.getPropertyValue('background-color')).toBe(NOTICE_CARD_TOKENS['background-color']);
+  });
+});
+
+/**
+ * 从源码里取出 `fn(...)` 的实参文本（按括号配平，注释先剥掉）。
+ *
+ * ⚠️ 为什么先剥注释：注释里也可能有括号与「isAmbientPreview」这些词，
+ * 不剥掉就会把注释当成实参 —— 而我们要断的恰恰是**代码**。
+ */
+const extractCallArguments = (source: string, fnName: string): string | null => {
+  const withoutComments = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+  const start = withoutComments.indexOf(`${fnName}(`);
+  if (start < 0) {
+    return null;
+  }
+
+  let depth = 0;
+  for (let index = start + fnName.length; index < withoutComments.length; index += 1) {
+    const char = withoutComments[index];
+    if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return withoutComments.slice(start + fnName.length + 1, index);
+      }
+    }
+  }
+
+  return null;
+};

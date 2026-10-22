@@ -1,9 +1,8 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import zlib from 'node:zlib';
+import { test, expect } from '@playwright/test';
+import { join } from 'node:path';
 import { CLIP_10S_WEBM_BASE64 } from './fixtures/clip-10s.ts';
+import { readPixel } from './helpers/png.js';
+import { launchExtension } from './helpers/launch.js';
 
 /**
  * 全屏控制条的回归守卫。
@@ -26,160 +25,6 @@ import { CLIP_10S_WEBM_BASE64 } from './fixtures/clip-10s.ts';
 /* ------------------------------------------------------------------ *
  * 浏览器与扩展
  * ------------------------------------------------------------------ */
-
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
-
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-};
-
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--autoplay-policy=no-user-gesture-required',
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-];
-
-/** 启动一个带扩展的浏览器（内容脚本只在扩展里跑，普通 page 没有它）。 */
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-controls-'));
-  const executablePath = findChromium();
-  const candidates = [
-    { options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-
-  for (const candidate of candidates) {
-    if ('executablePath' in candidate.options && candidate.options.executablePath === undefined) {
-      continue;
-    }
-    try {
-      const context = await chromium.launchPersistentContext(profile, candidate.options);
-      const sw =
-        context.serviceWorkers()[0] ??
-        (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-      if (!sw) {
-        await context.close();
-        continue;
-      }
-      return {
-        context,
-        async close() {
-          await context.close();
-          rmSync(profile, { recursive: true, force: true });
-        },
-      };
-    } catch {
-      /* 试下一个 */
-    }
-  }
-
-  rmSync(profile, { recursive: true, force: true });
-  throw new Error('无法启动带扩展的浏览器');
-};
-
-/* ------------------------------------------------------------------ *
- * 像素工具（不引第三方依赖：读 PNG 只需要 zlib + PNG 的 unfilter）
- * ------------------------------------------------------------------ */
-
-const readPixel = (png, x, y) => {
-  let offset = 8;
-  let width = 0;
-  let height = 0;
-  let bitDepth = 0;
-  let colorType = 0;
-  const idat = [];
-
-  while (offset < png.length) {
-    const length = png.readUInt32BE(offset);
-    const type = png.toString('ascii', offset + 4, offset + 8);
-    const dataStart = offset + 8;
-
-    if (type === 'IHDR') {
-      width = png.readUInt32BE(dataStart);
-      height = png.readUInt32BE(dataStart + 4);
-      // ⚠️ 位深与颜色类型是**单字节**，用 readUInt32BE 读会把后面的字节也吃进来。
-      bitDepth = png[dataStart + 8];
-      colorType = png[dataStart + 9];
-    } else if (type === 'IDAT') {
-      idat.push(png.subarray(dataStart, dataStart + length));
-    } else if (type === 'IEND') {
-      break;
-    }
-
-    offset = dataStart + length + 4;
-  }
-
-  if (bitDepth !== 8) {
-    return null;
-  }
-
-  const channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[colorType];
-  if (!channels) {
-    return null;
-  }
-
-  const inflated = zlib.inflateSync(Buffer.concat(idat));
-  const stride = width * channels;
-  const pixels = Buffer.alloc(height * stride);
-
-  const paeth = (a, b, c) => {
-    const p = a + b - c;
-    const pa = Math.abs(p - a);
-    const pb = Math.abs(p - b);
-    const pc = Math.abs(p - c);
-    if (pa <= pb && pa <= pc) return a;
-    if (pb <= pc) return b;
-    return c;
-  };
-
-  let src = 0;
-  for (let row = 0; row < height; row += 1) {
-    const filter = inflated[src];
-    src += 1;
-    for (let i = 0; i < stride; i += 1) {
-      const raw = inflated[src + i];
-      const left = i >= channels ? pixels[row * stride + i - channels] : 0;
-      const up = row > 0 ? pixels[(row - 1) * stride + i] : 0;
-      const upLeft = row > 0 && i >= channels ? pixels[(row - 1) * stride + i - channels] : 0;
-
-      let value;
-      if (filter === 0) value = raw;
-      else if (filter === 1) value = raw + left;
-      else if (filter === 2) value = raw + up;
-      else if (filter === 3) value = raw + Math.floor((left + up) / 2);
-      else if (filter === 4) value = raw + paeth(left, up, upLeft);
-      else return null;
-
-      pixels[row * stride + i] = value & 0xff;
-    }
-    src += stride;
-  }
-
-  const index = (y * width + x) * channels;
-  return [pixels[index], pixels[index + 1], pixels[index + 2]];
-};
 
 /** WCAG 相对亮度。 */
 const relativeLuminance = ([r, g, b]) => {
@@ -211,7 +56,7 @@ const CLIP = `data:video/webm;base64,${CLIP_10S_WEBM_BASE64}`;
  * src     给视频一个**真实**媒体源（隔离世界看不见页面里的 mock）。
  * caption 字幕容器的内容 —— 双语字幕的真实结构就靠它复现。
  */
-const pageHtml = ({ src = '', caption = '', captionCss = '', autoplay = false } = {}) => `<!DOCTYPE html>
+const pageHtml = ({ src = '', caption = '', captionCss = '', autoplay = false, extraCss = '', extraBody = '' } = {}) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>vsc controls</title>
 <style>
   html,body{margin:0;height:100%;background:#000}
@@ -223,12 +68,14 @@ const pageHtml = ({ src = '', caption = '', captionCss = '', autoplay = false } 
     ${captionCss}
   }
   #cap span{display:block}
+  ${extraCss}
 </style>
 </head><body>
 <div id="player">
   <video id="v1" muted playsinline preload="auto"${src ? ` src="${src}"` : ''}${autoplay ? ' autoplay' : ''}></video>
   ${caption ? `<div id="cap">${caption}</div>` : ''}
 </div>
+${extraBody}
 </body></html>`;
 
 /**
@@ -482,6 +329,112 @@ test.describe('全屏控制条', () => {
     }
   });
 
+  /**
+   * **宽度扫描**：任何视口宽度下，退出按钮都必须在屏幕内。
+   *
+   * ⚠️ 这条用例存在的理由是历史：
+   * 断点原先是**估**出来的（500 / 380），而实测需求是 553 / 401 / 321 ——
+   * 于是 501–546px 与 381–400px 这两段宽度里，退出按钮被推出屏幕，
+   * 手机上（390px）鼠标点不到，用户被关在全屏里，只能靠 Esc。
+   *
+   * 之前那条用例只量了 390 与 320 两个点 —— 390 恰好落在出屏区里，
+   * 于是它红了；但它**不知道为什么**红，红完之后也只是把断点数字挪一下，
+   * 没有任何机制阻止下次再挪错。
+   *
+   * 所以这里扫**一整条宽度轴**，而且用**最坏情况**的时长字符串
+   * （"1:00:00 / 2:00:00"）—— 短时长会窄 13.5px，
+   * 用短时长量出来的「装得下」是假的（长视频一播出来就出屏，
+   * 而那正是最常见的场景）。
+   *
+   * 断点契约（src/content/controlBarLayout.ts）是这里与 CSS 的共同真源。
+   */
+  test('任何视口宽度下退出按钮都在屏幕内（宽度扫描）', async () => {
+    test.setTimeout(180_000);
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      const setBody = serveBody(page);
+
+      const { CONTROL_BAR_BREAKPOINTS, CONTROL_BAR_REQUIRED_WIDTHS } = await import(
+        '../../src/content/controlBarLayout.ts'
+      );
+
+      // 扫的宽度 = 各断点与各实测需求的**两侧**，加上常见设备宽度。
+      const widths = [
+        CONTROL_BAR_REQUIRED_WIDTHS.narrowest,
+        CONTROL_BAR_BREAKPOINTS.narrowest - 1,
+        CONTROL_BAR_BREAKPOINTS.narrowest,
+        CONTROL_BAR_BREAKPOINTS.narrowest + 1,
+        160, 240, 241,
+        CONTROL_BAR_REQUIRED_WIDTHS.minimal - 1,
+        CONTROL_BAR_REQUIRED_WIDTHS.minimal,
+        CONTROL_BAR_BREAKPOINTS.minimal - 1,
+        CONTROL_BAR_BREAKPOINTS.minimal,
+        320, 331,
+        CONTROL_BAR_REQUIRED_WIDTHS.medium - 1,
+        CONTROL_BAR_REQUIRED_WIDTHS.medium,
+        380, 400,
+        CONTROL_BAR_BREAKPOINTS.compact - 1,
+        CONTROL_BAR_BREAKPOINTS.compact,
+        CONTROL_BAR_BREAKPOINTS.compact + 1,
+        500, 546,
+        CONTROL_BAR_REQUIRED_WIDTHS.full - 1,
+        CONTROL_BAR_REQUIRED_WIDTHS.full,
+        CONTROL_BAR_BREAKPOINTS.medium,
+        CONTROL_BAR_BREAKPOINTS.medium + 1,
+        640, 853, 1280,
+      ]
+        .filter((width) => width > 0)
+        .sort((a, b) => a - b)
+        .filter((width, index, all) => all.indexOf(width) === index);
+
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 844 });
+        setBody(pageHtml());
+        await page.goto(`https://vsc-sweep-${width}.example/`);
+        await enterFullscreen(page);
+
+        // 换成最坏情况的时长：长视频。
+        //
+        // ⚠️ **改文字与读矩形必须在同一个同步任务里**（2026-10-21 复审发现）：
+        // 控制条在 `timeupdate` 事件里会重写这两个文本，而 10 秒的测试片段
+        // 在测量窗口内会派发 timeupdate，把「1:00:00 / 2:00:00」打回
+        // 「0:03 / 0:10」—— 那样量出来的宽度**偏乐观 13.5px**。
+        // 方向是「测得比实际宽松」：不会误报失败，但会**漏报** ——
+        // 而这条用例的全部价值就在于不漏报。
+        // 先暂停视频、再改文字、立刻读矩形：JS 是单线程的，
+        // 事件不可能在任务中间插进来。
+        const rect = await page.evaluate(() => {
+          const shadow = document.getElementById('vsc-controls')?.shadowRoot;
+          const now = shadow?.querySelector('[data-role="time-now"]');
+          const total = shadow?.querySelector('[data-role="time-total"]');
+          const video = document.getElementById('v1');
+          if (video) video.pause();
+          if (now) now.textContent = '1:00:00';
+          if (total) total.textContent = '2:00:00';
+
+          const el = shadow?.querySelector('[data-role="exit"]');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height };
+        });
+
+        expect(rect, `窗口宽 ${width}px 时退出按钮必须存在`).not.toBeNull();
+        expect(
+          rect.right,
+          `窗口宽 ${width}px 时退出按钮的右边缘 (${Math.round(rect.right)}) 必须在屏幕内 —— ` +
+            '它出屏 = 用户被关在全屏里，只能靠 Esc（而「按 Esc 能退」从没在界面上告诉过他）',
+        ).toBeLessThanOrEqual(width + 0.5);
+        expect(
+          rect.left,
+          `窗口宽 ${width}px 时退出按钮的左边缘 (${Math.round(rect.left)}) 必须在屏幕内`,
+        ).toBeGreaterThanOrEqual(-0.5);
+      }
+    } finally {
+      await ext.close();
+    }
+  });
+
   test('键盘调滑块时焦点不丢（长按方向键才有效）', async () => {
     const ext = await launchExtension();
     try {
@@ -728,6 +681,319 @@ test.describe('全屏控制条', () => {
         drop,
         `控制条上沿 (${barTopPixel.join(',')}) 与画面 (${videoPixel.join(',')}) 只差 ${drop} —— 上沿必须是明确的边`,
       ).toBeGreaterThanOrEqual(8);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  /**
+   * 控制条收起之后，退出入口必须**还在**。
+   *
+   * 症状（审查原文）：控制条 3 秒 idle 后整个消失，屏幕上只剩一个铺满的
+   * <video> —— 用户既不知道「这是扩展的全屏」，也不知道怎么退
+   * （退出按钮在控制条里，条一藏就没了；「按 Esc 能退」只写在设置页，
+   * 从没在进入全屏时告诉过用户）。
+   *
+   * 形态：控制条收起时塌缩成一枚独立的小退出钮（同一个 shadow root、
+   * 与控制条里的退出按钮同一个位置）。
+   */
+  test('控制条收起后退出钮还在，点它能退出全屏', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await page.setViewportSize({ width: 1280, height: 720 });
+      const setBody = serveBody(page);
+      setBody(pageHtml());
+      await page.goto('https://vsc-collapsed-exit.example/');
+      await enterFullscreen(page);
+
+      /** 收起态退出钮的当前状态（它在 shadow root 里，不在 .bar 子树里）。 */
+      const collapsedState = () =>
+        page.evaluate(() => {
+          const el = document
+            .getElementById('vsc-controls')
+            ?.shadowRoot?.querySelector('[data-role="exit-collapsed"]');
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return {
+            visible: style.visibility !== 'hidden' && style.display !== 'none',
+            opacity: Number(style.opacity),
+            label: el.getAttribute('aria-label'),
+            tabIndex: el.getAttribute('tabindex'),
+            centerX: rect.left + rect.width / 2,
+            centerY: rect.top + rect.height / 2,
+            width: rect.width,
+            height: rect.height,
+          };
+        });
+
+      // 控制条在的时候，收起态的退出钮必须藏着（两个退出钮不能同时在）。
+      const whileVisible = await collapsedState();
+      expect(whileVisible, 'shadow root 里必须有一枚独立退出钮').not.toBeNull();
+      expect(whileVisible.visible, '控制条可见时收起态的退出钮必须不可见').toBe(false);
+
+      // 键盘进全屏时焦点被送进控制条（focusFirst）→ 控制条永远不会自动隐藏。
+      // 先把焦点放掉，模拟鼠标用户。
+      await blurControlBar(page);
+
+      // 退出钮的位置此刻已经定了（它还藏着，但布局已经算好）。
+      const box = await collapsedState();
+      await page.mouse.move(box.centerX, box.centerY);
+
+      // 这一动会把控制条唤回来（既有行为）。等它淡入稳定，量一下
+      // 控制条里退出按钮的位置 —— 收起态的按钮必须落在同一个地方。
+      await page.waitForTimeout(400);
+      const exitRect = await controlRect(page, 'exit');
+      expect(exitRect, '控制条里必须有退出按钮').not.toBeNull();
+
+      // 光标**不动**地等：控制条 3 秒后自动收起，退出钮顶上来。
+      await page.waitForTimeout(4000);
+      expect(await barVisible(page), '控制条应该已经收起').toBe(false);
+
+      const collapsed = await collapsedState();
+      expect(collapsed, '控制条收起后必须还有一枚独立退出钮').not.toBeNull();
+      expect(collapsed.visible, '控制条收起后退出钮必须可见（永远在的退出入口）').toBe(true);
+      expect(collapsed.label, '退出钮必须有可访问名').toBeTruthy();
+      expect(collapsed.width, '退出钮不能比控制条里的退出按钮大').toBeLessThanOrEqual(34);
+      expect(
+        Math.abs(collapsed.centerX - (exitRect.left + exitRect.width / 2)),
+        '收起态的退出钮必须与控制条里的退出按钮在同一个位置（肌肉记忆接得上）',
+      ).toBeLessThanOrEqual(8);
+      expect(
+        Math.abs(collapsed.centerY - (exitRect.top + exitRect.height / 2)),
+        '收起态的退出钮必须与控制条里的退出按钮在同一个位置（肌肉记忆接得上）',
+      ).toBeLessThanOrEqual(8);
+
+      // 点它 → 退出全屏。
+      //
+      // ⚠️ 不能用 page.mouse.click()：它会先 move 一次，那一动就把控制条
+      // 唤回来了（既有行为），点到的将是控制条里的退出按钮 —— 测的就不是
+      // 收起态的退出钮了。这里只 down/up，鼠标不动：
+      // 真实用户「手停在原地直接点」走的就是这条路径。
+      await page.mouse.down();
+      await page.mouse.up();
+
+      await expect
+        .poll(() =>
+          page.evaluate(() => Boolean(document.getElementById('vsc-page-fullscreen-overlay'))),
+        )
+        .toBe(false);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  /**
+   * **窄屏档**（≤430px）里，收起态的退出钮也必须与控制条退出按钮在同一个角。
+   *
+   * ⚠️ 这一档之前**完全没有测试**（2026-10-21 复审发现）：
+   * 上一条用例在 1280px 量，而 1280px 走的是**宽屏内边距**（18/12）。
+   * 窄屏档换的是另一套内边距（10/8），而那一套只被 e2e 间接碰到过 ——
+   * 变异验证（M10）把窄屏内边距的 right 从 10 改成 40（错位 30px），
+   * **全部测试仍然绿**。
+   *
+   * 为什么这条要紧：收起态那枚退出钮是全屏里**唯一的常驻出口**。
+   * 它飘在控制条退出钮旁边 30px 处，用户看到的是「两个东西」，
+   * 而真正点得准的那个不确定是哪个。
+   */
+  test('窄屏下收起态的退出钮仍与控制条退出按钮在同一个角（390px）', async () => {
+    test.setTimeout(60_000);
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      // 390px = iPhone 12/13/14 的宽度，落在 compact 档（≤430px）。
+      await page.setViewportSize({ width: 390, height: 720 });
+      const setBody = serveBody(page);
+      setBody(pageHtml());
+      await page.goto('https://vsc-collapsed-exit-narrow.example/');
+      await enterFullscreen(page);
+
+      const collapsedState = () =>
+        page.evaluate(() => {
+          const el = document
+            .getElementById('vsc-controls')
+            ?.shadowRoot?.querySelector('[data-role="exit-collapsed"]');
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return {
+            visible: style.visibility !== 'hidden' && style.display !== 'none',
+            centerX: rect.left + rect.width / 2,
+            centerY: rect.top + rect.height / 2,
+            right: rect.right,
+          };
+        });
+
+      // 键盘进全屏时焦点被送进控制条 → 控制条永不自动隐藏。先放掉焦点。
+      await blurControlBar(page);
+
+      // 控制条可见时量一次它里面退出按钮的位置（窄屏档）。
+      const exitRect = await controlRect(page, 'exit');
+      expect(exitRect, '控制条里必须有退出按钮').not.toBeNull();
+
+      // 光标不动地等控制条自己收起。
+      await page.waitForTimeout(4000);
+      expect(await barVisible(page), '控制条应该已经收起').toBe(false);
+
+      const collapsed = await collapsedState();
+      expect(collapsed, '控制条收起后必须还有一枚独立退出钮').not.toBeNull();
+      expect(collapsed.visible, '控制条收起后退出钮必须可见（永远在的退出入口）').toBe(true);
+      expect(
+        Math.abs(collapsed.centerX - (exitRect.left + exitRect.width / 2)),
+        '窄屏下收起态的退出钮必须与控制条里的退出按钮在同一个位置 —— ' +
+          '两套内边距各写一份时，这里会错开 30px，而用户看到的是「两个东西」',
+      ).toBeLessThanOrEqual(8);
+      expect(
+        Math.abs(collapsed.centerY - (exitRect.top + exitRect.height / 2)),
+        '窄屏下收起态的退出钮必须与控制条里的退出按钮在同一个位置',
+      ).toBeLessThanOrEqual(8);
+      expect(
+        collapsed.right,
+        '窄屏下收起态的退出钮也不能出屏（出屏 = 全屏里没有出口）',
+      ).toBeLessThanOrEqual(390 + 0.5);
+    } finally {
+      await ext.close();
+    }
+  });
+
+  /**
+   * 键盘路径：焦点落到收起态的退出钮上 → 完整控制条回来，退出钮让位。
+   *
+   * ⚠️ 这条只能在**真实浏览器**里验：jsdom 没有布局与焦点语义，
+   * 「刚解除隐藏的元素能不能立刻拿到焦点」这种问题只有真浏览器会回答。
+   */
+  test('键盘聚焦收起态的退出钮 → 控制条回来、退出钮让位、焦点不丢', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await page.setViewportSize({ width: 1280, height: 720 });
+      const setBody = serveBody(page);
+      setBody(pageHtml());
+      await page.goto('https://vsc-collapsed-exit-focus.example/');
+      await enterFullscreen(page);
+
+      // 键盘进全屏时焦点被送进控制条 → 控制条永远不会自动隐藏。
+      await blurControlBar(page);
+      await page.waitForTimeout(4000);
+      expect(await barVisible(page), '控制条应该已经收起').toBe(false);
+
+      // 键盘用户 Tab 到收起态的退出钮（这里用真实浏览器的 focus() 走同一条路径）。
+      const focusedRole = await page.evaluate(() => {
+        const shadow = document.getElementById('vsc-controls')?.shadowRoot;
+        shadow?.querySelector('[data-role="exit-collapsed"]')?.focus();
+        return shadow?.activeElement?.getAttribute('data-role') ?? null;
+      });
+
+      // 焦点必须**交接**给控制条里同一个动作的按钮（退出）——
+      // 收起态的退出钮马上要藏起来，焦点若掉到 body 上，
+      // 键盘用户就凭空丢失了位置（Tab 要从头再来一遍）。
+      expect(focusedRole, '焦点必须落在控制条里的退出按钮上，不能凭空消失').toBe('exit');
+      expect(await barVisible(page), '焦点进来时完整控制条必须回来').toBe(true);
+
+      // 退出钮要**让位**：两个退出钮不能同时在。
+      //
+      // ⚠️ 它与控制条是交叉淡入淡出的（160ms），所以断言前要等它落定；
+      //    但它**立刻**就退出了焦点序列（键盘用户 Tab 不到它）。
+      const collapsedTabIndex = await page.evaluate(() => {
+        const el = document
+          .getElementById('vsc-controls')
+          ?.shadowRoot?.querySelector('[data-role="exit-collapsed"]');
+        return el?.getAttribute('tabindex') ?? null;
+      });
+      expect(collapsedTabIndex, '退出钮必须立刻退出焦点序列').toBe('-1');
+
+      await page.waitForTimeout(300);
+      const collapsedStillVisible = await page.evaluate(() => {
+        const el = document
+          .getElementById('vsc-controls')
+          ?.shadowRoot?.querySelector('[data-role="exit-collapsed"]');
+        if (!el) return null;
+        const style = getComputedStyle(el);
+        return style.visibility !== 'hidden' && style.display !== 'none';
+      });
+      expect(collapsedStillVisible, '两个退出钮不能同时在').toBe(false);
+    } finally {
+      await ext.close();
+    }
+  });
+  /**
+   * 站点给 <body> 加 transform 时，网页全屏必须**照常可用**。
+   *
+   * ⚠️ 这是 2026-10-21 复审挖出来的**最严重**的一个洞（探针实测）：
+   *
+   *   CSS 规定：祖先只要带 transform / filter / perspective /
+   *   contain / will-change，它就成了 `position: fixed` 后代的**包含块**。
+   *   于是 fixed 不再相对视口，而是相对那个祖先的盒子。
+   *
+   *   而 `body { transform: translateZ(0) }` 是站点做 GPU 加速的**常见写法**。
+   *   实测（1000×700 视口，body 高 2400px）：
+   *
+   *     视频      top=850  bottom=1550  → 完全在视口外
+   *     控制条    top=2334              → 在视口外
+   *     退出钮    top=2360              → 在视口外
+   *
+   *   用户看到的是**一片黑**：没有画面、没有控制条、没有退出按钮。
+   *   网页全屏这个核心功能，在这样的站点上整个报废。
+   *
+   * 根因不是「忘了加 z-index」，而是**浮层挂在了 body 上**：
+   * transform 只会让自己成为后代的包含块，不会传染给父元素 ——
+   * 挂到 <html> 上就免疫了（实测已验证）。
+   *
+   * ⚠️ 这条用例守的是「挂载点」，不是「某个坐标」：
+   * 有人把浮层改回 `document.body.appendChild(...)`，
+   * 它会立刻红 —— 而这正是它该红的原因。
+   */
+  test('站点给 body 加 transform 时，网页全屏的浮层仍然落在视口里', async () => {
+    test.setTimeout(60_000);
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await page.setViewportSize({ width: 1000, height: 700 });
+      const setBody = serveBody(page);
+      // body 高 2400px（远高于视口）+ transform —— 正是最常见的 GPU 加速写法。
+      setBody(
+        pageHtml({
+          extraCss: 'body{height:2400px;transform:translateZ(0)}',
+          extraBody: '<div style="height:2400px">tall</div>',
+        }),
+      );
+      await page.goto('https://vsc-transformed-body.example/');
+      await enterFullscreen(page);
+
+      const geometry = () =>
+        page.evaluate(() => {
+          const pick = (el) => {
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+          };
+          const shadow = document.getElementById('vsc-controls')?.shadowRoot;
+          return {
+            viewportHeight: window.innerHeight,
+            viewportWidth: window.innerWidth,
+            video: pick(document.querySelector('.vsc-page-fullscreen-video')),
+            bar: pick(shadow?.querySelector('.bar')),
+            collapsed: pick(shadow?.querySelector('[data-role="exit-collapsed"]')),
+          };
+        });
+
+      const g = await geometry();
+
+      // 画面必须**完整落在视口里** —— 出屏就是黑屏。
+      expect(g.video, '网页全屏必须有一个被搬到画面上的视频').not.toBeNull();
+      expect(g.video.top, '视频的上边缘必须落在视口内').toBeGreaterThanOrEqual(-0.5);
+      expect(g.video.bottom, '视频的下边缘必须落在视口内').toBeLessThanOrEqual(g.viewportHeight + 0.5);
+
+      // 控制条也必须在视口里（它是操作面板，飘到屏外就等于没有）。
+      expect(g.bar, '控制条必须在').not.toBeNull();
+      expect(g.bar.bottom, '控制条必须落在视口内').toBeLessThanOrEqual(g.viewportHeight + 0.5);
+
+      // 收起态那枚唯一常驻退出钮同样必须在视口里。
+      expect(g.collapsed, '必须有一枚独立退出钮').not.toBeNull();
+      expect(g.collapsed.top, '退出钮必须在视口内').toBeGreaterThanOrEqual(-0.5);
+      expect(g.collapsed.bottom, '退出钮必须在视口内').toBeLessThanOrEqual(g.viewportHeight + 0.5);
+      expect(g.collapsed.right, '退出钮必须在视口内').toBeLessThanOrEqual(g.viewportWidth + 0.5);
     } finally {
       await ext.close();
     }

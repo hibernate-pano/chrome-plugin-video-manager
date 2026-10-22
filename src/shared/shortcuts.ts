@@ -155,12 +155,49 @@ export const keyboardEventToShortcut = (event: KeyboardEvent) => {
 };
 
 /**
+ * 一条绑定的结构：修饰键 + 主键。
+ *
+ * ⚠️ 为什么需要它：「主键是加号键」这件事**不能**靠 split('+') 还原 ——
+ * 加号既是「修饰键与主键之间的分隔符」，又是一个真实存在的键位。
+ * `formatShortcut('ctrl+plus')` 渲染出来是 `Ctrl++`，再 split('+') 就得到
+ * `['Ctrl', '', '']` —— 那个键**整个消失**了（macOS 上尤其明显：
+ * 符号表里查不到空串，于是那一段渲染成空）。
+ *
+ * 规范形里主键永远是 `plus` 这个记号（见 PLUS_KEY），所以按 `+` 切分规范形
+ * 是**无损**的：切出来的最后一段就是主键，前面的都是修饰键。
+ */
+export interface ShortcutParts {
+  /** 修饰键（小写）：ctrl / alt / shift / meta … */
+  modifiers: string[];
+  /** 主键：规范形里的写法（加号键是 `plus`）。 */
+  mainKey: string;
+}
+
+/**
+ * 把一条绑定拆成「修饰键 + 主键」。
+ *
+ * 只从**规范形**拆：规范形里主键不含分隔符（加号键写作 `plus`），
+ * 所以这里按 `+` 切分是安全的。
+ */
+export const splitShortcut = (value: string): ShortcutParts => {
+  const normalized = normalizeShortcut(value);
+  if (normalized === '') {
+    return { modifiers: [], mainKey: '' };
+  }
+
+  const segments = normalized.split('+').filter(Boolean);
+  const mainKey = segments.pop() ?? '';
+
+  return { modifiers: segments, mainKey };
+};
+
+/**
  * 键名的显示形式。
  *
  * 这些是**给人看的**，不是给机器解析的 —— 显示成什么样都不影响匹配
  * （匹配走 normalizeShortcut 之后的规范形）。
  */
-const DISPLAY_NAMES: Record<string, string> = {
+export const DISPLAY_NAMES: Record<string, string> = {
   ' ': 'Space',
   ctrl: 'Ctrl',
   control: 'Ctrl',
@@ -202,12 +239,89 @@ const DISPLAY_NAMES: Record<string, string> = {
  * 方向键用箭头符号（`←` `→` `↑` `↓`）：`ArrowLeft` 是代码里的键名，
  * 不是键帽上印的东西。README 里的快捷键表也用箭头，两边保持一致。
  */
-export const formatShortcut = (value: string) =>
-  normalizeShortcut(value)
-    .split('+')
-    .filter(Boolean)
+export const formatShortcut = (value: string) => {
+  const { modifiers, mainKey } = splitShortcut(value);
+  if (modifiers.length === 0 && mainKey === '') {
+    return '';
+  }
+
+  return [...modifiers, mainKey]
     .map((part) => DISPLAY_NAMES[part.toLowerCase()] ?? part)
     .join('+');
+};
+
+/**
+ * macOS 上的键名 → 符号。
+ *
+ * macOS 用户在自己的键盘上找的是 ⌘ / ⌥ / ⌃ / ⇧ 那几颗键，
+ * 界面上写着 "Meta" 他得先在脑子里换算一次才知道该按哪颗。
+ * 这是 macOS 的通用约定（系统设置、VS Code、Chrome 自己都这么写）。
+ */
+export const MAC_KEY_SYMBOLS: Record<string, string> = {
+  ctrl: '⌃',
+  control: '⌃',
+  alt: '⌥',
+  option: '⌥',
+  shift: '⇧',
+  meta: '⌘',
+  os: '⌘',
+  cmd: '⌘',
+  command: '⌘',
+};
+
+/**
+ * 当前是不是 macOS。
+ *
+ * 优先用 `navigator.userAgentData.platform`（Chrome 116+ 有，值是 "macOS"），
+ * 回落 `navigator.platform`（Chrome 里是 "MacIntel"），再回落 UA 串。
+ *
+ * ⚠️ 不能只看 UA 里的 "Mac"：iPadOS 的 UA 也带 "Mac"，而 iPad 上接的
+ * 键盘没有 ⌘ 键（外接键盘才有）。`userAgentData.platform` 在 iPad 上给的是
+ * "macOS"…这一档只能靠平台启发式判断，Chrome 自己也是这么判的。
+ */
+export const isMacPlatform = (): boolean => {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
+  const withUserAgentData = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const platform = withUserAgentData.userAgentData?.platform ?? navigator.platform ?? '';
+
+  if (platform) {
+    return /mac/i.test(platform);
+  }
+
+  return /mac/i.test(navigator.userAgent ?? '');
+};
+
+/**
+ * 把一条绑定渲染成给人看的形式（按平台）。
+ *
+ * macOS 上修饰键用符号、且**不加 "+"**（系统设置的写法就是 "⌘⇧,"）。
+ *
+ * ⚠️ 这里按**修饰键 / 主键**分开处理，绝不按 '+' 切分渲染结果：
+ * 主键是加号键时，渲染结果是 `Ctrl++` —— 切开会得到 `['Ctrl','','']`，
+ * 那个键就**整个消失**了（macOS 上符号表查不到空串 → 渲染成空）。
+ * 用户把动作绑到小键盘的 '+' 上，界面上却空空如也，看起来像「没绑上」。
+ */
+export const formatShortcutForPlatform = (value: string, mac: boolean): string => {
+  const { modifiers, mainKey } = splitShortcut(value);
+  if (modifiers.length === 0 && mainKey === '') {
+    return '';
+  }
+
+  const parts = [...modifiers, mainKey];
+  if (!mac) {
+    return parts.map((part) => DISPLAY_NAMES[part.toLowerCase()] ?? part).join('+');
+  }
+
+  return parts
+    .map((part) => {
+      const lowered = part.toLowerCase();
+      return MAC_KEY_SYMBOLS[lowered] ?? DISPLAY_NAMES[lowered] ?? part;
+    })
+    .join('');
+};
 
 export const matchesShortcut = (event: KeyboardEvent, shortcut: string) => {
   const normalized = normalizeShortcut(shortcut);

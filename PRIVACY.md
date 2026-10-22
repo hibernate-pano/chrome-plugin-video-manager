@@ -1,8 +1,8 @@
 # 隐私政策 / Privacy Policy
 
 **Video Speed Controller — Fullscreen & Keys**
-最后更新 / Last updated: 2026-10-20
-适用版本 / Applies to: 6.0.9 及之后 / and later
+最后更新 / Last updated: 2026-10-21
+适用版本 / Applies to: 6.2.0 及之后 / and later
 
 ---
 
@@ -31,7 +31,22 @@ Chrome. The extension itself communicates with no server.
 |---|---|---|---|
 | 快捷键绑定 / Key bindings | `chrome.storage.sync` | 你为每个动作绑定的按键 / The key you bound to each action | 让你在所有设备上用同一套键 / So the same keys work on every device |
 | 首次引导已展示标记 / First-run hint flag | `chrome.storage.local` | 一个布尔值 / A single boolean | 避免每次刷新都重新提示你 / So the intro only appears once |
-| 标签页倍速（会话内）/ Per-tab playback rate | `chrome.storage.session` | 标签页 ID 与当前倍速 / Tab id and current rate | 让工具栏图标显示当前倍速 / So the toolbar icon can show the current rate |
+| 首次引导的关闭次数 / Intro dismissal count | `chrome.storage.local` | 一个整数 / A single integer | 连续主动关掉三次就暂时不再出现 / Stop nagging after three deliberate dismissals |
+| 首次引导的冷却到期时间 / Intro cooldown expiry | `chrome.storage.local` | 一个时间戳 / A single timestamp | 安静 1 天，但冷却到期仍会再给一次机会 / Quiet for one day — with an expiry, so it can still come back |
+| 引导的「一次性认领」标记 / Intro claim lock | `chrome.storage.local` | 一个随机 ID 与一个时间戳（30 秒后过期）/ A random id and a timestamp (expires after 30 seconds) | 保证同一条引导只在一个 frame 里出现一次 / So the intro appears once, in one frame only |
+| 标签页倍速（会话内）/ Per-tab playback rate | `chrome.storage.session` | 标签页 ID、当前倍速，以及报出这个倍速的 frame 编号 / Tab id, current rate, and the frame number that reported it | 让工具栏图标显示当前倍速，并在视频消失时把读数复位 / So the toolbar icon can show the current rate, and can reset the readout when the video is gone |
+| 标签页当前聚焦的 frame（会话内）/ Focused frame per tab | `chrome.storage.session` | 标签页 ID 与一个整数（Chrome 的 frame 编号）/ Tab id and a single integer (Chrome's frame number) | 记住你此刻聚焦在页面上的哪一个 frame，让点工具栏图标时只作用在那一个 / To remember which frame on the page holds the focus, so the toolbar icon acts only on that one |
+
+> 上面 `chrome.storage.local` 里的四样东西**都不含任何站点信息**：
+> 没有 URL、没有域名、没有页面内容。引导的「认领」锁里只有一个随机 ID
+> （形如 `f3k9x2`）和一个时间戳 —— 它不问你来自哪个网站，只是让几个
+> frame 知道「已经有人认领了，别再弹一遍」。
+>
+> None of the four `chrome.storage.local` items above contains any site
+> information: no URL, no hostname, no page content. The intro's claim lock
+> holds only a random id (like `f3k9x2`) and a timestamp — it never records
+> where you came from; it only tells the other frames "someone already claimed
+> the intro, don't show it again".
 
 ### 关于 `chrome.storage.sync` / About `chrome.storage.sync`
 
@@ -51,15 +66,25 @@ are never synced.
 > 2026-10-20 更新：6.0.9 起「每个标签页的当前倍速」存于 `chrome.storage.session`
 > —— 它**不同步**，只活在当前这次浏览器会话里。它跟 `sync` 是两回事，
 > 所以"只有快捷键会同步"这句话依然成立。
+>
+> 6.1.0 在同一份存储里多了「当前聚焦的 frame」：一个整数（Chrome 的
+> frame 编号），标签页关闭即删除，不含 URL、不含页面内容。它同样**不同步**。
 
 ### 关于 `chrome.storage.session` / About `chrome.storage.session`
 
 该存储随浏览器会话存在，关闭浏览器即消失，**不会同步到任何设备**。
-它只保存"哪个标签页当前是几倍速"这一个数字，用于让工具栏图标显示当前倍速。
+它只保存两类很小的数字：每个标签页的当前倍速，以及报出这个倍速的 frame 编号
+（两个整数，用来让工具栏图标显示当前倍速，并在视频消失时把读数复位）；
+还有每个标签页此刻聚焦在页面上的哪一个 frame —— 同样是整数（Chrome 的 frame 编号）。
+标签页关闭即删除，不含 URL、不含页面内容。
 
 This storage lives only for the browser session and is discarded when you close
-the browser. It is **never synced**. It holds a single number — which tab is at
-which playback rate — so the toolbar icon can display it.
+the browser. It is **never synced**. It holds two kinds of small numbers: for
+each tab, the current playback rate together with the number of the frame that
+reported it (two integers — they let the toolbar icon show the current rate and
+reset the readout when the video is gone), and which frame on the page currently
+holds the focus — a single integer (Chrome's frame number). All of it is deleted
+when the tab is closed, with no URL and no page content in it.
 
 ### 已删除的历史数据 / Removed Historical Data
 
@@ -133,7 +158,7 @@ and is never stored or transmitted.
 | 权限 / Permission | 为什么需要 / Why it's needed |
 |---|---|
 | `storage` | 保存你的快捷键绑定 / To store your key bindings |
-| `host_permissions: <all_urls>` | 在任意网站的视频上工作 / To work on videos on any site |
+| `host_permissions: <all_urls>` | 在网页上找到可接管的 `<video>` 元素（纯音频播放器与浏览器保护起来的加密视频不在此列）/ To find the `<video>` elements that can be controlled on web pages (audio-only players and browser-protected encrypted video are out of scope) |
 | `content_scripts` on `<all_urls>` | 同上 / Same as above |
 
 扩展**不使用**摄像头、麦克风、位置、通知、剪贴板、下载或通知权限。

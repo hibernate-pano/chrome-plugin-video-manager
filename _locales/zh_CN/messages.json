@@ -10,7 +10,8 @@
     "message": "恢复默认"
   },
   "optPressKey": {
-    "message": "按下要绑定的键"
+    "message": "按下要绑定的键 · Backspace 清空",
+    "description": "Shortcut input placeholder"
   },
   "optSaved": {
     "message": "已保存"
@@ -19,7 +20,18 @@
     "message": "保存失败，请重试"
   },
   "optDuplicate": {
-    "message": "有按键被重复绑定，每个动作必须不同"
+    "message": "『$1』与『$2』绑定了同一个键，每个动作必须不同",
+    "description": "Duplicate shortcut error",
+    "placeholders": {
+      "first": {
+        "content": "$1",
+        "example": "加快播放速度"
+      },
+      "second": {
+        "content": "$2",
+        "example": "放慢播放速度"
+      }
+    }
   },
   "optReserved": {
     "message": "这个键被浏览器占用，换一个",
@@ -65,7 +77,7 @@
     "message": "网页全屏"
   },
   "actionFullscreenDesc": {
-    "message": "进入或退出网页全屏"
+    "message": "切换网页全屏"
   },
   "ctlPlay": {
     "message": "播放/暂停"
@@ -98,10 +110,18 @@
     "message": "播放速度"
   },
   "hintFullscreen": {
-    "message": "网页全屏"
+    "message": "按 $1 切换网页全屏",
+    "description": "First-run hint: the fullscreen shortcut toggles page fullscreen",
+    "placeholders": {
+      "key": {
+        "content": "$1",
+        "example": "f"
+      }
+    }
   },
   "hintSpeed": {
-    "message": "$1 / $2 调速",
+    "message": "调速 · $1 加快 / $2 减慢",
+    "description": "First-run hint: speed step actions",
     "placeholders": {
       "up": {
         "content": "$1",
@@ -120,10 +140,26 @@
     "message": "Video Speed Controller"
   },
   "noticeCannotTakeOver": {
-    "message": "这个视频暂时接管不了"
+    "message": "这个视频暂时控制不了",
+    "description": "Shown when the page fullscreen player cannot control a video"
   },
   "speedChanged": {
-    "message": "播放速度 {rate}x"
+    "message": "播放速度 $1x",
+    "placeholders": {
+      "rate": {
+        "content": "$1",
+        "example": "1.5"
+      }
+    }
+  },
+  "speedCurrent": {
+    "message": "当前播放速度 $1x",
+    "placeholders": {
+      "rate": {
+        "content": "$1",
+        "example": "1.5"
+      }
+    }
   },
   "optProductName": {
     "message": "Video Speed Controller — Fullscreen & Keys",
@@ -134,7 +170,7 @@
     "description": "设置页的浏览器标签标题"
   },
   "optLead": {
-    "message": "每个动作都可以改键。留空表示禁用该动作，保存后已打开的页面会立即生效。",
+    "message": "每个动作都可以改键。在输入框里按 Backspace / Delete 清空绑定 = 禁用该动作，保存后已打开的页面会立即生效。",
     "description": "设置页说明段落"
   },
   "optPrivacy": {
@@ -159,8 +195,11 @@
   "noticeNoVideo": {
     "message": "这个页面里没有视频"
   },
+  "noticeVideoElsewhere": {
+    "message": "视频在嵌入框里 —— 点一下它就能用快捷键"
+  },
   "extensionDescription": {
-    "message": "极简的键盘快捷键与干净的网页全屏播放器，只接管你正在看的那个视频",
+    "message": "极简的键盘快捷键与干净的网页全屏播放器，只控制你正在看的那个视频",
     "description": "Extension description shown in the Chrome Web Store and chrome://extensions"
   },
   "optDisabled": {
@@ -194,7 +233,133 @@
     }
   },
   "hintToolbar": {
-    "message": "点扩展图标可进入网页全屏",
+    "message": "点扩展图标可切换网页全屏",
     "description": "First-run hint: the toolbar icon toggles page fullscreen"
+  },
+  "playbackPlaying": {
+    "message": "正在播放",
+    "description": "Screen reader announcement after the video starts playing"
+  },
+  "playbackPaused": {
+    "message": "已暂停",
+    "description": "Screen reader announcement after the video pauses"
+  },
+  "seekForward": {
+    "message": "快进 $1 秒，当前 $2",
+    "description": "Screen reader announcement after seeking forward",
+    "placeholders": {
+      "seconds": {
+        "content": "$1",
+        "example": "5"
+      },
+      "position": {
+        "content": "$2",
+        "example": "1 分 20 秒"
+      }
+    }
+  },
+  "seekBack": {
+    "message": "快退 $1 秒，当前 $2",
+    "description": "Screen reader announcement after seeking backward",
+    "placeholders": {
+      "seconds": {
+        "content": "$1",
+        "example": "5"
+      },
+      "position": {
+        "content": "$2",
+        "example": "1 分 20 秒"
+      }
+    }
+  },
+  "positionMinutes": {
+    "message": "$1 分 $2 秒",
+    "description": "Playback position in minutes and seconds (used inside the seek announcements)",
+    "placeholders": {
+      "minutes": {
+        "content": "$1",
+        "example": "1"
+      },
+      "seconds": {
+        "content": "$2",
+        "example": "20"
+      }
+    }
+  },
+  "positionSeconds": {
+    "message": "$1 秒",
+    "description": "Playback position in seconds (used inside the seek announcements)",
+    "placeholders": {
+      "seconds": {
+        "content": "$1",
+        "example": "5"
+      }
+    }
+  },
+  "fullscreenEntered": {
+    "message": "已进入网页全屏",
+    "description": "Screen reader announcement after entering page fullscreen"
+  },
+  "fullscreenExited": {
+    "message": "已退出网页全屏",
+    "description": "Screen reader announcement after leaving page fullscreen"
+  },
+  "optionFirstRunHintTitle": {
+    "message": "使用引导"
+  },
+  "optionResetFirstRunHintDesc": {
+    "message": "引导只出现一次。点这里重置后，回到视频页遇到视频时会再出现一次 —— 已经打开的标签页也会，不用刷新页面。",
+    "description": "设置页：说明「重新显示使用引导」按钮什么时候会让引导再出现"
+  },
+  "optionResetFirstRunHint": {
+    "message": "重新显示使用引导"
+  },
+  "optionResetFirstRunHintDone": {
+    "message": "已重置"
+  },
+  "optionResetFirstRunHintFailed": {
+    "message": "重置失败，请重试"
+  },
+  "optDuplicateRow": {
+    "message": "与『$1』重复",
+    "description": "Inline error shown under the conflicting shortcut field",
+    "placeholders": {
+      "other": {
+        "content": "$1",
+        "example": "放慢播放速度"
+      }
+    }
+  },
+  "hintClose": {
+    "message": "关闭使用引导",
+    "description": "First-run hint: the close button of the guide"
+  },
+  "optionFirstRunHintFailed": {
+    "message": "已关闭 $1 次（再关闭 $2 次将暂时不再出现）",
+    "description": "设置页：引导被主动关掉过几次",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "2"
+      },
+      "remaining": {
+        "content": "$2",
+        "example": "1"
+      }
+    }
+  },
+  "optionFirstRunHintCooldown": {
+    "message": "冷却中，$1 之后会再次出现",
+    "description": "设置页：引导处于冷却期",
+    "placeholders": {
+      "time": {
+        "content": "$1",
+        "example": "2026-10-22 10:00"
+      }
+    }
+  },
+  "extensionUpdated": {
+    "message": "扩展已更新，请刷新本页",
+    "description": "扩展被更新或重载后显示：这一页还在跑旧的、已经失效的内容脚本"
   }
 }

@@ -1,9 +1,17 @@
+import {
+  hasReliableLayout,
+  isDecorativeAutoplay,
+  isPageMainContent,
+  isSiteMainPlayerVideo,
+  viewportAreaOf,
+} from './ambientPreview';
+import { matchesSelector } from '../shared/domMatches';
 import { getSiteAdapter } from './siteAdapters';
+import { closestSelector } from '../shared/domMatches';
 
 const VIDEO_SELECTOR = 'video';
 
 type VideoRect = Pick<DOMRect, 'width' | 'height' | 'top' | 'left' | 'right' | 'bottom'>;
-type SafeMatcher = HTMLVideoElement & { safeMatches?: (selector: string) => boolean };
 
 /** 一个候选视频连同它的测量结果。 */
 type Candidate = {
@@ -92,21 +100,6 @@ const shadowRootOf = (node: Element): ShadowRoot | null => {
   return node.shadowRoot;
 };
 
-/** 同上，iframe 判定也要退回节点自己那个 realm；跨域时读 contentDocument 会抛。 */
-const frameDocumentOf = (node: Element): Document | null => {
-  const view = node.ownerDocument.defaultView;
-  if (view == null || !(node instanceof view.HTMLIFrameElement)) {
-    return null;
-  }
-
-  try {
-    const frameDocument = node.contentDocument;
-    return frameDocument?.documentElement ? frameDocument : null;
-  } catch {
-    return null;
-  }
-};
-
 const isVisible = (style: CSSStyleDeclaration | null | undefined, rect: VideoRect) =>
   rect.width > 0
   && rect.height > 0
@@ -118,23 +111,6 @@ const isVisible = (style: CSSStyleDeclaration | null | undefined, rect: VideoRec
  */
 const isCssHidden = (style: CSSStyleDeclaration | null | undefined) =>
   style?.display === 'none' || style?.visibility === 'hidden';
-
-/**
- * 这个文档有没有可用的布局几何。
- *
- * 判据是**根元素的 clientWidth**：真实浏览器里它恒等于视口宽度（实测 HTML、
- * SVG、XML 三种文档都是 1280），无布局引擎的环境（如单测用的 jsdom）恒为 0。
- *
- * ⚠️ 曾经用「元素的 computed display 是否为空」来判 —— 那是错的，
- * 而且错得很隐蔽：我们自己注入的 runtimeStyles 里有
- * `.vsc-page-fullscreen-video { display: block }`，于是**一进全屏**，
- * 视频元素的 computed display 就从空变成了 'block'，判定从「无布局」翻成
- * 「有布局」。接下来所有 rect 判定（此时恒为 0）开始生效，视频被判成
- * 「看不见」→ 快捷键在全屏里彻底失灵。
- * 根元素的 clientWidth 不受任何页面样式影响，判据本身是稳的。
- */
-const hasReliableLayout = (doc: Document | null | undefined): boolean =>
-  (doc?.documentElement?.clientWidth ?? 0) > 0;
 
 /**
  * 视频有多少比例**看得见**（在视口内的那部分）。
@@ -281,6 +257,14 @@ const WATCHED_CACHE_TTL_MS = 5_000;
  * 绝对线从 480×270 降到 400×225 之后它就彻底没用了，已删除。
  */
 const PROMINENT_AREA_RATIO = 0.1;
+/**
+ * 「够像页面主角」的比例线（占视口 ≥ 40%）—— 决定能不能抢空格。
+ *
+ * ⚠️ 与 PAGE_MAIN_CONTENT_FRACTION（60%）不是一回事：那条判「是不是
+ * 装饰物」（要**排除**它），这条判「够不够像主角」（决定**能不能**抢空格）。
+ */
+const PAGE_DOMINANT_FRACTION = 0.4;
+
 const MIN_CONTENT_WIDTH = 400;
 const MIN_CONTENT_HEIGHT = 225;
 
@@ -300,35 +284,21 @@ const MIN_CONTENT_HEIGHT = 225;
  * 实测（真实 Chromium，https://www.iqiyi.com/，1440×900）：
  *   主播放器 1353×671 → 占视口 **70.1%** → 过线 → 接管 ✓
  */
-const PAGE_MAIN_CONTENT_FRACTION = 0.6;
-
 /**
  * 这个视频是不是「站点摆在那儿的装饰性自动播放视频」。
  *
- * 判据是**两个信号同时成立**：autoplay + 没有原生 controls。
+ * ⚠️ 判定规则在 `src/content/ambientPreview.ts` —— **只有一份**，
+ * firstRunHint 用的是同一份。曾经这里与 firstRunHint 各写一份，
+ * 两份已经漂移（见 ambientPreview.ts 开头的说明）。
  *
- * - `autoplay` 表达的是**站点的意图** —— 「这条视频会自动开始播，用户没要求过」。
- * - 没有 `controls` 说明站点没打算让用户把它当「一个可以操作的播放器」——
- *   有原生控件的是内容视频，没有的是背景视频/预览。
- *
- * 为什么要单独识别它：文章里嵌的那种「边滚动边播的小预览」正是这个形状。
- * 浏览器允许静音自动播，于是它在用户读字的时候自己播了起来 —— 扩展若按
- * 「页面上有视频」接管，用户按空格翻页就变成了暂停那个预览。
+ * `autoplay` 属性表达的是**站点的意图** —— 「这条视频会自动开始播，
+ * 用户没要求过」。
  *
  * ⚠️ 曾经还要求「静音」，那是多余的：浏览器本来就只允许静音自动播，
  * 于是「自动播放」几乎蕴含「静音」，这一条判据形同虚设（删掉它，
  * 全部用例照样通过 —— 说明它什么也没守）。反过来它还有个害处：
  * 用户允许了「自动播放声音」时，未静音的自动播放视频会被当成内容视频接管，
  * 而那种视频恰恰更可能是背景视频。
- *
- * ⚠️⚠️ **`controls` 属性会被我们自己弄掉。**
- * 进网页全屏时我们把 `video.controls = false`（用自制控制条取代原生控件），
- * 而这会**反射性地移除 `controls` 属性**。于是：
- *   进全屏前：`<video controls autoplay>` → 有 controls → 不是装饰视频 → 接管
- *   进全屏后：controls 属性没了        → 变成「装饰视频」 → **快捷键彻底失灵**
- *
- * 实测（真实浏览器）：进全屏后按 `=` 速度纹丝不动，退出全屏后又好了。
- * 修法见 isAmbientPreview —— 判定必须对「我们自己造成的属性变化」免疫。
  *
  * ⚠️ 尺寸**不**参与这个判定。一个铺满全屏的背景视频同样该被放过。
  */
@@ -360,6 +330,30 @@ const isProminent = (rect: VideoRect, viewportArea: number): boolean => {
   return area(rect) / viewportArea >= PROMINENT_AREA_RATIO;
 };
 
+/**
+ * 收集候选视频 —— **只收本 frame 自己的 document**。
+ *
+ * ⚠️⚠️ 6.1.0 之前这里会**下钻同源 iframe**。内容脚本注入到所有 frame 之后
+ * （manifest 的 `all_frames`），那件事从「必要」变成了「有害」——
+ *
+ * 顶层 registry 下钻到 iframe 里的视频，而 **iframe 里另有一份 registry**
+ * （同一个 `<video>` 节点，两份独立的运行时状态）。于是：
+ *
+ * 1. **同一个视频被两个 runtime 各管一半**：顶层把它的倍速改了、iframe 里
+ *    那个 runtime 又改一次 —— 角标显示的倍率与视频实际倍率**互相矛盾**。
+ * 2. **顶层能改 iframe 里的视频，却报不了倍速**：顶层 runtime 的
+ *    `reportSpeed` 只让顶层文档说话，于是工具栏标题停在 1.0，
+ *    而视频实际是 1.1 —— 唯一的常驻读数在**说谎**。
+ * 3. **焦点在哪就在哪改**这条铁律被破坏：用户焦点在顶层，按 `=` 改的却是
+ *    iframe 里的视频（实测）。
+ *
+ * 修法：**每个 frame 只管自己 document 里的视频**。跨 frame 的意图
+ * （点工具栏图标）由 background 路由到「用户此刻聚焦的那个 frame」——
+ * 那一个 frame 的 registry 里就有那个视频，它的 `canEnter` 也成立。
+ *
+ * ⚠️ shadow root 仍然要下钻：shadow tree 与 document 是**同一个 realm**，
+ * `video.ownerDocument === document` 依然成立，reparent 搬得动。
+ */
 const collectVideos = (root: Document | ShadowRoot, videos: Set<HTMLVideoElement>) => {
   root.querySelectorAll(VIDEO_SELECTOR).forEach((node) => {
     if (isVideoElement(node)) {
@@ -372,17 +366,7 @@ const collectVideos = (root: Document | ShadowRoot, videos: Set<HTMLVideoElement
     if (shadow) {
       collectVideos(shadow, videos);
     }
-
-    const frameDocument = frameDocumentOf(node);
-    if (frameDocument) {
-      collectVideos(frameDocument, videos);
-    }
   });
-};
-
-const matchesSelector = (video: HTMLVideoElement, selector: string) => {
-  const safeMatches = (video as SafeMatcher).safeMatches;
-  return safeMatches ? safeMatches.call(video, selector) : video.matches?.(selector) === true;
 };
 
 /**
@@ -405,36 +389,6 @@ const selectPreferredVideos = (videos: HTMLVideoElement[], selectors: string[]) 
   }
 
   return preferred;
-};
-
-/**
- * 找出站点自己点名的「主播放器」。
- *
- * 与 selectPreferredVideos 的关键区别是**唯一性**：
- * preferred 的最后一档是 'video'（通用兜底），匹配页面上每一个视频；
- * 而主播放器必须由站点用一个**具体**选择器指认。
- *
- * 为什么这条这么重要：YouTube 的主播放器是**静音自动播放**的
- * （浏览器只允许静音自动播）。若把「静音」当作排除依据，
- * 用户在 YouTube 上按 f 就会没反应 —— 而那正是这个扩展最该工作的场景。
- * 站点能指名谁是主播放器，于是那条禁令就不适用于它。
- *
- * 降级链与 preferred 一致：命中第一个有候选的选择器就停。
- */
-const selectMainPlayerVideos = (videos: HTMLVideoElement[], selectors: string[]) => {
-  const main = new Set<HTMLVideoElement>();
-  for (const selector of selectors) {
-    for (const video of videos) {
-      if (matchesSelector(video, selector)) {
-        main.add(video);
-      }
-    }
-    if (main.size > 0) {
-      return main;
-    }
-  }
-
-  return main;
 };
 
 export interface VideoRegistryOptions {
@@ -464,10 +418,10 @@ export class VideoRegistry {
    * （实测：1600×900 暂停的主播放器 + 320×180 正在播的预览，
    * 按 `=` 改的是主视频，点图标进全屏进的却是那个小预览）。
    *
-   * ⚠️ 它也**不能**用来豁免可见性过滤：它永不过期，
+   * ⚠️ 它也**不能**用来豁免可见性过滤：那要靠 lastChoiceVideo
+   * （有 10 秒窗口，见 wasRecentlyChosen）。用这个字段豁免的话，
    * 用户一小时前点过的视频后来被站点 `display:none` 藏起来，
    * 工具栏图标仍会接管它 —— overlay 起来了，里面却是空的。
-   * 豁免可见性用的是 lastChoiceVideo（有 10 秒窗口，见 wasRecentlyChosen）。
    *
    * ⚠️ **键盘命中不写这个字段**：键盘写的是 keyboardTargetVideo。
    * 两者语义不同 —— 这个字段回答「用户用鼠标碰过谁」，
@@ -475,6 +429,18 @@ export class VideoRegistry {
    * 盖掉用户的指针选择。
    */
   private lastInteractedVideo: HTMLVideoElement | null = null;
+  /**
+   * 「用户碰过 lastInteractedVideo」这件事发生在什么时候。
+   *
+   * ⚠️ 为什么必须与视频**绑定**（而不是只看时间戳）：只记时间的话字段会漂移 ——
+   * 用户碰过 A 之后又碰了 B，旧的时间戳会让 B 白白继承 A 的新鲜度。
+   *
+   * ⚠️ 为什么必须有**时限**：这个字段的语义是「用户**刚刚**碰过它」。
+   * 一条几十分钟前的点击不再说明用户此刻想动哪个视频 —— 而它带着全场最高的
+   * 权重（+10000），永不过期就会让「很久以前点过、早已滚出屏幕」的小预览
+   * 一直霸占工具栏图标的目标（见 isRecentInteracted 与 resolveCurrentVideo）。
+   */
+  private lastInteractedAt = 0;
   /**
    * 用户最近一次**主动**选这个视频的时间戳。
    *
@@ -512,8 +478,8 @@ export class VideoRegistry {
    *
    * ⚠️ 为什么不能复用 lastInteractedVideo：那个字段的语义是
    * 「用户用指针/焦点碰过的最后一个视频」，键盘写进去会盖掉指针的信号。
-   * 而且它永不过期 —— 用它记键盘目标的话，用户一年前点过的视频会
-   * 永久霸占「当前视频」的位置。
+   * 而且它是「用户碰过什么」的线索，不是「快捷键此刻在操作谁」——
+   * 用它记键盘目标的话，键盘的意图会被指针的意图顶掉。
    */
   private keyboardTargetVideo: HTMLVideoElement | null = null;
   private keyboardTargetAt = 0;
@@ -552,11 +518,88 @@ export class VideoRegistry {
    * 快捷键路径的缓存按它失效（见 getWatchedTarget）。
    */
   private generation = 0;
+  /**
+   * 测量代次 —— 只管「测量结果」的缓存。
+   *
+   * ⚠️ 为什么要与 generation 分开：class 变动在重渲染站点上每秒几十次，
+   * 而它**只**影响「这个视频长什么样」（可见性/尺寸），不影响
+   * 「这个页面上有哪些视频」。把它算进 generation 的话，
+   * 快捷键路径的缓存每次 class 变动都被作废 → 每次按键都要全页重扫
+   * （实测 3 万节点的页面约 3ms，长按加速时每 120ms 一次）。
+   *
+   * 所以：class 变动只推进测量代次（见 invalidateMeasurements），
+   * 其余变动两个代次一起推进（见 invalidate）。
+   */
+  private measurementGeneration = 0;
   /** 快捷键路径的缓存（按 generation 失效）。 */
-  private watchedCache: { generation: number; target: WatchedTarget | null; at: number } | null = null;
-  /** 只置脏标记，绝不在回调里重建视频列表。 */
-  private readonly observer = new MutationObserver(() => {
-    this.invalidate();
+  private watchedCache: {
+    generation: number;
+    /** 算这份缓存时的测量代次 —— 用来判断「可见性判定的依据有没有变」。 */
+    measurement: number;
+    target: WatchedTarget | null;
+    at: number;
+  } | null = null;
+  /**
+   * 每个视频的**测量结果**（帧内缓存）。
+   *
+   * 为什么缓存的是「测量」而不是「候选列表」：
+   *
+   * - 测量（`getBoundingClientRect` + `getComputedStyle`）会**强制排一次版**，
+   *   实测它是整条路径里最贵的一半（真实 Chromium，3 万节点的页面：
+   *   采样里 getBoundingClientRect 的占比比 querySelectorAll 还高）。
+   * - 候选列表本身必须**每次重收**：DOM 的增删是同步可见的
+   *   （单元测试就是这个形状：appendChild 之后立刻查询），
+   *   而 MutationObserver 的失效通知是**微任务** —— 缓存列表会漏掉
+   *   同一个同步块里刚加进来的视频。
+   *
+   * 所以：列表永远新鲜，测量按帧复用。同一帧内布局不会变
+   * （滚动与 CSS 动画都会推进帧号），跨帧必须重测 —— 视频可能刚被挪了位置。
+   * 另按 measurementGeneration 失效：DOM 变了（改 class、改 style）立刻作废。
+   */
+  private rectCache = new WeakMap<HTMLVideoElement, {
+    measurement: number;
+    frame: number;
+    rect: VideoRect;
+  }>();
+  /** 计算样式单独缓存：只有「判定可见性」那条路需要它。 */
+  private styleCache = new WeakMap<HTMLVideoElement, {
+    measurement: number;
+    frame: number;
+    style: CSSStyleDeclaration | null | undefined;
+  }>();
+  /**
+   * DOM 变更回调：**按变更的种类**决定作废多少缓存。
+   *
+   * ⚠️ 为什么不能一律作废：class 变动在重渲染站点上每秒几十次
+   * （React / Vue / Next.js 每次渲染都要重算 class）。
+   * 一律作废 = 每次按键都要全页重扫一遍（实测 3 万节点的页面约 3ms），
+   * 而长按加速时每 120ms 一次 —— 那点开销全烧在这里了。
+   *
+   * 分类的依据是「这条变更会不会改变**候选集合**」：
+   * - childList：会（视频出现了/被摘掉了）→ 全量作废。
+   * - controls / autoplay / style：会（它们决定视频是不是装饰物、
+   *   是不是被 CSS 藏起来了）→ 全量作废。
+   * - class：**不会** —— 可见性判定读的是**计算样式**与**实测矩形**
+   *   （isCssHidden / isVisible / isInViewport），class 属性本身从头到尾
+   *   没有被读过 → 只作废测量结果（见 invalidateMeasurements）。
+   *
+   * ⚠️ 为什么**不能**把 class 从 attributeFilter 里去掉（那会更省）：
+   * 测量结果虽然是「每帧重测」的，但**目标缓存**是跨帧的（5 秒）。
+   * class 变动不推进任何代次的话，缓存里的目标就永远不会被复核 ——
+   * 站点用 `display:none` 把视频藏起来之后，它还能继续吃下快捷键整整 5 秒。
+   * 留着 class 观察，它才会推进**测量代次**，从而触发「复核那一个视频」
+   * （见 isStillUsable）。省下的那点观察开销，换来的是一条正确性。
+   */
+  private readonly observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type !== 'attributes' || record.attributeName !== 'class') {
+        this.invalidate();
+        return;
+      }
+    }
+
+    // 只有 class 变了 → 只作废测量结果。
+    this.invalidateMeasurements();
   });
   private readonly boundHandleInteraction = (event: Event) => this.handleInteraction(event);
   private readonly boundHandleFocus = (event: Event) => this.handleFocus(event);
@@ -586,16 +629,15 @@ export class VideoRegistry {
     // ⚠️ 为什么还要观察属性：判定依赖 `controls` / `autoplay` 两个属性，
     // 也依赖 class/style（可见性）。只观察 childList 的话，站点后来给视频
     // 加上 controls，我们仍然按「装饰视频」看待它。
-    // attributeFilter 把回调限制在这几个属性上，避免 class 频繁变化时
-    // 缓存被冲掉。
+    // attributeFilter 把回调限制在这几个属性上，避免无关属性（id、data-*）
+    // 变动时缓存被冲掉。
     this.observer.observe(document.body ?? document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['controls', 'autoplay', 'class', 'style'],
     });
-    this.dirty = true;
-    this.generation += 1;
+    this.invalidate();
     this.catchUpSiteStartedVideos();
   }
 
@@ -632,18 +674,21 @@ export class VideoRegistry {
     this.observer.disconnect();
     this.fullscreenVideo = null;
     this.lastInteractedVideo = null;
+    this.lastInteractedAt = 0;
     this.lastChoiceVideo = null;
     this.keyboardTargetVideo = null;
     this.snapshot = null;
     this.watchedCache = null;
-    this.dirty = true;
-    this.generation += 1;
+    this.invalidate();
   }
 
   setFullscreenVideo(video: HTMLVideoElement | null) {
     this.fullscreenVideo = video;
     if (video) {
+      // 我们接管了它 —— 这也是一条「用户此刻要动它」的强信号，
+      // 顺手把「用户碰过」的新鲜度续上（见 isRecentInteracted）。
       this.lastInteractedVideo = video;
+      this.lastInteractedAt = Date.now();
     }
     // lastInteractedVideo 变了，缓存里的"当前视频"可能已过期。
     this.invalidate();
@@ -652,11 +697,36 @@ export class VideoRegistry {
   /**
    * 作废一切缓存。
    *
-   * generation 前进 = 快捷键路径的缓存失效；dirty = 工具栏路径的帧快照失效。
+   * generation 前进 = 快捷键路径的缓存失效；dirty = 工具栏路径的帧快照失效；
+   * measurementGeneration 前进 = 测量结果（矩形/计算样式）失效。
    */
   private invalidate() {
     this.dirty = true;
     this.generation += 1;
+    this.measurementGeneration += 1;
+  }
+
+  /**
+   * 只作废**测量结果**的缓存，「当前目标」的缓存留着。
+   *
+   * 什么时候用它：class 变化（见 observer 的注释）。
+   *
+   * ⚠️ 为什么不能连「当前目标」一起作废：重渲染站点的 class 变动
+   * 每秒几十次，作废一次目标缓存 = 全页重扫（3 万节点的页面约 3ms），
+   * 而长按加速时每 120ms 一次 —— 那点开销全烧在这里了。
+   *
+   * ⚠️ 为什么作废测量就够：可见性判定读的是**计算样式**与**实测矩形**
+   * （isCssHidden / isVisible / isInViewport），class 属性本身没有被读过；
+   * 而测量本来就是**每帧重测**的（同一帧内布局不会变，滚动与 CSS 动画
+   * 都会推进帧号）。class 变动要做的只是让「这一帧」的测量重做一遍。
+   *
+   * ⚠️ 候选列表（collectCandidates）**永远不缓存** —— DOM 的增删是
+   * 同步可见的，而 MutationObserver 的作废通知是**微任务**：
+   * 缓存列表会漏掉同一个同步块里刚加进来的视频。
+   */
+  private invalidateMeasurements() {
+    this.dirty = true;
+    this.measurementGeneration += 1;
   }
 
   private getAllVideos() {
@@ -690,13 +760,14 @@ export class VideoRegistry {
    * 用户是不是「刚刚亲手选过」这个视频。
    *
    * ⚠️ 「选过」与「最近交互过」是**两件事**，不能互相顶替：
-   * - lastInteractedVideo：最后碰到过的那个视频（点一下就变；**永不过期**，
-   *   而且会被自动播放的 play 事件改写 —— 它只是「最近碰过什么」的线索）
+   * - lastInteractedVideo：最后碰到过的那个视频（点一下就变；带 60 秒窗口，
+   *   且**只记用户的行为**、不被自动播放的 play 事件改写 ——
+   *   它只是「最近碰过什么」的线索）
    * - lastChoiceVideo + lastChoiceAt：用户**主动选过**的那个，和它的时间
    *
-   * 只有后者带证据（用户的手势）与时效（10 秒窗口）。
+   * 只有后者带证据（用户的手势）与更短的时效（10 秒窗口）。
    * 豁免可见性过滤时必须用后者 —— 用前者会让「一小时前点过、后来被站点
-   * 藏起来的视频」永远享受豁免（实测：工具栏图标接管了一个 display:none 的
+   * 藏起来的视频」享受更长的豁免（实测：工具栏图标接管了一个 display:none 的
    * 视频，overlay 起来里面是空的）。
    */
   private wasRecentlyChosen(video: HTMLVideoElement): boolean {
@@ -731,6 +802,32 @@ export class VideoRegistry {
   }
 
   /**
+   * 这个视频是不是「站点摆在那儿的装饰性自动播放视频」。
+   *
+   * ⚠️ **公开这个方法是有意的**：判定规则在 `ambientPreview.ts`（只有一份），
+   * 而「用户碰过它」「站点自己开的」这两条**证据**只有本模块知道
+   * （它们靠事件与手势的时间关系来判定，别人算不出来）。
+   *
+   * firstRunHint 需要同一份判定来回答另一个问题：
+   * 「这条视频是装饰物吗？—— 是的话就别给它弹引导」。两边对同一条视频
+   * 给出**相反**的结论是最糟的组合：键盘接管了（对的），引导永远不出现
+   * （错的，唯一一次教学机会被烧掉）。
+   *
+   * ⚠️ 候选集**不**含 shadow DOM 与同源 iframe 里的视频 ——
+   * 那两条下钻路径只对「页面里选目标」有意义，而这里的用途是
+   * 「这条**正在播放**的 video 是不是装饰物」（firstRunHint 拿到的是
+   * play 事件的目标节点，本身就在候选集里）。
+   */
+  isAmbientPreview(video: HTMLVideoElement): boolean {
+    const rect = this.measureRect(video);
+    return this.computeAmbientPreview(
+      video,
+      rect,
+      video === this.fullscreenVideo,
+    );
+  }
+
+  /**
    * 站点是不是**自己**把这个视频播起来的（用户没要求过）。
    *
    * 两种证据：
@@ -744,7 +841,8 @@ export class VideoRegistry {
   /**
    * 这个视频是不是「站点摆在那儿的装饰性预览」。
    *
-   * 判据全部是**证据**，不是属性：
+   * 判据全部是**证据**，不是属性 —— 一共**七条**，
+   * 分属三个地方（谁提供哪一条，见 `src/content/ambientPreview.ts` 的文件头）：
    *
    * 1. 站点**没有**点名它是主播放器 —— 站点能点名就不该由我们猜。
    * 2. 不是**我们**接管着的（进全屏时我们会把 controls 弄掉）。
@@ -752,8 +850,9 @@ export class VideoRegistry {
    * 4. 它**没有原生 controls** —— 站点没打算让人把它当播放器操作。
    * 5. 它是**站点自己**播起来的（autoplay 属性，或站点调 play()）。
    * 6. 它**没有占满大半个视口** —— 装饰性预览从来不会霸占整个屏幕。
+   * 7. **键盘刚命中过它** —— 我们自己打分打出来的结果，别人算不出来。
    *
-   * 六条全中 → 它就是装饰，不接管。
+   * 七条全中 → 它就是装饰，不接管。
    *
    * ⚠️ 第 5 条为什么不能省：它把「装饰性预览」与
    * 「没人开过、正等着用户先调速再播放的视频」区分开。
@@ -766,54 +865,46 @@ export class VideoRegistry {
    * iQiyi 首页的主播放器判成装饰，整页放弃接管（实测：按 = / Space / f
    * 全部无反应，扩展等于没装）。
    */
-  private isAmbientPreview(
+  private computeAmbientPreview(
     video: HTMLVideoElement,
     rect: VideoRect,
-    wasMainPlayer: boolean,
     isTakenOverByUs: boolean,
   ): boolean {
-    // 1. 站点点名它是主播放器 → 那是站点的声明，比我们的推断硬。
-    if (wasMainPlayer) {
-      return false;
-    }
-
-    // 2. 我们接管着的 → 判定必须对「我们自己造成的变化」免疫。
+    // 1–5：共享判定（ambientPreview.ts）—— 与 firstRunHint 用的是**同一份**规则。
     //
-    // 进全屏时我们把 `video.controls = false`（用自制控制条取代原生控件），
-    // 而这会**反射性地移除 `controls` 属性`。于是：
-    //   进全屏前：`<video controls autoplay>` → 有 controls → 不是装饰视频 → 接管
-    //   进全屏后：controls 属性没了        → 变成「装饰视频」 → **快捷键彻底失灵**
+    // ⚠️ 这份规则曾经与 firstRunHint 各写一份，两份已经漂移：
+    // videoRegistry 这份被重写成「六条证据」（当时是六条，后来又加了
+    // 第 7 条「键盘刚命中过它」），firstRunHint 那份还停在
+    // 最老的属性判据上，于是同一条视频「接管」与「弹引导」的结论相反 ——
+    // 用户在一个用自制播放器的网站上看视频：键盘接管了（对的），
+    // 但引导永远不出现（错的，唯一一次教学机会被白白烧掉）。
     //
-    // 实测（真实浏览器）：进全屏后按 `=` 速度纹丝不动，退出全屏后又好了。
-    // 症状极像「全屏里快捷键坏了」，但根因在接管范围的判定上。
+    // ⚠️ 第 1 条（站点有没有点名它是主播放器）与 `isWatchedVideo` 第 2 档
+    // 用的是**同一个**函数（ambientPreview.ts 的 `isSiteMainPlayerVideo`）。
+    // 曾经这两处各写一份且**不等价**：一份是「唯一性」版（命中第一个有候选的
+    // 选择器就停），一份是「是不是站点点名的」版（任何一条命中都算）。
+    // 同一页面上「video.html5-main-video」与「.html5-video-player video」
+    // 同时存在时，站在后者里的那条视频，一条判据说它不是主播放器，
+    // 另一条说它是 —— 于是**本模块内部**对同一条视频给出两个相反的结论：
+    // 「要不要接管它」说它是装饰物，「要不要给它弹引导」说它不是。
+    // 那正是本轮要消灭的那类 bug，所以现在**只认一份**。
     //
-    // 修法：**由 VideoRegistry 自己知道**哪些视频是我们接管的（setFullscreenVideo
-    // 已经在记），而不是去猜 DOM 位置。
-    // 曾经用 `video.closest('#vsc-page-fullscreen-stage')` 判断 —— 那把
-    // fullscreenController 的内部 id 约定抄了一份到另一个模块，两处各写各的
-    // 字面量，改一处忘另一处就会漂；而且 css-cover 回退模式下视频**不在** stage 里，
-    // 那条路径上这个豁免根本不生效。
-    if (isTakenOverByUs) {
-      return false;
-    }
-
-    // 3. 用户碰过它 → 那是用户自己的选择，任何推断都推翻不了。
-    if (this.wasEverTouched(video)) {
-      return false;
-    }
-
-    // 4. 有原生控件 = 站点把它当成一个正经播放器给人用。
-    if (video.hasAttribute('controls')) {
-      return false;
-    }
-
-    // 5. 站点自己播起来的（用户没要求过它，它自己播起来了）。
-    if (!this.wasStartedBySite(video)) {
+    // 「我们接管着的」这条豁免必须传进来：进全屏时我们把
+    // `video.controls = false`，那会**反射性地移除 `controls` 属性**，
+    // 于是进全屏后视频会被判成装饰物 → **快捷键彻底失灵**（实测）。
+    // 豁免的依据是**由 VideoRegistry 自己知道**哪些视频是我们接管的
+    // （setFullscreenVideo 已经在记），而不是去猜 DOM 位置。
+    if (!isDecorativeAutoplay(video, {
+      isMainPlayer: isSiteMainPlayerVideo(video),
+      isTakenOverByUs,
+      wasChosenByUser: this.wasEverTouched(video),
+      wasStartedBySite: this.wasStartedBySite(video),
+    })) {
       return false;
     }
 
     // 6. 占满大半个视口 → 它是页面主角，不是装饰。
-    if (this.isPageMainContent(video, rect)) {
+    if (isPageMainContent(video, rect)) {
       return false;
     }
 
@@ -852,20 +943,6 @@ export class VideoRegistry {
    * 无布局引擎时判不了（rect 恒为 0）→ 返回 false，即「不豁免」。
    * 那种环境（单测的 jsdom）里这个豁免本来也测不出来。
    */
-  private isPageMainContent(video: HTMLVideoElement, rect: VideoRect): boolean {
-    if (!hasReliableLayout(video.ownerDocument)) {
-      return false;
-    }
-
-    const view = video.ownerDocument.defaultView ?? window;
-    const viewportArea = (view.innerWidth || 0) * (view.innerHeight || 0);
-    if (viewportArea <= 0) {
-      return false;
-    }
-
-    return area(rect) / viewportArea >= PAGE_MAIN_CONTENT_FRACTION;
-  }
-
   /**
    * 这个视频是不是「用户已经滚过去了」。
    *
@@ -935,7 +1012,6 @@ export class VideoRegistry {
     video: HTMLVideoElement,
     rect: VideoRect,
     style: CSSStyleDeclaration | null | undefined,
-    isSiteMainPlayer: boolean,
   ): boolean {
     // 判定顺序不是随意的：**不依赖布局的判据必须排在依赖布局的判据前面**。
     //
@@ -960,7 +1036,11 @@ export class VideoRegistry {
     //    恰恰就是静音自动播的（浏览器只允许静音自动播）。
     //    ⚠️ 「还在视口里」这一条不能省 —— 主播放器滚出视口之后，
     //    页面上的内容才是用户此刻在看的东西。
-    if (isSiteMainPlayer
+    //    ⚠️ 「站点有没有点名它」只有**一份**判据（ambientPreview.ts 的
+    //    isSiteMainPlayerVideo），与下面第 3 档里那条用的是同一个函数 ——
+    //    两处曾经各写一份且不等价，于是本模块内部对同一条视频给出过
+    //    两个相反的结论（见 computeAmbientPreview 的注释）。
+    if (isSiteMainPlayerVideo(video)
       && (!hasReliableLayout(video.ownerDocument)
         || isInViewport(video, rect)
         || this.wasRecentlyChosen(video))) {
@@ -968,7 +1048,7 @@ export class VideoRegistry {
     }
 
     // 3. 站点的装饰性预览：用户没要求过它，它自己播起来了。
-    if (this.isAmbientPreview(video, rect, isSiteMainPlayer, video === this.fullscreenVideo)) {
+    if (this.computeAmbientPreview(video, rect, video === this.fullscreenVideo)) {
       return false;
     }
 
@@ -1006,9 +1086,49 @@ export class VideoRegistry {
    * getComputedStyle 读不到样式就判不了 display/visibility，不能从 rect 推。
    */
   private measure(video: HTMLVideoElement) {
+    return { video, rect: this.measureRect(video), style: this.measureStyle(video) };
+  }
+
+  /**
+   * 量一个视频的矩形（帧内复用）。
+   *
+   * ⚠️ `getBoundingClientRect()` 会**强制排版** —— 它是整条候选路径里
+   * 最贵的一次调用（见 rectCache 的注释）。所以每条用到矩形的路都走这里，
+   * 不许自己调 `getBoundingClientRect`。
+   */
+  private measureRect(video: HTMLVideoElement): VideoRect {
+    const cached = this.rectCache.get(video);
+    if (cached
+      && cached.measurement === this.measurementGeneration
+      && cached.frame === currentFrame) {
+      return cached.rect;
+    }
+
     const rect = video.getBoundingClientRect();
+    this.rectCache.set(video, {
+      measurement: this.measurementGeneration,
+      frame: currentFrame,
+      rect,
+    });
+    return rect;
+  }
+
+  /** 量一个视频的计算样式（帧内复用）。 */
+  private measureStyle(video: HTMLVideoElement) {
+    const cached = this.styleCache.get(video);
+    if (cached
+      && cached.measurement === this.measurementGeneration
+      && cached.frame === currentFrame) {
+      return cached.style;
+    }
+
     const style = video.ownerDocument.defaultView?.getComputedStyle(video);
-    return { video, rect, style };
+    this.styleCache.set(video, {
+      measurement: this.measurementGeneration,
+      frame: currentFrame,
+      style,
+    });
+    return style;
   }
 
   /**
@@ -1039,7 +1159,15 @@ export class VideoRegistry {
     if (preferred.has(video)) {
       score += 1600;
     }
-    if (video === this.lastInteractedVideo) {
+    // 「用户刚刚碰过它」—— 权重全场最高，但**有时限**。
+    //
+    // ⚠️ 为什么必须有时限：这个字段记的是「用户碰过的最后一个视频」，
+    // 而「碰过」这件事会随着时间越来越不相关。用户半小时前点过一张
+    // 320×180 的卡片预览，之后页面换成了大播放器 —— 那次点击**不再**说明
+    // 用户此刻想动哪个视频。没有时限的话，它会以 +10000 一直霸占
+    // 工具栏图标的目标（实测：图标进的全屏是那个早就滚走的小预览，
+    // 同一时刻按 f 进的却是大播放器 —— 图标与快捷键表现不一致）。
+    if (this.isRecentInteracted(video)) {
       score += 10000;
     }
     // 键盘刚刚命中的视频：让它在接下来的操作里继续当目标。
@@ -1072,6 +1200,22 @@ export class VideoRegistry {
   }
 
   /**
+   * 「用户刚刚（用指针/焦点）碰过它」这个说法**现在**还成立吗。
+   *
+   * ⚠️ 窗口取 EXPLICIT_CHOICE_MS（60 秒），与「用户显式选过它」那一档同量级：
+   * 60 秒覆盖的是「点一下播放/暂停，然后马上按 f」这一串动作；
+   * 再长就不合理了 —— 那时用户多半早就划到下一条视频去了。
+   *
+   * ⚠️ 与 wasExplicitlyChosen 的区别：那一档认的是「用户**主动选过**」
+   * （必须有手势做证据），这一档认的是「用户**碰过**」（指针或焦点）。
+   * 后者证据更弱，所以它的时限不能比前者更长。
+   */
+  private isRecentInteracted(video: HTMLVideoElement): boolean {
+    return video === this.lastInteractedVideo
+      && Date.now() - this.lastInteractedAt < EXPLICIT_CHOICE_MS;
+  }
+
+  /**
    * 找出「用户正在看的那个视频」+ 它能吃下哪些键。
    *
    * 找不到时返回 null —— 宁可不接管，也不要接管错对象。
@@ -1085,15 +1229,9 @@ export class VideoRegistry {
       list.map((item) => item.video),
       adapter.selectors,
     );
-    // 站点自己点名的「主播放器」——与 preferred 不同，它要求唯一。
-    const mainPlayers = selectMainPlayerVideos(
-      list.map((item) => item.video),
-      adapter.mainSelectors,
-    );
 
     const scored = list
-      .filter(({ video, rect, style }) =>
-        this.isWatchedVideo(video, rect, style, mainPlayers.has(video)))
+      .filter(({ video, rect, style }) => this.isWatchedVideo(video, rect, style))
       .map(({ video, rect, style }) => ({
         video,
         score: this.scoreCandidate(video, rect, style, preferred),
@@ -1107,7 +1245,7 @@ export class VideoRegistry {
 
     return {
       video,
-      permission: this.resolvePermission(video, mainPlayers.has(video)),
+      permission: this.resolvePermission(video),
     };
   }
 
@@ -1120,17 +1258,39 @@ export class VideoRegistry {
    * 只有下面这些情况才允许拦截空格：
    * - 它是**站点点名的主播放器** —— 站点自己说「这就是播放器」。
    * - 用户**刚刚亲手选过**它（10 秒内）—— 用户正在跟它互动。
-   * - 它**有原生 controls** —— 站点把它当播放器给人用。
    * - 它**正在播** —— 用户此刻在跟一段正在进行的画面互动。
+   * - 它**有原生 controls，且是页面主角**（见下）。
    *
    * 其余情况（暂停着、没有原生控件、不是主播放器、用户没碰过）
    * → 'no-space'：空格放行给页面。
+   *
+   * ⚠️ 「是不是站点点名的主播放器」与接管路径、装饰路径用的是
+   * **同一个函数**（ambientPreview.ts 的 isSiteMainPlayerVideo）。
+   * 曾经这里用的是「唯一性」那一份（命中第一个有候选的选择器就停），
+   * 而接管路径用的是「是不是站点点名的」那一份 ——
+   * 同一个模块内部对同一条视频给出两个相反的答案。
+   *
+   * ⚠️⚠️ 「有原生 controls」**不能单独**成为抢空格的依据。
+   *
+   * 实测（真实 Chromium）：一篇长文（正文 6000px）顶部放一个
+   * `<video controls>`（640×360，**暂停着**），用户点正文想翻页 →
+   * 按空格 → `scrollY` 纹丝不动（0），视频反而**开始播放**了。
+   * 同一个页面把视频删掉 → 空格正常翻页（scrollY 760）。
+   *
+   * 也就是说「有 controls」这条判据在**任何带原生播放器的文章页上必现**，
+   * 而「文章页里嵌个播放器」是极常见的页面形态。这是键盘类扩展的
+   * 经典差评来源：「这扩展把我的空格抢走了，我没法翻页」。
+   *
+   * 根因是把「站点把它当播放器」误当成了「用户此刻在跟它互动」。
+   * 一个**暂停着**的 controls 视频，在用户眼里是文章的一部分，不是
+   * 一个正在看的影片。
+   *
+   * 所以 controls 这条要**再加一道**：它必须是**页面主角**（占视口 ≥ 40%）。
+   * 正经播放器（打开就在看的那一个）满足这条；文章顶部那个小播放器
+   * 不满足 —— 它在文章里是插图，不是主角。
    */
-  private resolvePermission(
-    video: HTMLVideoElement,
-    isSiteMainPlayer: boolean,
-  ): TakeoverPermission {
-    if (isSiteMainPlayer) {
+  private resolvePermission(video: HTMLVideoElement): TakeoverPermission {
+    if (isSiteMainPlayerVideo(video)) {
       return 'full';
     }
 
@@ -1138,15 +1298,48 @@ export class VideoRegistry {
       return 'full';
     }
 
-    if (video.hasAttribute('controls')) {
-      return 'full';
-    }
-
     if (isRunning(video)) {
       return 'full';
     }
 
+    // 有原生 controls = 站点把它当正经播放器给人用 —— 但**只有当它也是
+    // 页面主角**时，它才可能是用户此刻在看的东西。
+    if (video.hasAttribute('controls') && this.isPageDominant(video)) {
+      return 'full';
+    }
+
     return 'no-space';
+  }
+
+  /**
+   * 这个视频是不是「页面主角」（占视口 ≥ 40%）。
+   *
+   * ⚠️ 40% 这条线与 isPageMainContent 的 60% 不是一回事：
+   * 那条判「是不是装饰物」（要**排除**它），这条判「够不够像主角」
+   * （决定**能不能**抢空格）。抢空格比「接管别的键」更霸道，
+   * 所以门槛要**更低**才对 —— 但实测发现 60% 太严：很多正经播放器的
+   * 容器四周有大量留白，视频本身占不到 60%，那样连「空格暂停视频」
+   * 都会失灵。
+   *
+   * 40% 的依据：文章里嵌入的小播放器通常在 10%-20% 之间；
+   * 而作为页面主体的播放器（哪怕四周有字幕区、评论区占位）很少低于 40%。
+   *
+   * ⚠️ 无布局引擎时（单测的 jsdom）量不出尺寸 → 判「是主角」，
+   * 也就是「不因为这条判据收紧」。否则单测里所有 controls 视频都会
+   * 突然变成 no-space，既有断言大面积翻红 —— 而那条翻红与真实行为无关。
+   */
+  private isPageDominant(video: HTMLVideoElement): boolean {
+    if (!hasReliableLayout(video.ownerDocument)) {
+      return true;
+    }
+
+    const rect = this.measureRect(video);
+    const viewportArea = viewportAreaOf(video);
+    if (viewportArea <= 0) {
+      return true;
+    }
+
+    return (rect.width * rect.height) / viewportArea >= PAGE_DOMINANT_FRACTION;
   }
 
   /**
@@ -1181,7 +1374,22 @@ export class VideoRegistry {
       getSiteAdapter(window.location.hostname).selectors,
     );
 
-    const scored = candidates
+    // ⚠️ 回退分支必须与快捷键路径**对齐**：快捷键路径有「在视口里」这道过滤
+    // （isWatchedVideo 的第 5 条），回退分支原来**没有** ——
+    // 于是「有尺寸、但早已滚出屏幕」的视频仍是有效候选，
+    // 而 lastInteractedVideo 直接以 +10000 胜出。
+    //
+    // 实测（真实 Chromium）：几十秒前点过一张 320×180 的卡片预览，
+    // 之后页面换成大播放器 → 点工具栏图标进的全屏是那个早就滚走的小预览
+    // （或一块黑屏），而不是眼前的大播放器；同一时刻按 f 进的却是大播放器 ——
+    // **图标与快捷键表现不一致**。
+    //
+    // 修法：有「在视口里」的候选时，只在它们里面挑；一个都没有时才退回全部。
+    // 这样两条路径在「用户眼前是哪个视频」这件事上永远一致。
+    const onScreen = candidates.filter(({ video, rect }) => isInViewport(video, rect));
+    const pool = onScreen.length > 0 ? onScreen : candidates;
+
+    const scored = pool
       .map(({ video, rect, style }) => ({
         video,
         score: this.scoreCandidate(video, rect, style, preferred),
@@ -1211,7 +1419,8 @@ export class VideoRegistry {
    * 即使站点随后把它藏起来，也仍是用户自己的选择。
    *
    * ⚠️ 这里豁免的必须是 lastChoiceVideo（带 10 秒窗口），**不能**是
-   * lastInteractedVideo —— 后者永不过期，且会被自动播放改写。
+   * lastInteractedVideo —— 后者的窗口长得多（60 秒），而且它记的是
+   * 「碰过」而不是「选过」。
    * 曾经豁免的是 lastInteractedVideo，实测：用户一小时前点过的视频，
    * 后来被站点 `display:none` 藏起来，工具栏图标仍然接管它 ——
    * overlay 起来了，里面却是空的（视频甚至没被搬进 stage）。
@@ -1234,6 +1443,37 @@ export class VideoRegistry {
   }
 
   /**
+   * 「测量依据变了之后」，缓存里的目标还站不站得住。
+   *
+   * ⚠️ 为什么需要它：class 变动**不**作废目标缓存（见 invalidateMeasurements），
+   * 而 class 变动恰恰能改变可见性 —— 站点把视频 `display:none` 藏起来就是
+   * 改 class。没有这道复核，缓存里的目标会**继续被接管最多 5 秒**
+   * （WATCHED_CACHE_TTL_MS），哪怕视频已经不在屏幕上了。
+   *
+   * ⚠️ 为什么只复核**这一个**视频，而不是全页重扫：全页重扫在重渲染站点上
+   * 每次按键都要 3ms（3 万节点），而长按加速时每 120ms 一次 ——
+   * 那点开销全烧在这里了。复核一个视频 = 一次 getBoundingClientRect
+   * + 一次 getComputedStyle，比全页重扫便宜两个数量级。
+   *
+   * 判据与 resolveWatchedTarget 用的是**同一套**（isUsableCandidate +
+   * isWatchedVideo），否则「缓存说行、重扫说不行」，两条路径会打架。
+   */
+  private isStillUsable(video: HTMLVideoElement): boolean {
+    if (!isConnected(video)) {
+      return false;
+    }
+
+    const rect = this.measureRect(video);
+    const style = this.measureStyle(video);
+
+    if (!this.isUsableCandidate(video, rect, style)) {
+      return false;
+    }
+
+    return this.isWatchedVideo(video, rect, style);
+  }
+
+  /**
    * 「用户正在看的视频」+ 它能吃下哪些键。没有就 null。
    *
    * ⚠️ 这条路径**只被键盘控制器调用**（runtime.ts 里
@@ -1248,6 +1488,12 @@ export class VideoRegistry {
    * 非 null 的结果额外有个 5 秒的时间上限：候选的分数里含有随时间
    * 变化的成分（键盘目标的 30 秒窗口、「用户选过」的 10/60 秒窗口），
    * 时间到了就该重新算一次。
+   *
+   * ⚠️ 缓存按 **DOM 变更代次**失效，但**只改 class** 不推进那个代次
+   * （见 invalidateMeasurements）—— 否则重渲染站点上每次按键都要全页重扫。
+   * 代价是「目标被 class 藏起来」这件事不会立刻反映到缓存上，
+   * 所以命中缓存时要**复核那一个视频**（见 isStillUsable）：
+   * 复核一个视频 = 一次测量，比全页重扫便宜两个数量级。
    */
   getWatchedTarget(): WatchedTarget | null {
     const cached = this.watchedCache;
@@ -1258,12 +1504,26 @@ export class VideoRegistry {
       const fresh = alive
         && (target === null || Date.now() - cached.at < WATCHED_CACHE_TTL_MS);
       if (fresh) {
-        return target;
+        // ⚠️ 测量依据变了（多半是 class 变动）→ 目标可能已经被站点藏起来了。
+        // 这里只**复核这一个视频**，不是全页重扫（见 isStillUsable 的注释）。
+        //
+        // 测量依据没变 → 直接命中缓存，一个测量都不做（静态页面的热路径）。
+        if (target === null
+          || cached.measurement === this.measurementGeneration
+          || this.isStillUsable(target.video)) {
+          return target;
+        }
+        // 目标已经站不住了 → 落到下面重新算一次。
       }
     }
 
     const target = this.resolveWatchedTarget();
-    this.watchedCache = { generation: this.generation, target, at: Date.now() };
+    this.watchedCache = {
+      generation: this.generation,
+      measurement: this.measurementGeneration,
+      target,
+      at: Date.now(),
+    };
 
     if (target) {
       this.rememberKeyboardTarget(target.video);
@@ -1296,7 +1556,7 @@ export class VideoRegistry {
    *
    * ⚠️ 记的是 keyboardTargetVideo，**不是** lastInteractedVideo ——
    * 后者的语义是「用户用指针碰过的最后一个视频」，键盘写进去会盖掉
-   * 用户的指针选择（而且它永不过期）。
+   * 用户的指针选择（而且它带的是「用户碰过」的时限，不是键盘的时限）。
    *
    * ⚠️ **不能让 generation 前进**：那会把刚算好的缓存立刻作废，
    * 每按一次键就重扫一次全页，缓存等于没有。之所以安全，是因为
@@ -1356,7 +1616,12 @@ export class VideoRegistry {
 
     if (video !== this.lastInteractedVideo) {
       this.lastInteractedVideo = video;
+      this.lastInteractedAt = Date.now();
       this.invalidate();
+    } else {
+      // 同一个视频被再次操作：把「用户正在跟它互动」的新鲜度续上。
+      // 不续的话，用户每分钟点它一次、每次都把 60 秒窗口重新打开才对。
+      this.lastInteractedAt = Date.now();
     }
   }
 
@@ -1416,10 +1681,15 @@ export class VideoRegistry {
     //
     // 那条 +10000 是给「用户刚碰过的视频」的：用户点了一个视频，
     // 我们就该优先处理它。自动播放不构成这种意图。
-    if (isGesture && video !== this.lastInteractedVideo) {
-      this.lastInteractedVideo = video;
-      // 否则同一帧内紧随其后的查询会读到交互前的旧结果。
-      this.invalidate();
+    if (isGesture) {
+      if (video !== this.lastInteractedVideo) {
+        this.lastInteractedVideo = video;
+        // 否则同一帧内紧随其后的查询会读到交互前的旧结果。
+        this.invalidate();
+      }
+      // 时间戳**每次**都刷新：用户反复点同一个视频时，
+      // 「刚刚碰过它」这件事一直是新的（见 isRecentInteracted 的窗口）。
+      this.lastInteractedAt = Date.now();
     }
 
     if (isGesture) {
@@ -1448,11 +1718,17 @@ export class VideoRegistry {
 
     for (const node of nodes) {
       const element = node as Element | null;
-      if (!element || typeof element.closest !== 'function') {
+      // ⚠️ 「closest 是不是函数」不用在这里判：closestSelector 自己处理
+      // （页面把它删掉时判成「没有」）。
+      if (!element) {
         continue;
       }
 
-      const nearest = element.closest(VIDEO_SELECTOR);
+      // ⚠️ 必须走带 try/catch 的那份：页面可以把 Element.prototype.closest
+      // 换成会抛异常的版本 —— 抛了，「用户当时点的是哪条视频」就找不到，
+      // 那条视频永远拿不到「用户碰过它」「站点自己开的」两条证据，
+      // 于是被判成装饰物：既不接管，也不弹引导。
+      const nearest = closestSelector(element, VIDEO_SELECTOR);
       if (nearest && isVideoElement(nearest)) {
         return nearest;
       }
@@ -1474,6 +1750,22 @@ export class VideoRegistry {
     // 合成事件不算手势：页面脚本能随意派发 pointerdown，
     // 让它刷新「用户刚动过手」的时间戳就等于给了页面一个遥控器。
     if (!this.isTrustedEvent(event)) {
+      return;
+    }
+
+    // ⚠️ 浏览器在用户**按住**某个键期间会持续派发 keydown（`event.repeat === true`）。
+    //
+    // 那些重复事件不带来任何新信息：还是同一个键、还是同一次手势。
+    // 但每次都要重扫整页视频列表（见 candidateCache 的注释）——
+    // 用户按住一个键一秒，就是 30 次全页扫描。
+    //
+    // 而真实用户按住键的时长恰恰是**最长的**（长按空格翻页、长按方向键快进），
+    // 所以这一条是「按住键」这条路径上最划算的优化。
+    //
+    // ⚠️ 副作用是刻意的：`lastGestureAt` 不再被重复事件刷新，
+    // 于是「用户按住键的同时站点把自己的预览视频播起来」不再被算成
+    // 「用户按了播放」—— 那本来就更像站点在抢用户的意图。
+    if (event.type === 'keydown' && (event as KeyboardEvent).repeat) {
       return;
     }
 
@@ -1514,7 +1806,7 @@ export class VideoRegistry {
       if (!isConnected(video)) {
         continue;
       }
-      const rect = video.getBoundingClientRect();
+      const rect = this.measureRect(video);
       if (rect.width <= 0 || rect.height <= 0) {
         continue;
       }

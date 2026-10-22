@@ -33,6 +33,11 @@
  */
 
 import { CONTROLS_Z_INDEX } from './runtimeStyles';
+import {
+  CONTROL_BAR_BREAKPOINTS,
+  CONTROL_BAR_NARROW_PADDING,
+  CONTROL_BAR_WIDE_PADDING,
+} from './controlBarLayout';
 
 const FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
 
@@ -56,6 +61,15 @@ const ACCENT = '#67e8f9';
  * 取 .45：与白色画面的 4.2:1 离 3:1 的底线更远，而与遮罩的 4.5:1 也已过线。
  */
 const TRACK_IDLE = 'rgba(255, 255, 255, 0.45)';
+
+/**
+ * 断点与内边距从 **controlBarLayout.ts** 来 —— 那里是布局契约的真源。
+ *
+ * ⚠️ 不在这里写死的原因：断点有三个消费方（这份 CSS、收起态退出钮的 JS
+ * 位置、以及真实浏览器里的 e2e 量测），各写一份就会漂，
+ * 而且漂了**没有任何测试会红**。理由与实测数字见 controlBarLayout.ts。
+ */
+export { CONTROL_BAR_BREAKPOINTS, CONTROL_BAR_REQUIRED_WIDTHS } from './controlBarLayout';
 
 export const controlsStyles = `
 :host {
@@ -95,7 +109,16 @@ export const controlsStyles = `
   align-items: center;
   gap: 10px;
   box-sizing: border-box;
-  padding: 20px 18px 12px;
+  /*
+   * 内边距**从契约来**，不写字面量。
+   *
+   * ⚠️ 为什么不写死：收起态那枚独立退出钮要落在控制条退出按钮的**同一个角**，
+   * 而那个角由控制条的 padding 决定。两边各写一份数字时，改一处不改另一处，
+   * 退出钮就会错位 —— 而这正是 2026-10-21 复审抓到的真问题
+   * （只把契约里的 right 从 18 改成 4，退出钮就错开 14px，只有一条
+   * 1280px 宽的 e2e 能抓到）。
+   */
+  padding: ${CONTROL_BAR_WIDE_PADDING.top}px ${CONTROL_BAR_WIDE_PADDING.right}px ${CONTROL_BAR_WIDE_PADDING.bottom}px;
   /*
    * 渐变分四档，不是一档到底。
    *
@@ -471,27 +494,86 @@ export const controlsStyles = `
 }
 
 /*
- * --- 窄屏（手机竖屏、窄窗口） ---
+ * --- 窄屏（手机竖屏、窄窗口）与「被放大」的窗口 ---
  *
- * ⚠️ 390px 宽时控制条原本溢出 100px（scrollWidth 490 vs clientWidth 390）：
- * 音量滑块右半截出屏，**倍速与退出按钮完全在屏幕外** ——
- * 鼠标用户根本没法退出全屏（键盘还能用 Esc / f）。
+ * ⚠️ 这里曾经只有一个断点：640px。640 是**拍脑袋**的数，而这套布局真正的
+ * 门槛低得多 —— 于是 200% 放大窗口的用户白白丢控件：
+ * 浏览器放大 200% 会把 CSS 视口**减半**（1280 → 640px），
+ * 640 恰好命中断点，音量滑块和总时长凭空消失，而那点宽度**根本装得下**
+ * 完整的一套。这是「按设备想象」而不是「按可用宽度算」的代价。
  *
- * 做法：
- *   - 音量滑块让位给静音按钮（手机上拖着调音量本来也不现实）
- *   - 收紧内边距与间距
- *   - 进度条允许缩到 60px
- *   - 倍速与退出按钮不许被压扁
+ * ⚠️⚠️ 后来这一段又栽在同一个坑上：**断点是用估算值定的，不是实测值**。
+ *
+ * 当时的估算是「完整一套 490px / 去掉音量与总时长 365px / 紧凑 293px」，
+ * 于是断点定在 500 与 380。实测（真实 Chromium，2026-10-21）推翻了这两个数：
+ *
+ *   完整一套              实测需要 553px 视口
+ *                          （退出按钮右边缘恒在 552.83 —— 用 1:00:00 这种
+ *                            长时长字符串量出来的；短时长会窄 13.5px）
+ *   去掉音量滑块与总时长   实测需要 401px 视口（退出按钮右边缘恒在 400.33）
+ *   紧凑一套              实测需要 321px 视口（退出按钮右边缘恒在 321）
+ *   极简一套（无时间）     实测需要 234px 视口（右边缘恒在 234）
+ *   最后一档（无进度/静音） 实测需要 134px 视口（右边缘恒在 134）
+ *
+ * 于是有**两段**视口宽度会让退出按钮出屏：
+ *
+ *   501–546px  → 完整一套放不下（断点 500 比实际需要低 53px）
+ *   381–400px  → 中间那一套放不下（断点 380 比实际需要低 21px）
+ *
+ * 症状是「手机上鼠标点不到退出按钮」—— 390px（iPhone 12/13/14 的宽度）
+ * 正好落在第二段里。退出按钮出屏 = 用户被关在全屏里，
+ * 只能靠 Esc 出去，而「按 Esc 能退」这件事从没在界面上告诉过他。
+ *
+ * 所以断点改成**实测值 + 余量**：
+ *
+ *   > 560px  → 完整一套（需要 553）
+ *   ≤ 560px  → 去掉音量滑块与总时长（需要 401）
+ *   ≤ 430px  → 紧凑一套（需要 321）
+ *   ≤ 330px  → 连时间都不显示（需要 234）
+ *   ≤ 240px  → 连进度条与静音都让位（需要 134）
+ *
+ * ⚠️ 每一档都留了余量，不是「刚好装得下」：断点落在「刚好装得下」的那一点上时，
+ * 只要差 1px 就会溢出（退出按钮被推出屏幕）。余量留给滚动条、缩放、
+ * 字体回退（系统没装 Inter 时字更宽）。
+ *
+ * ⚠️ 最后一档（≤330px）是为「200% 放大」准备的：320px 的手机放到 200%
+ * 就是 160px 的 CSS 视口，任何一档都装不下 —— 那时至少要把**退出按钮**
+ * 保住（它是唯一的逃生口），时间显示可以让位。
  *
  * ⚠️ 不用 overflow-x: auto 兜底：overflow-y: visible 在 overflow-x 不是
  * visible 时会被**算成 auto**，控制条于是变成纵向滚动容器，
  * 倍速菜单（绝对定位在按钮上方）会被整个裁掉 —— 那是用一个问题换另一个。
- * 让内容真的塞得下才是正解：320px 宽下这一套刚好放得下（实测 293px）。
+ * 让内容真的塞得下才是正解。
+ *
+ * ⚠️ 这些数字会过期。谁改了控制条里的任何一个控件（加宽、换文案、
+ * 加图标），都要重跑 e2e 里那条「宽度扫描」守卫（见
+ * tests/e2e/fullscreen-controls.spec.js），它会把真实需要的宽度报出来。
+ *
+ * ⚠️ 断点本身不在这里写死 —— 它来自 controlBarLayout.ts 的
+ * CONTROL_BAR_BREAKPOINTS（断点）与 CONTROL_BAR_REQUIRED_WIDTHS（实测需求），
+ * 那里同时是 JS 侧（收起态退出钮的位置）与 e2e 侧（真实浏览器量测）的真源。
  */
-@media (max-width: 640px) {
+@media (max-width: ${CONTROL_BAR_BREAKPOINTS.medium}px) {
+  /* 静音按钮留着，滑块让位（手机上拖着调音量本来也不现实）。 */
+  .volume {
+    display: none;
+  }
+
+  /*
+   * 放不下「当前时间 / 总时长」：只留当前时间。
+   * 进度条本身已经表达了播放位置，牺牲总时长换来退出按钮可见。
+   */
+  .time__sep,
+  .time__total {
+    display: none;
+  }
+}
+
+@media (max-width: ${CONTROL_BAR_BREAKPOINTS.compact}px) {
   .bar {
     gap: 6px;
-    padding: 12px 10px 8px;
+    /* 同样从契约来 —— 见上面宽屏那处的注释。 */
+    padding: ${CONTROL_BAR_NARROW_PADDING.top}px ${CONTROL_BAR_NARROW_PADDING.right}px ${CONTROL_BAR_NARROW_PADDING.bottom}px;
   }
 
   .button {
@@ -504,22 +586,8 @@ export const controlsStyles = `
     height: 20px;
   }
 
-  /* 静音按钮留着，滑块让位。 */
-  .volume {
-    display: none;
-  }
-
   .progress {
     min-width: 60px;
-  }
-
-  /*
-   * 窄屏放不下「当前时间 / 总时长」：只留当前时间。
-   * 进度条本身已经表达了播放位置，牺牲总时长换来退出按钮可见。
-   */
-  .time__sep,
-  .time__total {
-    display: none;
   }
 
   .time__now {
@@ -530,6 +598,38 @@ export const controlsStyles = `
   .speed,
   .exit {
     flex-shrink: 0;
+  }
+}
+
+/*
+ * 极窄（放大到 200% 的手机、小窗）：连当前时间都让位。
+ *
+ * 留下的是：播放 / 进度 / 静音 / 倍速 / 退出。
+ * 丢掉的：时间显示 —— 它是信息，退出按钮是**逃生口**，逃生口优先。
+ */
+@media (max-width: ${CONTROL_BAR_BREAKPOINTS.minimal}px) {
+  .time {
+    display: none;
+  }
+
+  .progress {
+    min-width: 40px;
+  }
+}
+
+/*
+ * 最后一档（320px 的手机放到 200% = 160px 的 CSS 视口）：
+ * 连进度条与静音都让位。
+ *
+ * 留下的是：播放 / 倍速 / 退出（三个 30px 按钮 + 2 个 6px 间距 = 144px）。
+ * ⚠️ **倍速徽标必须留着** —— 那是用户唯一能一眼看到「现在是几倍速」的地方，
+ * 而控制条此刻还开着。丢进度条（画面上还有播放进度）与静音（手机上很少用）
+ * 是可以接受的让步；丢倍速读数不是。
+ */
+@media (max-width: ${CONTROL_BAR_BREAKPOINTS.narrowest}px) {
+  .progress,
+  [data-role="mute"] {
+    display: none;
   }
 }
 `;

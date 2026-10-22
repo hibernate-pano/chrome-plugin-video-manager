@@ -261,8 +261,7 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(script).toMatch(/real-extension\.spec\.js/);
   });
 
-  it('test:e2e:ext 覆盖 tests/e2e 下每一个 spec，新用例不会静默漏跑', () => {
-    // 同一条教训：新增一个 spec 文件却忘了加进 test:e2e:ext，CI 会照样全绿，
+  it('test:e2e:ext 覆盖 tests/e2e 下每一个 spec，新用例不会静默漏跑', () => {    // 同一条教训：新增一个 spec 文件却忘了加进 test:e2e:ext，CI 会照样全绿，
     // 而那个文件从未被执行过。这里用文件系统做事实核查，而不是手写名单。
     // 唯一的例外来源是 playwright.config.js 的 testIgnore。
     const e2eDir = resolve(repoRoot, 'tests/e2e');
@@ -298,6 +297,63 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
       if (isIgnored(file)) continue;
       expect(script, `${file} 没有被 test:e2e:ext 引用，CI 不会执行它`).toContain(file);
     }
+  });
+});
+
+describe('CI 工作流：什么情况下才真的跑', () => {
+  /**
+   * 这组断言守的是一件**没人会注意到**的事：
+   * 「绿灯」到底意味着什么。
+   *
+   * 2026-10-21 的实况：6.1.0 与 6.2.0 的全部工作（含 6 个新 e2e spec、
+   * 重写过的设置页与全屏控制器）**从未进过 CI** —— 最后一次绿的 e2e 作业是
+   * 2026-10-08 跑的 6.0.8 那棵树。原因是 `on:` 只认 `main` / `develop`
+   * 与「往 main 开 PR」，而工作一直做在功能分支上。
+   *
+   * 后果不是「CI 坏了」，是**分支上「测试全绿」与「CI 会绿」成了两件事**：
+   * 前者只说明本地跑过，后者才是发布闸门。于是「绿」这个信号被高估了。
+   *
+   * 修法是让 e2e 在**任何分支**上都跑 —— 代价是每次推送多花约 2 分钟，
+   * 换来的是「绿色」重新等于「真浏览器里还能用」。
+   */
+  it('e2e 必须在**所有分支**的 push 上都跑，不能只认 main/develop', () => {
+    // 触发条件写在 `on:` 里，而 `on:` 里的 push: / pull_request: 会被
+    // 误当成 job —— 所以这里只取 `jobs:` 之前的那一段。
+    const trigger = workflow.slice(0, workflow.indexOf('\njobs:\n'));
+    const lines = trigger.split('\n');
+
+    const pushIndex = lines.findIndex((line) => /^\s*push:\s*(#.*)?$/.test(line));
+    expect(pushIndex, '工作流的 on: 里没有 push 段').toBeGreaterThan(-1);
+
+    // `push:` 下面**缩进更深**的行才是它的子项；没有子项 = 所有分支。
+    const indentOf = (line: string) => line.length - line.trimStart().length;
+    const pushIndent = indentOf(lines[pushIndex]!);
+    const children: string[] = [];
+    for (let i = pushIndex + 1; i < lines.length; i += 1) {
+      const line = lines[i]!;
+      if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+      if (indentOf(line) <= pushIndent) break;
+      children.push(line.trim());
+    }
+
+    // `branches: [main, develop]` 之外的写法（`branches-ignore: [...]`、
+    // `branches: ['*']`、直接不写 branches）都意味着「所有分支」。
+    const branchFilter = children.find((child) => child.startsWith('branches:'));
+    const hasAllBranches =
+      !branchFilter ||
+      /branches-ignore\s*:/.test(children.join('\n')) ||
+      /branches\s*:\s*\[\s*['"]?\*['"]?\s*\]/.test(branchFilter);
+
+    expect(
+      hasAllBranches,
+      `push 只在部分分支上触发（${children.join(' ')}）—— 功能分支上的改动永远不会跑 e2e，` +
+        '而本地「全绿」会被误当成「CI 会绿」',
+    ).toBe(true);
+  });
+
+  it('工作流必须由 push 或 pull_request 触发（不能只在手点时跑）', () => {
+    const trigger = workflow.slice(0, workflow.indexOf('\njobs:\n'));
+    expect(trigger).toMatch(/push:|pull_request:/);
   });
 });
 

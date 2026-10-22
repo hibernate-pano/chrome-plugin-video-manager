@@ -57,6 +57,60 @@ describe('playback helpers', () => {
     expect(seekBy(video, 5)).toBe(35);
   });
 
+  /**
+   * 直播流不能拿「没有上限」当兜底。
+   *
+   * 直播的 duration 是 Infinity，用它兜底等于「随便跳」：
+   * `currentTime + 5` 会越过 DVR 窗口的末尾 —— 浏览器把它夹到 live edge，
+   * 表现为「按了 → 视频突然跳到直播最新画面」，完全不像「快进 5 秒」。
+   */
+  it('直播流不会越过 DVR 窗口跳到 live edge', () => {
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'currentTime', {
+      value: 30,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(video, 'duration', {
+      value: Number.POSITIVE_INFINITY,
+      configurable: true,
+    });
+    Object.defineProperty(video, 'seekable', {
+      value: {
+        length: 1,
+        start: () => 0,
+        end: () => 32,
+      },
+      configurable: true,
+    });
+
+    // 30 + 5 = 35 越过了窗口末尾（32）→ 夹到 32，不是 live edge。
+    expect(seekBy(video, 5)).toBe(32);
+  });
+
+  it('直播流不会越过 DVR 窗口的起点', () => {
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'currentTime', {
+      value: 10,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(video, 'duration', {
+      value: Number.POSITIVE_INFINITY,
+      configurable: true,
+    });
+    Object.defineProperty(video, 'seekable', {
+      value: {
+        length: 1,
+        start: () => 8,
+        end: () => 32,
+      },
+      configurable: true,
+    });
+
+    expect(seekBy(video, -5)).toBe(8);
+  });
+
   it('toggles play and pause and reports the new state', () => {
     const video = document.createElement('video');
     let paused = true;

@@ -1,138 +1,11 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { test, expect } from '@playwright/test';
+import { resolve } from 'node:path';
 import { CLIP_10S_WEBM_BASE64 } from './fixtures/clip-10s.ts';
+import { launchExtension } from './helpers/launch.js';
+import { anyLocaleFragment } from './helpers/i18n.js';
 
 // VSC_EXTENSION_DIR 可以指向别的构建目录（例如故意改坏的副本），
 // 默认测 dist/。走环境变量而不是硬编码，是为了让「变异验证」能在不碰源码的前提下跑。
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
-
-/**
- * 从构建产物里读接管提示的全部语言文案。chrome.i18n 的 UI 语言跟随浏览器/
- * 系统（CI 容器是英文，本机是中文），断言如果写死一种语言就会「本地过、
- * CI 挂」——这个坑已实锤两次。Playwright 的 locale 选项在 macOS 上改变不了
- * 扩展的 i18n 语言，所以断言对"任意一种已翻译文案"匹配。
- */
-const takeoverNoticeTexts = ['en', 'zh_CN'].flatMap((locale) => {
-  const messages = JSON.parse(readFileSync(resolve(DIST, '_locales', locale, 'messages.json'), 'utf8'));
-  return [messages.noticeCannotTakeOver.message];
-});
-
-/**
- * 找到本机已装的 Chrome for Testing。
- *
- * Playwright 缓存里的浏览器版本号未必和它自己期望的一致，硬编码版本路径会在别人
- * 机器上直接报 "Executable doesn't exist"。所以扫描缓存目录、按平台取对应的可执行
- * 路径；扫不到就返回 undefined，交给 Playwright 用它自己的解析（CI 上
- * `playwright install chromium` 之后走的就是这条）。
- */
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-
-  return undefined;
-};
-
-/**
- * 真实加载 dist/ 的扩展跑一遍。
- *
- * 现有的 fullscreen-regression.spec.js 是把 dist/content.js 当普通 <script> 注入页面，
- * 那是页面主世界，不是扩展：content-loader 桥接、document_start 抢占注册、
- * 隔离世界里的 chrome.* 全部没被覆盖。v5.2.1 修的正是这些，所以必须真加载扩展。
- *
- * 关于 headless：Playwright 1.49 起把浏览器拆成了完整 chromium 和
- * chromium_headless_shell，只有前者支持 --load-extension。直接给 executablePath
- * 时 Playwright 未必走新 headless，在 ubuntu-latest 上会安静地加载不了扩展，
- * 表现为每条用例 30 秒超时。所以优先用 channel: 'chromium'（Playwright 明确
- * 对应完整构建），失败再回落到显式 executablePath。
- */
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--autoplay-policy=no-user-gesture-required',
-  // CI 容器里以 root 跑 Chrome 需要这两个，否则沙箱起不来或 /dev/shm 太小。
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-];
-
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-profile-'));
-  const executablePath = findChromium();
-
-  // locale 固定成 zh-CN：chrome.i18n 的 UI 语言跟随浏览器，而 CI 容器是英文
-  // 环境，断言文案写死中文就会「本地过、CI 挂」。这个坑已实锤过一次。
-  const candidates = [
-    { label: 'channel:chromium', options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { label: 'executablePath', options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-
-  let context = null;
-  const failures = [];
-  for (const candidate of candidates) {
-    // 只在候选「指名要用 executablePath」而它又没解析出来时跳过；
-    // channel 候选根本没有这个键，不能被这条守卫一起跳掉。
-    if ('executablePath' in candidate.options && candidate.options.executablePath === undefined) {
-      continue;
-    }
-
-    try {
-      context = await chromium.launchPersistentContext(profile, candidate.options);
-      break;
-    } catch (error) {
-      failures.push(`${candidate.label}: ${String(error).slice(0, 200)}`);
-    }
-  }
-
-  if (!context) {
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('无法启动带扩展的浏览器：\n' + failures.join('\n'));
-  }
-
-  // 前置检查：扩展没加载成功时立刻失败。否则每条用例都会各等 30 秒超��，
-  // 报出来的是看不出原因的超时（这个坑在 ubuntu-latest 上真的踩过一次）。
-  const sw = context.serviceWorkers()[0]
-    ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-  if (!sw) {
-    await context.close();
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error(
-      '浏览器起来了但扩展没加载：没有等到 background service worker。\n' +
-        'headless 下必须使用支持扩展的完整 chromium（channel: chromium），' +
-        'headless shell 不支持 --load-extension。',
-    );
-  }
-
-  return {
-    context,
-    async close() {
-      await context.close();
-      rmSync(profile, { recursive: true, force: true });
-    },
-  };
-};
-
 /**
  * 服务测试页：内容脚本跑在隔离世界，用 evaluate 改不到它，只能从页面可见结果断言。
  *
@@ -189,6 +62,28 @@ const clipDataUri = `data:video/webm;base64,${CLIP_10S_WEBM_BASE64}`;
  * 而浏览器按住不放时派发的正是那种（`event.repeat === true`）。
  * CDP 的 `Input.dispatchKeyEvent` 带 `autoRepeat: true` 是唯一能造出来的路子，
  * 而且它是**浏览器自己派发**的事件（isTrusted 为 true），扩展会真的当它处理。
+ *
+ * ⚠️⚠️ **绝对不要传 `nativeVirtualKeyCode`** ——
+ * 那是这个 helper 里最贵的一个参数，代价不是「慢」，是「塌」。
+ *
+ * 实测（真实 Chromium + CDP，A/B 对照）：
+ *   带 `nativeVirtualKeyCode` → 1.5 秒里灌进页面 **1.8 万个 keydown**
+ *   不带                    → 1.5 秒里 **1 个** keydown
+ *
+ * 机制：带上它，浏览器就把这个按键当成「用户真的按住了」——
+ * 自己的按键重复生成器随即开工，而它**不是**按操作系统的节奏（30 次/秒），
+ * 而是**按渲染器能确认多快就多快**（实测上万次/秒）。
+ * 补一个 `keyUp` 也停不下来（实测补了之后照样每秒 5000+）。
+ *
+ * 后果是整条链路一起塌：
+ * - 扩展的每个 keydown 都要重扫整页视频列表 → 渲染器主线程被占满；
+ * - 于是 seek / 全屏这些动作全部排队，CDP 往返实测到 **37 秒**；
+ * - 这条用例会跑到 100 秒以上，而扩展「用户选过它」的证据只保留 60 秒 ——
+ *   视频不再被认作接管目标，seek 静默失效，断言超时。
+ *   **失败原因与产品无关**，但症状看起来像产品坏了。
+ *
+ * 只传 `windowsVirtualKeyCode` 就够：它只影响 DOM 里那个已废弃的
+ * `event.keyCode`，而扩展匹配快捷键用的是 `event.key`（见 keyboardController）。
  */
 const dispatchKey = async (client, key, { autoRepeat = false } = {}) => {
   const info = {
@@ -202,7 +97,6 @@ const dispatchKey = async (client, key, { autoRepeat = false } = {}) => {
     key,
     code: info.code,
     windowsVirtualKeyCode: info.keyCode,
-    nativeVirtualKeyCode: info.keyCode,
     text: autoRepeat ? '' : info.text,
     autoRepeat,
   });
@@ -213,7 +107,6 @@ const dispatchKey = async (client, key, { autoRepeat = false } = {}) => {
       key,
       code: info.code,
       windowsVirtualKeyCode: info.keyCode,
-      nativeVirtualKeyCode: info.keyCode,
     });
   }
 };
@@ -422,7 +315,30 @@ test.describe('反馈：不让用户面对静默失败', () => {
       const text = await page.locator('#vsc-first-run-hint').textContent();
       expect(text).toContain('f');
       expect(text).not.toContain('F');
-      expect(text).toContain('= / -');
+
+      // 调速这一行必须**说得清哪个键是哪个**。
+      //
+      // ⚠️ 这条断言此前写的是 `toContain('= / -')` —— 那是**旧文案**
+      // 「调速 · = / -」的形状。文案后来改成了「调速 · = 加快 / - 减慢」：
+      // 原来那两个键长得一模一样，用户分不清哪个是加速、哪个是减速，
+      // 而按错了的代价是「速度反了」。所以断言要跟着新语义走，
+      // 不能继续守着那个已经废弃的半句话。
+      //
+      // ⚠️ 而且**不能写死中文**：`chrome.i18n` 挑 _locales 目录跟的是**系统
+      // locale**（不是 --lang，也不是浏览器界面语言），本机中文、CI runner 英文。
+      // 写死中文的断言在 CI 上必红 —— 这坑本仓库踩过两次
+      // （见 tests/e2e/helpers/i18n.js 的说明）。
+      const speedHint = anyLocaleFragment('hintSpeed');
+      expect(text).toMatch(speedHint);
+
+      // 键**本身**也要在那一行里（默认是 = 与 -），不只是「有个方向词就算对」：
+      // 方向对了但键写错了，同样是错的。
+      const speedLine = text.split('\n').find((line) => speedHint.test(line));
+      expect(speedLine, '引导里必须有一行同时写着两个调速键').toBeTruthy();
+      expect(speedLine).toContain('=');
+      expect(speedLine).toContain('-');
+
+      // 播放/暂停不能被教：用户刚刚才按过播放，那个键他不需要被教。
       expect(text).not.toContain('Space');
 
       // 已经展示过 -> 落盘；重新加载后不该再出现。
@@ -457,43 +373,40 @@ test.describe('反馈：不让用户面对静默失败', () => {
     }
   });
 
-  test('同源 iframe 里的视频按 f：给出「接管不了」的提示，而不是静默', async () => {
+  test('焦点在顶层、视频在 iframe 里：说出「视频在嵌入框里」，而不是静默', async () => {
+    // ⚠️ 6.1.0 之后「同源 iframe 里的视频接管不了」是**过去式**：
+    // 每个 frame 都有一份内容脚本，iframe 里的视频由**那个 frame** 接管。
+    //
+    // 于是 6.0.x 的那条契约（「按 f 给出接管不了的提示」）**不再成立**，
+    // 而且它守的失败模式也变了：现在真正的失败是
+    // 「焦点在顶层、视频在嵌入框里 → 按 f 什么都不会发生」。
+    //
+    // 那正是「说出真相」这条提示存在的理由。
     const ext = await launchExtension();
     try {
       const page = await ext.context.newPage();
-      // 夹具见 iframe-outer.html：iframe 里的 video 属于另一个 document，
-      // reparent 搬不动它，canEnter() 必然为 false。
+      // 夹具见 iframe-outer.html：iframe 里的 video 属于另一个 document。
       await page.goto('/tests/e2e/iframe-outer.html');
       await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
       await page.waitForTimeout(500);
 
-      // 点击必须落在顶层文档：点进 iframe 会把焦点移进去，之后的按键只派发给
-      // iframe，顶层内容脚本收不到，「按 f 没反应」会被误判成扩展的 bug。
+      // 点击必须落在顶层文档：点进 iframe 会把焦点移进去，
+      // 那样就变成「iframe 里的 frame 接管自己的视频」了（那条路是通的）。
       // 夹具顶部那 400px 留白就是为这一下留的。
       await page.mouse.click(200, 100);
       await page.waitForTimeout(200);
 
-      // 前置条件：iframe 里那个视频确实被扩展认成了受控对象。
-      // 少了这条断言，整条用例可能什么都没测到就「通过」。
-      await page.keyboard.press('=');
-      await expect
-        .poll(() => page.evaluate(
-          () => document.getElementById('f1').contentDocument.getElementById('inner').playbackRate,
-        ))
-        .toBeCloseTo(1.1, 2);
-
       await page.keyboard.press('f');
+      await page.waitForTimeout(800);
 
+      // 顶层 frame 看不见 iframe 里的视频 → 快捷键路径不接管 →
+      // 但**必须**告诉用户视频在哪儿（否则「按了没反应」= 扩展坏了）。
       await expect(page.locator('#vsc-takeover-notice.vsc-visible')).toHaveCount(1);
-      // 文案跟随浏览器语言（CI 是英文容器），断言对任一已翻译文案匹配。
-      await expect(page.locator('#vsc-takeover-notice')).toHaveText(new RegExp(`^(${takeoverNoticeTexts.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`));
-      // 提示要贴住视频（坐标换算到 iframe 真实位置），不能掉到屏幕角落。
-      const box = await page.locator('#vsc-takeover-notice').boundingBox();
-      expect(box.x).toBeGreaterThan(50);
-      expect(box.y).toBeGreaterThan(400);
-      expect(box.y).toBeLessThan(700);
+      await expect(page.locator('#vsc-takeover-notice')).toHaveText(
+        new RegExp('嵌入框|embedded|iframe'),
+      );
 
-      // 不能提示了「接管不了」却又真的接管了。
+      // 且**没有**真的进全屏 —— 顶层没有视频可接管。
       await expect(page.locator('#vsc-page-fullscreen-overlay.vsc-active')).toHaveCount(0);
     } finally {
       await ext.close();
@@ -619,6 +532,23 @@ test.describe('字幕等浮层兼容性', () => {
  * 这三条都是「用户按住一个键」就会遇到的最常见场景，所以必须是回归守卫。
  */
 test('按住不放不会重复执行动作（播放/快进/全屏）', async () => {
+  // ⚠️ 这条用例曾经需要 120 秒的预算，现在不需要了 ——
+  // 但原因值得写下来，因为它**看起来**像产品的性能问题。
+  //
+  // 曾经的症状：CDP 派发 autoRepeat 按键时，每次往返要 1~20 秒，
+  // 整条用例跑 100 秒以上，最后 seek 断言超时。
+  //
+  // 根因不是产品，是 **CDP 的 `nativeVirtualKeyCode` 参数**：
+  // 带上它，浏览器会启动自己的按键重复生成器，按「渲染器确认多快就多快」
+  // 的节奏往页面里灌 keydown（实测 1.5 秒 1.8 万个）→ 渲染器主线程被占满
+  // → 扩展每个 keydown 都要重扫整页视频列表，于是全链路排队。
+  // 详见 dispatchKey 上面的注释。
+  //
+  // 去掉那个参数之后：单个按键的往返回到 **1~5 毫秒**，整条用例 3 秒跑完。
+  //
+  // 预算仍然放宽到 60 秒：CI（4 核）上拉起一个完整 Chromium 本来就慢，
+  // 而这条用例的失败症状（超时）极具误导性 —— 宁可慢，不可假。
+  test.setTimeout(60_000);
   const ext = await launchExtension();
   try {
     const page = await ext.context.newPage();

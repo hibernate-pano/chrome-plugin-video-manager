@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FullscreenControls, formatTime } from './fullscreenControls';
+import { resetExtensionDom } from './testDom';
 
 interface MockVideo extends HTMLVideoElement {
   __currentTime: number;
@@ -83,6 +84,40 @@ const shadowRoot = () =>
 const $ = <T extends HTMLElement>(role: string) =>
   shadowRoot()?.querySelector<T>(`[data-role="${role}"]`) as T;
 
+/**
+ * 临时装一个 matchMedia。
+ *
+ * jsdom 没有实现 matchMedia（`window.matchMedia` 是 undefined），
+ * 而「降低动效」「窄屏断点」这两件事都要问它。
+ * 返回一个还原函数。
+ */
+const stubMatchMedia = (matches: (query: string) => boolean) => {
+  const original = window.matchMedia;
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) =>
+      ({
+        matches: matches(query),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  });
+
+  return () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: original,
+    });
+  };
+};
+
 describe('formatTime', () => {
   it('formats mm:ss and h:mm:ss and guards invalid input', () => {
     expect(formatTime(0)).toBe('0:00');
@@ -99,7 +134,7 @@ describe('FullscreenControls', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    document.body.innerHTML = '';
+    resetExtensionDom();
     video = createMockVideo();
     onExit = vi.fn();
   });
@@ -320,6 +355,57 @@ describe('FullscreenControls', () => {
     // jsdom 没有 PointerEvent 构造器；监听器只认事件名，用 MouseEvent 派发即可。
     window.dispatchEvent(new MouseEvent('pointermove'));
     expect(bar()?.classList.contains('bar--visible')).toBe(true);
+  });
+
+  /**
+   * 视频状态变了 → 控制条必须醒过来。
+   *
+   * 为什么这条必须是「视频事件」而不是「按键」：
+   * 扩展的键盘拦截跑在 window 捕获阶段的第一个（content-loader 在
+   * document_start 注册的桥接），拦截成功时调 stopImmediatePropagation() ——
+   * 它只挡住**同一节点上后注册**的监听器，于是控制条那个后注册的
+   * 「按键唤醒」监听器永远收不到事件。
+   *
+   * 后果（实测）：全屏里按 `=` 调速，控制条不亮、倍速读数停在旧值 ——
+   * 「全屏里键盘调速完全没有反馈」。
+   */
+  describe('视频状态变化会唤醒控制条', () => {
+    const bar = () => shadowRoot()?.querySelector('.bar');
+
+    const hideBar = () => {
+      vi.advanceTimersByTime(3000);
+      expect(bar()?.classList.contains('bar--visible')).toBe(false);
+    };
+
+    it('改倍速 → 控制条醒来，读数跟着更新', () => {
+      mount();
+      hideBar();
+
+      // jsdom 不会因为改 playbackRate 自己派发 ratechange（浏览器会）。
+      video.playbackRate = 1.5;
+      video.dispatchEvent(new Event('ratechange'));
+
+      expect(bar()?.classList.contains('bar--visible')).toBe(true);
+      expect($('speed').textContent, '读数必须是最新的，不能停在旧值').toBe('1.5x');
+    });
+
+    it('播放/暂停 → 控制条醒来', () => {
+      mount();
+      hideBar();
+
+      video.dispatchEvent(new Event('pause'));
+
+      expect(bar()?.classList.contains('bar--visible')).toBe(true);
+    });
+
+    it('快进 → 控制条醒来', () => {
+      mount();
+      hideBar();
+
+      video.dispatchEvent(new Event('seeked'));
+
+      expect(bar()?.classList.contains('bar--visible')).toBe(true);
+    });
   });
 
   it('disables the progress bar for a live stream without a duration', () => {
@@ -689,5 +775,134 @@ describe('FullscreenControls', () => {
     // 控制条藏了，字幕回到它原本的位置。
     vi.advanceTimersByTime(3000);
     expect(caption.style.transform).toBe('');
+  });
+
+  // ================================================================
+  // 收起态的独立退出钮（永远在的退出入口）
+  //
+  // 症状：控制条 3 秒 idle 后整个消失，屏幕上只剩一个铺满的 <video>。
+  // 用户既不知道「这是扩展的全屏」，也不知道怎么退 —— 退出按钮
+  // 在控制条里，条一藏就没了。
+  //
+  // 形态：控制条收起时，它塌缩成一枚独立的小退出钮（同一个 shadow root、
+  // 同一个位置）。控制条一回来，退出钮让位。
+  // ================================================================
+
+  describe('收起态的独立退出钮', () => {
+    const bar = () => shadowRoot()?.querySelector('.bar');
+    const collapsed = () => $<HTMLButtonElement>('exit-collapsed');
+
+    const barIsVisible = () => bar()?.classList.contains('bar--visible') === true;
+
+    it('控制条可见时退出钮不可见，也不在焦点序列里', () => {
+      mount();
+
+      expect(barIsVisible()).toBe(true);
+      expect(collapsed(), '收起态的退出钮必须始终存在于 shadow root 里').not.toBeNull();
+      expect(collapsed().style.visibility).toBe('hidden');
+      // 不可见还不够：还得不在 Tab 序列里（键盘用户不能 Tab 到一个看不见的东西）。
+      expect(collapsed().tabIndex).toBe(-1);
+      expect(collapsed().style.pointerEvents).toBe('none');
+    });
+
+    it('idle 收起控制条后退出钮顶上来，点它能退出全屏', () => {
+      mount();
+
+      vi.advanceTimersByTime(3000);
+
+      expect(barIsVisible(), '控制条应该已经收起').toBe(false);
+      expect(collapsed().style.visibility, '控制条收起后，退出入口必须还在').toBe('visible');
+      expect(collapsed().style.pointerEvents).toBe('auto');
+      // 可见就要能被 Tab 到：键盘用户要能不靠鼠标退出全屏。
+      expect(collapsed().tabIndex).toBe(0);
+
+      collapsed().click();
+      expect(onExit, '点收起态的退出钮必须退出全屏（与控制条里的退出按钮同一个动作）')
+        .toHaveBeenCalledTimes(1);
+    });
+
+    it('焦点落到退出钮上 → 控制条回来、退出钮让位，焦点交接给控制条里的退出按钮', () => {
+      mount();
+      vi.advanceTimersByTime(3000);
+      expect(collapsed().style.visibility).toBe('visible');
+
+      collapsed().focus();
+
+      expect(barIsVisible(), '焦点进来时完整控制条必须回来').toBe(true);
+      expect(collapsed().style.visibility, '两个退出钮不能同时在').toBe('hidden');
+      expect(collapsed().tabIndex).toBe(-1);
+      // 焦点不能凭空消失（掉到 body 上 → 键盘用户丢失位置，Tab 要从头再来）。
+      // 它落在控制条里**同一个动作**的按钮上。
+      expect(shadowRoot()?.activeElement).toBe($('exit'));
+    });
+
+    it('退出钮有可访问名，且与控制条里的退出按钮一致', () => {
+      mount();
+
+      const label = collapsed().getAttribute('aria-label');
+      expect(label, '退出钮必须有 aria-label').toBeTruthy();
+      expect(label).toBe($('exit').getAttribute('aria-label'));
+      expect(label).toContain('Esc');
+    });
+
+    it('退出钮不大于控制条里的退出按钮，并落在右下角同一个位置', () => {
+      mount();
+
+      const size = Number.parseFloat(collapsed().style.width);
+      expect(size).toBeLessThanOrEqual(34); // .button 是 34×34
+      expect(size).toBeGreaterThanOrEqual(24); // WCAG 2.5.8 的触控目标下限
+      // 与控制条里的退出按钮同一个角：右下角往里 18px / 12px
+      // （= 控制条 padding `20px 18px 12px` 的右/下）。
+      expect(collapsed().style.position).toBe('fixed');
+      expect(collapsed().style.right).toBe('18px');
+      expect(collapsed().style.bottom).toBe('12px');
+    });
+
+    it('鼠标一动控制条就回来，退出钮让位', () => {
+      mount();
+      vi.advanceTimersByTime(3000);
+      expect(collapsed().style.visibility).toBe('visible');
+
+      window.dispatchEvent(new MouseEvent('pointermove'));
+
+      expect(barIsVisible()).toBe(true);
+      expect(collapsed().style.visibility).toBe('hidden');
+    });
+
+    it('收起态的退出钮与控制条不在同一棵子树里（控制条藏了它不能跟着藏）', () => {
+      mount();
+
+      const root = shadowRoot()?.querySelector('.bar');
+      expect(bar()?.contains(collapsed()), '退出钮必须在 .bar 之外').toBe(false);
+      expect(shadowRoot()?.contains(collapsed()), '退出钮必须与控制条同在 shadow root 里').toBe(true);
+      expect(root).not.toBeNull();
+    });
+
+    it('系统要求降低动效时，退出钮不做过渡', () => {
+      const restore = stubMatchMedia((query) => query.includes('prefers-reduced-motion'));
+      try {
+        mount();
+
+        vi.advanceTimersByTime(3000);
+
+        expect(collapsed().style.transition, '降低动效时不该有任何过渡').toBe('none');
+      } finally {
+        restore();
+      }
+    });
+
+    it('窄屏时退出钮跟着换位置（与控制条的窄屏内边距一致）', () => {
+      const restore = stubMatchMedia((query) => query.includes('max-width'));
+      try {
+        mount();
+
+        // 窄屏（≤380px）时控制条的 padding 是 `12px 10px 8px`，
+        // 退出钮必须落在同一个角，否则窄屏下它跟退出按钮错开一截。
+        expect(collapsed().style.right).toBe('10px');
+        expect(collapsed().style.bottom).toBe('8px');
+      } finally {
+        restore();
+      }
+    });
   });
 });

@@ -229,6 +229,117 @@ export const markFirstRunHintShown = async (): Promise<void> => {
 };
 
 /**
+ * 首次引导的失败次数（storage.local）。
+ *
+ * 「失败」= 引导弹出来了，用户在读完之前**主动把它关掉了**（点了页面）。
+ *
+ * ⚠️ 键盘上随手一按（Shift、Ctrl、随便一个字母）**不算**失败：
+ * 那是碰键盘，不是拒绝。原来这两种情况都记一次失败，于是「按一下 Shift」
+ * 三次就能把引导永久毁掉 —— 而引导是这个产品**唯一**的可见入口。
+ */
+export const FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY = 'vsc-first-run-hint-failed-attempts';
+
+/**
+ * 首次引导的冷却截止时间（storage.local，毫秒时间戳）。
+ *
+ * ⚠️ 为什么是「冷却」而不是「终身沉默」：
+ * 引导是全键盘界面下唯一的可见入口，永久沉默等于让用户永远发现不了功能。
+ * 冷却到期就重新给一次机会 —— 打扰是有上限的，不是没有出口。
+ */
+export const FIRST_RUN_HINT_COOLDOWN_KEY = 'vsc-first-run-hint-cooldown-until';
+
+/** 连续失败多少次之后进入冷却。 */
+export const FIRST_RUN_HINT_MAX_FAILED_ATTEMPTS = 3;
+
+/**
+ * 冷却时长：1 天。
+ *
+ * ⚠️ 原来是 7 天，太长了：引导是**全键盘界面下唯一的可见入口**，
+ * 用户在这个产品里唯一能看到的界面就是这一条提示。冷他 7 天，
+ * 等于「这个扩展对我没用」被写进了产品里。
+ *
+ * 现在只有「用户主动关掉引导」才会记失败（误点页面不算 ——
+ * 见 firstRunHint.ts 里的判据），1 天的冷却足够让用户冷静，
+ * 又不至于让功能从此消失。
+ */
+export const FIRST_RUN_HINT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/** 连续失败次数（读不出来当 0）。 */
+export const readFirstRunHintFailedAttempts = async (): Promise<number> => {
+  const value = await getValue<unknown>('local', FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY);
+  return typeof value === 'number' ? value : 0;
+};
+
+/**
+ * 记一次失败，并在达到上限时**进入冷却**。
+ *
+ * ⚠️ 计数与冷却必须一起做：只记计数而不记冷却时间，冷却就无从判断到期没有；
+ * 只记冷却而不清计数，冷却结束后又会立刻被旧计数顶回冷却里。
+ */
+export const recordFirstRunHintFailedAttempt = async (): Promise<void> => {
+  const next = (await readFirstRunHintFailedAttempts()) + 1;
+  await setValue('local', FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY, next);
+
+  if (next >= FIRST_RUN_HINT_MAX_FAILED_ATTEMPTS) {
+    await setValue('local', FIRST_RUN_HINT_COOLDOWN_KEY, Date.now() + FIRST_RUN_HINT_COOLDOWN_MS);
+  }
+};
+
+/** 清空失败计数与冷却（用户读过一次、或在设置页里手动重置时用）。 */
+export const clearFirstRunHintFailures = async (): Promise<void> => {
+  await setValue('local', FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY, 0);
+  await removeValue('local', FIRST_RUN_HINT_COOLDOWN_KEY);
+};
+
+/**
+ * 此刻是不是在冷却期里（冷却期内不再弹引导）。
+ *
+ * 冷却到期时顺手把痕迹清干净：下一轮的失败计数从零开始，
+ * 而不是接着上一轮继续数 —— 否则用户会莫名其妙地又进一次冷却。
+ */
+export const isFirstRunHintInCooldown = async (): Promise<boolean> => {
+  const until = await getValue<unknown>('local', FIRST_RUN_HINT_COOLDOWN_KEY);
+  if (typeof until !== 'number') {
+    return false;
+  }
+
+  if (Date.now() < until) {
+    return true;
+  }
+
+  await clearFirstRunHintFailures();
+  return false;
+};
+
+/**
+ * 冷却截止时间（毫秒时间戳）；不在冷却期里就是 null。
+ *
+ * 设置页用它把「为什么引导不出现」显示出来 ——
+ * 冷却期是完全静默的（界面上一个字都没有），用户只能猜。
+ */
+export const readFirstRunHintCooldownUntil = async (): Promise<number | null> => {
+  const until = await getValue<unknown>('local', FIRST_RUN_HINT_COOLDOWN_KEY);
+  if (typeof until !== 'number') {
+    return null;
+  }
+
+  return Date.now() < until ? until : null;
+};
+
+/**
+ * 清掉引导的全部状态，让它下次遇到视频时重新出现。
+ *
+ * 设置页的「重新显示使用引导」按钮走这条路：一次性清掉「已展示」、
+ * 失败计数与冷却时间戳 —— 缺一个都不行（只清「已展示」的话，
+ * 冷却期内的用户点了按钮仍然看不到引导）。
+ */
+export const resetFirstRunHintState = async (): Promise<void> => {
+  await removeValue('local', FIRST_RUN_HINT_KEY);
+  await removeValue('local', FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY);
+  await removeValue('local', FIRST_RUN_HINT_COOLDOWN_KEY);
+};
+
+/**
  * 清掉 6.0.7 起废弃的站点速度记忆表。
  *
  * 功能已删除，但老用户机器上仍留着 `vsc-site-speeds`——它记录了用户访问过哪些
@@ -259,7 +370,79 @@ export const subscribeToSettings = (
     }
 
     // 只读重算并喂给 listener：变更回调里再写盘会与触发本次变更的写入形成写放大。
-    void readSettings().then(({ settings }) => listener(settings));
+    //
+    // ⚠️ 必须带 .catch()：getValue 在 chrome.runtime.lastError 非空时会 reject，
+    // 而这里是一条**没人接**的 promise —— 读失败会以
+    // "Uncaught (in promise) Error: ..." 的形式打到内容脚本的控制台里，
+    // 让一次无关紧要的存储故障变成一条刺眼的未捕获异常。
+    // 读不到就当这次变更没发生（与 purgeLegacySiteSpeeds 的「失败无所谓」
+    // 同一套约定）。
+    void readSettings()
+      .then(({ settings }) => listener(settings))
+      .catch(() => {});
+  };
+
+  chrome.storage.onChanged.addListener(handler);
+  return () => chrome.storage.onChanged.removeListener(handler);
+};
+
+/**
+ * 引导状态（storage.local）变化的信号。
+ *
+ * - `shownCleared`：「已展示」标记被**删除**了 —— 这正是设置页的
+ *   「重新显示使用引导」按钮做的事（resetFirstRunHintState）。
+ * - `cooldownCleared`：冷却时间戳被删掉了 —— 冷却结束或被重置。
+ */
+export interface FirstRunHintStateChange {
+  shownCleared: boolean;
+  cooldownCleared: boolean;
+}
+
+/**
+ * 订阅引导状态（storage.local）的变化。
+ *
+ * ⚠️ 为什么不能复用 `subscribeToSettings`：那个只监听 **sync** 命名空间
+ * （快捷键在那儿），而引导状态在 **local** —— onChanged 的第二个参数
+ * 就是命名空间，sync 的监听器**根本收不到** local 的变更。
+ *
+ * ⚠️ 没有这条通道时「重新显示使用引导」是哑的：设置页只清 storage，
+ * 而内容脚本把「本会话已展示」记在**内存**里且永不复位 ——
+ * 于是用户点了按钮、切回标签页，什么都没发生（必须手动刷新页面，
+ * 而界面从头到尾没说这一点）。
+ *
+ * @param listener 状态变化时的回调。
+ */
+export const subscribeToFirstRunHintState = (
+  listener: (change: FirstRunHintStateChange) => void,
+): (() => void) => {
+  if (!hasChromeStorage() || !chrome.storage.onChanged) {
+    return () => {};
+  }
+
+  const handler = (
+    changes: Record<string, chrome.storage.StorageChange>,
+    namespace: string,
+  ) => {
+    if (namespace !== 'local') {
+      return;
+    }
+
+    const shown = changes[FIRST_RUN_HINT_KEY];
+    const cooldown = changes[FIRST_RUN_HINT_COOLDOWN_KEY];
+    const attempts = changes[FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY];
+
+    if (!shown && !cooldown && !attempts) {
+      return;
+    }
+
+    // ⚠️ 只有**删除**才算「重置」：
+    // markFirstRunHintShown 把标记写成 true（那是「用户读过了」），
+    // clearFirstRunHintFailures 把失败计数写成 0（那是「用户读过了」的清理）——
+    // 这两个都不是「请再来一次」，不能当成重置信号。
+    listener({
+      shownCleared: shown !== undefined && shown.newValue === undefined,
+      cooldownCleared: cooldown !== undefined && cooldown.newValue === undefined,
+    });
   };
 
   chrome.storage.onChanged.addListener(handler);

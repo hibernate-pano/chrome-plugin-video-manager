@@ -1,8 +1,6 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { test, expect } from '@playwright/test';
 import { SD_4X3_MP4_BASE64 } from './fixtures/sd-4x3.ts';
+import { launchExtension } from './helpers/launch.js';
 
 /**
  * 「接管规则」：扩展到底该不该对某个视频动手。
@@ -24,78 +22,6 @@ import { SD_4X3_MP4_BASE64 } from './fixtures/sd-4x3.ts';
  * （rect、clientWidth、视口尺寸、shadow tree、真实播放状态）。
  * jsdom 里这些全是 0，测出来的只是「早退分支」的行为 —— 恰恰是最容易骗过人的那种。
  */
-
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
-
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-};
-
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--autoplay-policy=no-user-gesture-required',
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-];
-
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-rules-'));
-  const executablePath = findChromium();
-  const candidates = [
-    { options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-  let context = null;
-  for (const candidate of candidates) {
-    if ('executablePath' in candidate.options && candidate.options.executablePath === undefined) continue;
-    try {
-      context = await chromium.launchPersistentContext(profile, candidate.options);
-      break;
-    } catch {
-      // 换下一个候选
-    }
-  }
-  if (!context) {
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('无法启动带扩展的浏览器');
-  }
-  const sw = context.serviceWorkers()[0]
-    ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-  if (!sw) {
-    await context.close();
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('扩展没加载：没有等到 background service worker');
-  }
-  return {
-    context,
-    sw,
-    async close() {
-      await context.close();
-      rmSync(profile, { recursive: true, force: true });
-    },
-  };
-};
 
 /**
  * 把页面喂给浏览器。
@@ -301,13 +227,27 @@ ${PAGE_WATCHES_KEYS}</head><body>
       await page.goto('http://127.0.0.1:4173/');
       await page.waitForTimeout(700);
 
-      // 前置条件：它现在是个正常的目标（空格被扩展接管 → 页面收不到）。
-      await page.keyboard.press('Space');
-      await page.waitForTimeout(300);
+      // ⚠️ 用 `=` 而不是空格来做这条断言。
+      //
+      // 空格有「no-space」那档权限：视频 640×360 在 1280×720 的视口里
+      // 只占 25%，不到「页面主角」那条 40% 的线 → 空格**本来就**该放行
+      // 给页面（这是 6.2.0 修的另一个问题，见 videoRegistry 的
+      // resolvePermission）。
+      //
+      // 所以这条用例要守的是「**别的键**也不该再打在被摘掉的视频身上」——
+      // 调速键 `=` 没有那档豁免，它只认「这个视频还在不在」。
+      await page.keyboard.press('=');
+      await page.waitForTimeout(400);
+      const before = await page.evaluate(() => ({
+        // ⚠️ 视频在 shadow root 里 —— document.getElementById 找不到它。
+        rate: document.getElementById('host').shadowRoot.querySelector('video')?.playbackRate ?? null,
+        seen: window.__seen,
+      }));
+      expect(before.rate, '前置条件：shadow 里的播放器被接管了（调速生效）').toBeCloseTo(1.1, 2);
       expect(
-        await page.evaluate(() => window.__seen.length),
-        '前置条件：shadow 里的播放器在被接管时，空格不该穿透给页面',
-      ).toBe(0);
+        before.seen,
+        '前置条件：调速键不该穿透给页面',
+      ).not.toContain('=');
 
       // 站点把 shadow 里的视频摘掉了（shadow tree 的变化不会推进 DOM 代次）。
       await page.evaluate(() => {
@@ -315,7 +255,7 @@ ${PAGE_WATCHES_KEYS}</head><body>
       });
       await page.waitForTimeout(300);
 
-      await page.keyboard.press('Space');
+      await page.keyboard.press('=');
       await page.waitForTimeout(400);
 
       const after = await page.evaluate(() => ({
@@ -324,9 +264,8 @@ ${PAGE_WATCHES_KEYS}</head><body>
       }));
       expect(
         after.seen,
-        '视频已经被摘掉之后，扩展不该再接管它（空格必须放行给页面）',
-      ).toContain(' ');
-      expect(after.scrollY, '页面必须能继续滚动').toBeGreaterThan(0);
+        '视频已经被摘掉之后，扩展不该再接管它（按键必须放行给页面）',
+      ).toContain('=');
     } finally {
       await ext.close();
     }

@@ -266,15 +266,57 @@ body {
   color: var(--vsc-muted-weak);
 }
 
+/*
+ * 逐行错误与逐行说明。
+ *
+ * ⚠️ 为什么它们要**就地渲染**：状态栏在页面**最底部**，出错的行在最上面。
+ * 读屏用户听到的是一句从页面底部飘上来的话，却不知道是**哪一行**、跟**谁**撞了；
+ * 视觉用户也可能隔着十几屏才看见那一句。
+ * 所以每一行都挂一个自己的节点，输入框用 aria-describedby 指向它 ——
+ * 聚焦到出错的输入框时，错误就在耳边念出来。
+ *
+ * 用 :not(:empty) 而不是 JS 切 class：没有错误时节点是空的，
+ * 空节点不该占位（否则每一行下面都多出一条空白）。
+ */
+.vsc__row-error,
+.vsc__row-note {
+  display: none;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.vsc__row-error:not(:empty),
+.vsc__row-note:not(:empty) {
+  display: block;
+}
+
+.vsc__row-error {
+  color: var(--vsc-danger-text);
+}
+
+.vsc__row-note {
+  color: var(--vsc-muted-weak);
+}
+
 .vsc__key {
   flex: none;
   /*
-   * 168px 装不下最长的绑定：Ctrl+Alt+Shift+Meta+PgDn 需要 188px 的内容宽度，
-   * 超出部分被 input 裁掉（实测 clientWidth 192 / scrollWidth 212）——
-   * 用户看到的是「Ctrl+Alt+Shift+Meta+…」，分不清自己绑了什么。
-   * 200px 让最长的绑定完整显示；再短就得靠 title 提示兜底了。
+   * 宽度是**两个**东西的共同上限，取两者的最大值：
+   *
+   * 1. 最长的绑定：Ctrl+Alt+Shift+Meta+PgDn 需要 188px 的内容宽度。
+   *    168px 装不下 —— 超出部分被 input 裁掉（实测 clientWidth 192 /
+   *    scrollWidth 212），用户看到的是「Ctrl+Alt+Shift+Meta+…」，
+   *    分不清自己绑了什么。
+   * 2. 聚焦时的占位符：「按下要绑定的键 · Backspace 清空」实测 219px、
+   *    英文那版 235px。200px 时占位符会被**裁掉尾巴**
+   *    （实测渲染成「按下要绑定的键 · Backspace 清」—— 恰好裁在
+   *    「清空」两个字中间），于是「怎么清空」这个隐藏手势的提示
+   *    变成半句话。
+   *
+   * 250px 让两者都完整显示（英文那版还余 15px）。
    */
-  width: 200px;
+  width: 250px;
   padding: 9px 12px;
   border: 1px solid var(--vsc-border-strong);
   border-radius: 10px;
@@ -300,6 +342,7 @@ body {
 
 .vsc__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -318,6 +361,20 @@ body {
 }
 
 .vsc__button {
+  /*
+   * ⚠️ white-space: nowrap 与 flex: none 是**必需**的，不是美化：
+   *
+   * 之前「重新显示使用引导」这个按钮在 900px 宽的窗口里被压成 122×56
+   * —— 文案断成两行（「重新显示使用」/「引导」），而旁边的「保存」只有
+   * 38px 高。两个按钮并排、其中一个是两行高，看着像渲染坏了。
+   * 窄窗口（420px）下更糟：「恢复默认」被断成「恢复」/「默认」，
+   * 「保存 •」被断成「保」/「存 •」。
+   *
+   * 原因：按钮在 flex 行里**可以被压扁**（默认 flex-shrink: 1），
+   * 而按钮里的文字一旦没地方放就会换行。
+   */
+  flex: none;
+  white-space: nowrap;
   padding: 9px 16px;
   border: 1px solid var(--vsc-border-strong);
   border-radius: 10px;

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { SpeedToast, formatRate } from './speedToast';
 import { destroyLiveRegion } from './liveRegion';
 import { FULLSCREEN_OVERLAY_ID } from './runtimeStyles';
+import { resetExtensionDom } from './testDom';
 
 describe('formatRate', () => {
   it('trims trailing zeros', () => {
@@ -31,7 +34,8 @@ describe('SpeedToast', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    document.body.innerHTML = '';
+    resetExtensionDom();
+    playing = false;
     video = document.createElement('video');
     document.body.appendChild(video);
   });
@@ -90,9 +94,31 @@ describe('SpeedToast', () => {
     expect(document.getElementById('vsc-speed-toast')).toBeNull();
   });
 
-  /** jsdom 里没有真正播放的视频，paused 恒为 true；这里手动改成「正在播」。 */
+  /**
+   * jsdom 里没有真正播放的视频，paused 恒为 true；这里手动改。
+   *
+   * ⚠️ 必须做成**可开关**的，不能写死成 false：
+   * 浏览器里「暂停」是**两件事**——先把 paused 置真，再派发 pause 事件。
+   * 只派发事件而不动 paused，等于造出一个真实浏览器里不存在的状态，
+   * 于是「实现到底该信事件还是该信属性」这件事根本测不出来。
+   */
+  let playing = false;
+
   const markPlaying = () => {
-    Object.defineProperty(video, 'paused', { get: () => false, configurable: true });
+    playing = true;
+    Object.defineProperty(video, 'paused', { get: () => !playing, configurable: true });
+  };
+
+  /** 模拟「用户按了暂停」：浏览器先把 paused 置真，再派发 pause 事件。 */
+  const pauseVideo = () => {
+    playing = false;
+    video.dispatchEvent(new Event('pause'));
+  };
+
+  /** 模拟「用户按了播放」：浏览器先把 paused 置假，再派发 play 事件。 */
+  const playVideo = () => {
+    playing = true;
+    video.dispatchEvent(new Event('play'));
   };
 
   const pill = () => document.getElementById('vsc-speed-toast')!;
@@ -130,10 +156,11 @@ describe('SpeedToast', () => {
     vi.advanceTimersByTime(3900);
     expect(pill().classList.contains('vsc-visible')).toBe(true);
 
-    video.dispatchEvent(new Event('pause'));
+    pauseVideo();
 
     expect(pill().classList.contains('vsc-visible')).toBe(false);
-    expect(pill().style.opacity).toBe('');
+    // 收起 = 完全透明（角标形态的 opacity 是 1，胶囊形态是 0）。
+    expect(pill().style.opacity).toBe('0');
     toast.destroy();
   });
 
@@ -161,95 +188,21 @@ describe('SpeedToast', () => {
 
   /* --- 角标对比度（白底视频）--- */
 
-  /**
-   * WCAG 相对亮度。
+  /*
+   * ⚠️ 这里**没有**「角标在白底视频上的对比度」这条 jsdom 用例。
    *
-   * 线性化：c/255 ≤ 0.03928 ? c/12.92 : ((c+0.055)/1.055)^2.4
-   * L = 0.2126R + 0.7152G + 0.0722B
-   */
-  const relativeLuminance = (r: number, g: number, b: number) => {
-    const linear = (c: number) => {
-      const v = c / 255;
-      return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-    };
-    return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-  };
-
-  const contrastRatio = (a: [number, number, number], b: [number, number, number]) => {
-    const l1 = relativeLuminance(...a);
-    const l2 = relativeLuminance(...b);
-    const lighter = Math.max(l1, l2);
-    const darker = Math.min(l1, l2);
-    return (lighter + 0.05) / (darker + 0.05);
-  };
-
-  /** 解析 css 颜色：'rgb(1, 2, 3)' / 'rgba(1, 2, 3, 0.5)'。 */
-  const parseColor = (value: string) => {
-    const numbers = (value.match(/[\d.]+/g) ?? []).map(Number);
-    return {
-      r: numbers[0] ?? 0,
-      g: numbers[1] ?? 0,
-      b: numbers[2] ?? 0,
-      a: numbers.length > 3 ? numbers[3] : 1,
-    };
-  };
-
-  /**
-   * 把角标在页面上**实际合成出来**的颜色算出来。
+   * 之前有一条叫 "keeps the badge readable on a white video (WCAG AA)"，
+   * 它读的是 `pill().style.*`（**内联值**）—— 而浏览器真正渲染的是
+   * getComputedStyle 的值。两者被 `!important` 分道扬镳：
+   * 站点的 `div { color:#f00 !important; ... }` 能把内联值打穿，
+   * 而那条用例读不到这一点，于是它**声称在守的对比度在浏览器里并不成立**
+   * （实测：白底视频上从 11.21:1 掉到 2.29:1，连 AA-large 的 3:1 都过不了）。
    *
-   * 合成链（与浏览器一致）：
-   * 1. 元素自身的 opacity 作用于**整块元素**（底板与文字一起），
-   *    所以底板的有效 alpha = 背景 alpha × opacity。
-   * 2. 底板颜色 = 背景色按有效 alpha 合成到页面上。
-   * 3. 文字颜色 = 文字色按 opacity 合成到页面上（文字在组内不透明）。
+   * 渲染结果的对比度由**真实浏览器**量：tests/e2e/style-isolation.spec.js
+   * 读 getComputedStyle 的颜色，按 WCAG 相对亮度公式算对比度。
+   * jsdom 没有布局引擎、也不实现 `all: initial` 与 important 的级联，
+   * 在这里算出来的对比度是假的。
    */
-  const compositedBadgeColors = (page: [number, number, number]) => {
-    const style = pill().style;
-    const opacity = Number(style.opacity || '1');
-    const background = parseColor(style.backgroundColor);
-    const text = parseColor(style.color);
-
-    const plateAlpha = background.a * opacity;
-    const plate: [number, number, number] = [
-      background.r * plateAlpha + page[0] * (1 - plateAlpha),
-      background.g * plateAlpha + page[1] * (1 - plateAlpha),
-      background.b * plateAlpha + page[2] * (1 - plateAlpha),
-    ];
-    const textOnPage: [number, number, number] = [
-      text.r * opacity + page[0] * (1 - opacity),
-      text.g * opacity + page[1] * (1 - opacity),
-      text.b * opacity + page[2] * (1 - opacity),
-    ];
-
-    return { plate, text: textOnPage };
-  };
-
-  it('keeps the badge readable on a white video (WCAG AA)', () => {
-    // 回归：旧写法是 opacity 0.55 + rgba(0,0,0,0.5)，白底视频上合成出来的
-    // 对比度只有 1.91:1（远低于 AA 的 4.5:1）—— 录屏、PPT、白底课程视频
-    // 上那块角标就是一团看不见的灰。
-    //
-    // 这里不写死具体像素，而是**按角标此刻真实的内联样式**重算对比度：
-    // 任何人把背景调淡、或把 opacity 调回 0.55，这条断言都会立刻变红。
-    markPlaying();
-    const toast = new SpeedToast();
-    toast.show(1.5, video);
-    vi.advanceTimersByTime(3900);
-
-    expect(pill().classList.contains('vsc-visible')).toBe(true);
-
-    const white: [number, number, number] = [255, 255, 255];
-    const onWhite = compositedBadgeColors(white);
-    const whiteContrast = contrastRatio(onWhite.plate, onWhite.text);
-    expect(whiteContrast, `白底视频上的角标对比度只有 ${whiteContrast.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
-
-    // 黑底视频是原来的「过」的那一侧，改动不能把它弄坏。
-    const black: [number, number, number] = [0, 0, 0];
-    const onBlack = compositedBadgeColors(black);
-    expect(contrastRatio(onBlack.plate, onBlack.text)).toBeGreaterThanOrEqual(4.5);
-
-    toast.destroy();
-  });
 
   it('does not fade the badge with opacity', () => {
     // opacity 会把**底板和文字一起**压淡 —— 合成后的对比度必然塌下去。
@@ -285,17 +238,30 @@ describe('SpeedToast', () => {
   it('drops the badge styles again when the badge is dismissed', () => {
     // 角标样式是内联的，撤掉时必须一起清干净 ——
     // 否则下一次调速的胶囊会带着角标的 12px 字号与深色底板出现。
+    //
+    // ⚠️ 「清干净」现在指的是「换回胶囊形态的值」，不是「把属性摘掉」：
+    // 隔离底座里的 `all: initial !important` 会把摘掉的属性打回初始值
+    // （padding 归 0、字号 16px、底板透明）—— 那样弹出来的胶囊就是一个
+    // 没有底板的裸文字。
     markPlaying();
     const toast = new SpeedToast();
     toast.show(1.5, video);
     vi.advanceTimersByTime(3900);
     expect(pill().style.backgroundColor).toBe('rgba(0, 0, 0, 0.78)');
+    expect(pill().style.fontSize).toBe('12px');
 
-    video.dispatchEvent(new Event('pause'));
+    pauseVideo();
 
-    expect(pill().style.backgroundColor).toBe('');
-    expect(pill().style.color).toBe('');
-    expect(pill().style.opacity).toBe('');
+    // ⚠️ 断言对着 **token** 写，不写死字面量：
+    // 胶囊的排版来自 runtimeStyles 的 NOTICE_PILL_TOKENS（与接管提示共用），
+    // 写死 '14px' 只会让「token 改了、测试还按旧值红」这种漂移变成噪音，
+    // 于是人开始去改测试而不是去改 token。
+    expect(pill().style.backgroundColor).toBe('rgba(0, 0, 0, 0.66)');
+    expect(pill().style.fontSize).toBe('13px');
+    expect(pill().style.padding).toBe('6px 12px');
+    expect(pill().style.borderRadius).toBe('999px');
+    expect(pill().style.color).toBe('rgb(248, 250, 252)');
+    expect(pill().style.opacity).toBe('0');
     toast.destroy();
   });
 
@@ -306,10 +272,20 @@ describe('SpeedToast', () => {
     await Promise.resolve();
   };
 
-  const enterFullscreen = async () => {
+  /**
+   * 模拟进入网页全屏。
+   *
+   * ⚠️ 除了挂上全屏背板，还必须把视频的盒子改成**全屏里的样子**：
+   * 真实浏览器里进全屏时，视频被搬进覆盖层并变成
+   * `position:fixed; inset:0; width:100vw; height:100vh`（没有 transform:scale），
+   * 于是它的 rect 就是整个视口。不改这个盒子的话，用例会以为
+   * 「视频在进全屏之后还在老地方」—— 那正是本组用例要守的反面。
+   */
+  const enterFullscreen = async (target: HTMLVideoElement = video) => {
     const overlay = document.createElement('div');
     overlay.id = FULLSCREEN_OVERLAY_ID;
     document.body.appendChild(overlay);
+    mockRect(target, window.innerWidth, window.innerHeight, 0, 0);
     await flushMutations();
   };
 
@@ -318,9 +294,15 @@ describe('SpeedToast', () => {
    *
    * ⚠️ 这条路径**不经过运行时**：FullscreenController.exit() 只把全屏背板
    * 摘掉，运行时完全不知情。所以角标只能自己观察到背板被摘掉。
+   *
+   * 视频的盒子也一并还原成页面上的位置 —— 真实浏览器里 exit() 正是
+   * 把视频放回原来的槽位。
    */
-  const exitFullscreenViaControls = async () => {
+  const exitFullscreenViaControls = async (
+    pagePosition: { top: number; left: number } = { top: 100, left: 200 },
+  ) => {
     document.getElementById(FULLSCREEN_OVERLAY_ID)?.remove();
+    mockRect(video, 640, 360, pagePosition.top, pagePosition.left);
     await flushMutations();
   };
 
@@ -333,6 +315,96 @@ describe('SpeedToast', () => {
     vi.advanceTimersByTime(3900);
 
     expect(pill().classList.contains('vsc-visible')).toBe(false);
+    toast.destroy();
+  });
+
+  /* --- 全屏里的胶囊位置（P0-4）--- */
+
+  it('进网页全屏后，胶囊重新贴到全屏画面上（不能留在旧坐标）', async () => {
+    // 进全屏时视频被搬进覆盖层、放大到整个视口（position:fixed; inset:0;
+    // 100vw×100vh，没有 transform:scale），于是它的位置整个变了。
+    // 胶囊贴的是**视频的左上角**——不跟着重贴一次，它就留在进全屏之前
+    // 那个页面坐标上，浮在黑底覆盖层的外面（视觉上「有个东西飞在画面外」）。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    // 进全屏之前：胶囊贴在视频的左上角（100+16 / 200+16）。
+    expect(pill().style.top).toBe('116px');
+    expect(pill().style.left).toBe('216px');
+
+    await enterFullscreen();
+
+    // 进全屏之后：视频铺满视口，胶囊必须跟着重新贴一次。
+    expect(pill().style.top, '胶囊不能留在进全屏之前的坐标上').toBe('16px');
+    expect(pill().style.left, '胶囊不能留在进全屏之前的坐标上').toBe('16px');
+    toast.destroy();
+  });
+
+  it('退出全屏后胶囊回到页面的位置（不留残渣）', async () => {
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    await enterFullscreen();
+    expect(pill().style.top).toBe('16px');
+
+    await exitFullscreenViaControls({ top: 100, left: 200 });
+
+    // 视频回到页面原位，胶囊必须跟着回去 —— 否则它留在全屏时那块坐标上。
+    expect(pill().style.top, '退出全屏后胶囊必须回到页面的位置').toBe('116px');
+    expect(pill().style.left, '退出全屏后胶囊必须回到页面的位置').toBe('216px');
+    toast.destroy();
+  });
+
+  it('全屏里调速：胶囊出现在全屏画面上（控制条不闪时它是唯一的反馈）', async () => {
+    // 全屏控制条上**确实**写着倍速，但它不会为键盘调速「闪一下」：
+    // SPEED_CHANGE_EVENT 是控制条**发**出来的（给运行时订阅），
+    // 控制条自己不监听它；而控制条的「按键唤醒」监听器排在
+    // document_start 桥接监听器之后，被后者的 stopImmediatePropagation
+    // 挡掉 —— 于是键盘调速时控制条根本不会醒来。
+    //
+    // 结论：全屏里调速的**唯一**视觉反馈就是这个胶囊，它必须在正确的位置上。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    await enterFullscreen();
+
+    // 全屏里再调一次速。
+    toast.show(2, video);
+
+    expect(pill().classList.contains('vsc-visible'), '全屏里调速必须有反馈').toBe(true);
+    expect(pill().textContent).toBe('2x');
+    expect(pill().style.top, '胶囊必须落在全屏画面上').toBe('16px');
+    expect(pill().style.left, '胶囊必须落在全屏画面上').toBe('16px');
+    toast.destroy();
+  });
+
+  it('全屏里暂停的视频恢复播放时，也不会长出角标（控制条上就写着倍速）', async () => {
+    // 角标在全屏里是**重复信息**（控制条上写着倍速），所以恢复播放
+    // 也不能把它放出来 —— 否则全屏里会同时有两处倍速读数。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+
+    await enterFullscreen();
+    expect(pill().classList.contains('vsc-visible')).toBe(false);
+
+    // 全屏里暂停又恢复播放：角标仍然不该出来。
+    pauseVideo();
+    playVideo();
+    vi.advanceTimersByTime(3000);
+    expect(pill().classList.contains('vsc-visible'), '全屏里不该长出角标').toBe(false);
+
+    // 退出全屏后：意图一直在，角标自己回来。
+    await exitFullscreenViaControls();
+    vi.advanceTimersByTime(3000);
+    expect(pill().classList.contains('vsc-visible'), '退出全屏后角标该回来').toBe(true);
     toast.destroy();
   });
 
@@ -379,15 +451,18 @@ describe('SpeedToast', () => {
   });
 
   it('does not bring the badge back when the video paused while in fullscreen', async () => {
-    // 用户在全屏里暂停了视频 —— 他不需要「当前倍速」的角标了。
+    // 用户在全屏里暂停了视频 —— 视频还暂停着，角标就不该出现。
     // 全屏控制条上有暂停按钮，但视频本身的 pause 事件照样会来。
+    //
+    // ⚠️ 暂停**不**放弃意图（那是 P1-7 的设计修正）：意图留着，
+    // 等用户恢复播放角标再回来。这条用例守的是「暂停期间角标不出现」。
     markPlaying();
     const toast = new SpeedToast();
     toast.show(1.5, video);
     vi.advanceTimersByTime(3900);
 
     await enterFullscreen();
-    video.dispatchEvent(new Event('pause'));
+    pauseVideo();
     await exitFullscreenViaControls();
 
     vi.advanceTimersByTime(5000);
@@ -414,7 +489,9 @@ describe('SpeedToast', () => {
 
     vi.advanceTimersByTime(3000);
     expect(pill().classList.contains('vsc-visible')).toBe(false);
-    expect(pill().style.backgroundColor).toBe('');
+    // 角标没出 → 胶囊形态的底板还在（不是角标那块更实的深色）。
+    expect(pill().style.backgroundColor).toBe('rgba(0, 0, 0, 0.66)');
+    expect(pill().style.fontSize).toBe('13px');
     toast.destroy();
   });
 
@@ -539,7 +616,7 @@ describe('SpeedToast', () => {
     expect(pill().classList.contains('vsc-visible')).toBe(true);
 
     // 视频暂停 = 用户不再需要这个角标 → 角标被彻底放弃。
-    video.dispatchEvent(new Event('pause'));
+    pauseVideo();
     expect(pill().classList.contains('vsc-visible')).toBe(false);
 
     const before = pill().style.top;
@@ -547,6 +624,345 @@ describe('SpeedToast', () => {
     window.dispatchEvent(new Event('scroll'));
 
     expect(pill().style.top, '收起之后不该再跟着页面跑').toBe(before);
+    toast.destroy();
+  });
+
+  /* --- 角标滚出视口 --- */
+
+  it('视频滚出视口时角标收起，滚回来后自己回来', () => {
+    // 实测的 bug：角标常驻后用户往下滚一点（视频还在屏幕边缘）→ 角标消失；
+    // **滚回来，角标再也不出现**，直到用户再按一次调速键。
+    //
+    // 根因：滚出视口走的是 abandonBadge()（连「想知道当前倍速」的意图一起
+    // 清掉）。但滚出视口与进全屏是同一类事件 —— 暂时看不到 / 换个地方看，
+    // 意图要留着。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 视频整个滚到视口上方（视口高 768，rect.bottom = -40 → 完全不在视口里）。
+    mockRect(video, 640, 360, -400, 200);
+    window.dispatchEvent(new Event('scroll'));
+    expect(pill().classList.contains('vsc-visible'), '滚出视口后角标该收起').toBe(false);
+
+    // 滚回来：角标**不会立刻**出现（与第一次一样要重新等 3 秒）。
+    mockRect(video, 640, 360, 100, 200);
+    window.dispatchEvent(new Event('scroll'));
+    expect(pill().classList.contains('vsc-visible'), '刚滚回来时角标还没到点').toBe(false);
+
+    vi.advanceTimersByTime(3000);
+    expect(pill().classList.contains('vsc-visible'), '滚回来后角标必须自己回来').toBe(true);
+    expect(pill().textContent).toBe('1.5x');
+    toast.destroy();
+  });
+
+  it('视频暂停之后角标不会自己回来（滚回视口也不行），要等用户恢复播放', () => {
+    // 「滚出视口」与「视频暂停」是同一类事件 —— 暂时看不到，意图要留着。
+    // 但它们都**不是**「用户想看这个读数」的信号：角标要等用户恢复播放。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 先滚出去（收起但保留意图），再暂停（同样保留意图）。
+    mockRect(video, 640, 360, -400, 200);
+    window.dispatchEvent(new Event('scroll'));
+    pauseVideo();
+
+    mockRect(video, 640, 360, 100, 200);
+    window.dispatchEvent(new Event('scroll'));
+    vi.advanceTimersByTime(5000);
+
+    expect(pill().classList.contains('vsc-visible'), '恢复播放之前不该回来').toBe(false);
+
+    // 用户恢复播放 → 角标自己回来。
+    playVideo();
+    expect(pill().classList.contains('vsc-visible'), '恢复播放后角标必须自己回来').toBe(true);
+    expect(pill().textContent).toBe('1.5x');
+    toast.destroy();
+  });
+
+  /* --- 暂停 → 继续播放（P1-7）--- */
+
+  it('暂停之后继续播放，角标自己回来（不必再按一次调速键）', () => {
+    // 实测的 bug：用户按空格暂停 → 角标收起；再按空格继续播放 →
+    // 角标**再也不回来**，直到他再按一次 `=`。
+    //
+    // 根因是设计判断：暂停被当成了「用户不再需要这个读数」，于是
+    // 「想知道当前倍速」这个**意图**被一起扔掉了。但暂停与「滚出视口」
+    // 「进全屏」是同一类事件 —— 暂时看不到。真正该放弃意图的只有
+    // 「视频从 DOM 里被移除」。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    pauseVideo();
+    expect(pill().classList.contains('vsc-visible'), '暂停后角标该收起').toBe(false);
+
+    playVideo();
+    expect(pill().classList.contains('vsc-visible'), '恢复播放后角标必须自己回来').toBe(true);
+    expect(pill().textContent).toBe('1.5x');
+    toast.destroy();
+  });
+
+  it('恢复出来的是常驻角标，不会再走一次「3 秒后转成角标」', () => {
+    // 恢复走的是「胶囊 → 3 秒 → 角标」那条路的话，用户按下播放之后
+    // 还要再等 3 秒才看到读数 —— 那等于把 bug 换了个形式。
+    // 而且出来的一定要是**常驻角标**：胶囊 900ms 后淡出、再等 3 秒才转成
+    // 角标，那是「用户刚调过速」的流程，而这里用户根本没调速。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+
+    pauseVideo();
+    playVideo();
+
+    // 恢复是**立刻**的：那 3 秒不该再走一遍。
+    expect(pill().classList.contains('vsc-visible'), '恢复播放后角标必须立刻回来').toBe(true);
+    // 而且恢复出来的就是角标形态（更小的字号、更实的底板）。
+    expect(pill().style.backgroundColor).toBe('rgba(0, 0, 0, 0.78)');
+    expect(pill().style.fontSize).toBe('12px');
+
+    // 再等 3 秒：计时器没被搞乱 —— 角标还在，而且仍然是角标形态。
+    vi.advanceTimersByTime(3000);
+    expect(pill().classList.contains('vsc-visible'), '计时器没被搞乱，角标不该消失').toBe(true);
+    expect(pill().style.backgroundColor).toBe('rgba(0, 0, 0, 0.78)');
+    expect(pill().style.fontSize).toBe('12px');
+    toast.destroy();
+  });
+
+  it('视频从 DOM 里被移除后，角标不会在别的视频上复活', () => {
+    // 「视频被移除」才是真的不需要这个读数了：意图指向的对象已经不在
+    // 页面上了，连意图一起清掉。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 站点把视频换掉了（重建播放器、SPA 换页）。
+    video.remove();
+
+    // 位置重算时会发现「视频已经不在页面上了」→ 角标连同意图一起没。
+    window.dispatchEvent(new Event('scroll'));
+    expect(pill().classList.contains('vsc-visible'), '视频没了就该收起角标').toBe(false);
+
+    // 别的视频开始播：也不该凭旧意图长出一个指向它的角标。
+    const other = document.createElement('video');
+    document.body.appendChild(other);
+    other.dispatchEvent(new Event('play'));
+    expect(pill().classList.contains('vsc-visible'), '别的视频上不该复活角标').toBe(false);
+    toast.destroy();
+  });
+
+  it('换成别的视频后，旧视频的 play 事件不该把新视频的角标弄乱', () => {
+    // 旧视频的监听器必须摘干净：它的 play 事件会让实现认为
+    // 「视频已经不在页面上了」，进而把**新**视频的意图一起丢掉。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 站点换了个视频：旧的被摘掉，新的接上。
+    const other = document.createElement('video');
+    document.body.appendChild(other);
+    Object.defineProperty(other, 'paused', { get: () => false, configurable: true });
+    video.remove();
+
+    // 用户在新视频上重新调速 → 意图指向新视频。
+    toast.show(2, other);
+    vi.advanceTimersByTime(3900);
+    expect(pill().textContent).toBe('2x');
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 旧视频的 play 事件：监听器已摘干净，不该有任何作用。
+    video.dispatchEvent(new Event('play'));
+    expect(pill().classList.contains('vsc-visible'), '旧视频不该影响新视频的角标').toBe(true);
+    toast.destroy();
+  });
+
+  /* --- 读屏用户的「当前倍速」出口 --- */
+
+  it('读屏用户可以随时查到当前倍速（视觉隐藏但 AT 可读）', () => {
+    // 常驻角标是 aria-hidden 的纯视觉元素，live region 里只有「值变化那一刻」
+    // 的一次性播报 —— 于是视力用户可以随时确认「我现在是几倍速」，
+    // **读屏用户没有任何等价物**。
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    const state = document.getElementById('vsc-speed-state');
+    expect(state, '必须有「当前倍速」的镜像节点').not.toBeNull();
+    expect(state!.textContent).toContain('1.5');
+
+    // 视觉上完全不可见：1px + clip（与 #vsc-live-region 同一手法）。
+    expect(state!.style.width).toBe('1px');
+    expect(state!.style.height).toBe('1px');
+    expect(state!.style.overflow).toBe('hidden');
+    expect(state!.style.getPropertyValue('clip-path')).toBe('inset(50%)');
+
+    // ⚠️ 绝不能是 polite：那是「变化时播报」，这里要的是「随时可查」。
+    expect(state!.getAttribute('aria-live')).toBe('off');
+
+    // 也不能对读屏隐藏 —— 那就与不做一模一样。
+    expect(state!.getAttribute('aria-hidden')).toBeNull();
+
+    toast.destroy();
+  });
+
+  it('「当前倍速」随倍速变化更新', () => {
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    expect(document.getElementById('vsc-speed-state')!.textContent).toContain('1.5');
+
+    toast.show(2, video);
+    expect(document.getElementById('vsc-speed-state')!.textContent).toContain('2');
+    expect(document.getElementById('vsc-speed-state')!.textContent).not.toContain('1.5');
+
+    toast.destroy();
+  });
+
+  /* --- 站点自己改速（读数不能撒谎）--- */
+
+  it('角标显示的是视频此刻真实的倍速，而不是扩展最后一次设置的值', () => {
+    // 实测的 bug：用户在 YouTube 自己的菜单里把倍速改成 1.25x，
+    // 扩展完全不知情 —— 角标与工具栏标题继续显示 1.5x。
+    //
+    // 用户照着角标判断「我现在是 1.5 倍」，而画面上其实是 1.25 倍 ——
+    // 这是产品里唯一常驻的读数在撒谎。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    expect(pill().textContent).toBe('1.5x');
+
+    // 站点自己改速（jsdom 的 playbackRate 是真的存取器，改值会派发 ratechange）。
+    video.playbackRate = 1.25;
+
+    expect(pill().textContent, '角标必须跟着视频真实的倍速走').toBe('1.25x');
+    toast.destroy();
+  });
+
+  it('站点复位到 1x 时，读屏镜像也跟着复位', () => {
+    // 读屏用户随时可查「当前倍速」的那个节点（#vsc-speed-state）同样不能撒谎。
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    expect(document.getElementById('vsc-speed-state')!.textContent).toContain('1.5');
+
+    video.playbackRate = 1;
+
+    expect(document.getElementById('vsc-speed-state')!.textContent).toContain('1x');
+    expect(document.getElementById('vsc-speed-state')!.textContent).not.toContain('1.5');
+    toast.destroy();
+  });
+
+  it('倍速变了要通知运行时（工具栏标题要跟着变）', () => {
+    // 运行时靠这条回调把新倍速上报给 background —— 工具栏图标的标题
+    // 是用户在非全屏状态下唯一看得见的读数，它必须同步。
+    const seen: number[] = [];
+    const toast = new SpeedToast({
+      onRateChange: (rate) => seen.push(rate),
+    });
+
+    toast.show(1.5, video);
+    expect(seen).toEqual([1.5]);
+
+    // 站点自己改速 → 也要上报。
+    video.playbackRate = 1.25;
+    expect(seen).toEqual([1.5, 1.25]);
+
+    toast.destroy();
+  });
+
+  it('换成别的视频后，旧视频的倍速变化不该再改读数', () => {
+    // 监听器必须跟着「意图指向的那个视频」走：旧元素上残留的 ratechange
+    // 事件不该把新视频的读数改掉。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+
+    const other = document.createElement('video');
+    document.body.appendChild(other);
+    toast.show(2, other);
+    expect(pill().textContent).toBe('2x');
+
+    // 旧视频的倍速又变了：读数不该跟着动。
+    video.playbackRate = 3;
+    expect(pill().textContent, '旧视频不该影响新视频的读数').toBe('2x');
+    toast.destroy();
+  });
+
+  it('视频从页面里消失后，监听器要摘干净', async () => {
+    // 泄漏的监听器不只是浪费：它会让一个已经不在页面上的视频
+    // 继续改写画面上的读数（而画面上的读数早就该撤掉了）。
+    const seen: number[] = [];
+    const toast = new SpeedToast({
+      onRateChange: (rate) => seen.push(rate),
+    });
+    toast.show(1.5, video);
+
+    video.remove();
+    await flushMutations();
+
+    const before = seen.length;
+    video.playbackRate = 2;
+    expect(seen.length, '消失的视频不该再上报倍速').toBe(before);
+    toast.destroy();
+  });
+
+  /* --- 孤儿角标 --- */
+
+  it('站点把视频摘掉后，角标自己撤掉（不用等用户滚动一下）', async () => {
+    // 实测的 bug：SPA 换页 / 切清晰度之后，页面左上角永久留着一块
+    // 指向虚无的 "1.5x" 黑底角标 —— 直到用户碰巧滚一下页面才消失。
+    //
+    // 根因：角标是常驻的，而「视频已经不在了」这件事只有 updatePosition()
+    // 会发现，而它只在滚动/缩放时才跑。
+    markPlaying();
+    mockRect(video, 640, 360, 100, 200);
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 站点把播放器整个换掉了。
+    video.remove();
+    await flushMutations();
+
+    expect(pill().classList.contains('vsc-visible'), '视频没了，角标必须自己撤掉').toBe(false);
+    toast.destroy();
+  });
+
+  it('整棵播放器被换掉时，角标也要撤掉（不只是父节点被换掉）', async () => {
+    // 站点换播放器的方式有两种：直接 video.remove()，或者把整个容器换掉
+    // （视频跟着祖先一起消失，它自己的父节点根本没变）。
+    // 只盯着父节点会漏掉后一种 —— 而那恰恰是 SPA 换页时的常见形态。
+    markPlaying();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    container.appendChild(video);
+    mockRect(video, 640, 360, 100, 200);
+
+    const toast = new SpeedToast();
+    toast.show(1.5, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 整个容器被换掉。
+    container.remove();
+    await flushMutations();
+
+    expect(pill().classList.contains('vsc-visible'), '祖先被换掉也要撤掉角标').toBe(false);
     toast.destroy();
   });
 
@@ -576,5 +992,59 @@ describe('SpeedToast', () => {
     vi.advanceTimersByTime(2);
     expect(pill().classList.contains('vsc-visible'), '3 秒之后出现角标').toBe(true);
     toast.destroy();
+  });
+
+  /* --- i18n 契约 --- */
+
+  it('倍速文案的占位符必须交给 i18n 解析（调用点不自己 replace）', () => {
+    // src/shared/i18n.ts 的模块说明写着「占位符一律由这里负责解析，
+    // 调用点不用自己 replace」。而旧代码恰恰是自己 replace：
+    //   t('speedChanged', '播放速度 {rate}x').replace('{rate}', formatRate(rate))
+    //
+    // 渲染结果两者一样 —— 所以这条断言不看结果，看**替换值是怎么传进去的**：
+    // 交给 i18n 的话，substitutions 是 ['1.5']；调用点自己 replace 的话，
+    // 传进去的是 token 本身 ['{rate}']。
+    const calls: Array<[string, string[] | undefined]> = [];
+    const original = (globalThis as Record<string, unknown>).chrome;
+    (globalThis as Record<string, unknown>).chrome = {
+      i18n: {
+        getMessage: (key: string, substitutions?: string[]) => {
+          calls.push([key, substitutions]);
+          // 模拟 Chrome：位置占位符由 Chrome 自己替换掉。
+          return 'Playback speed $1x'.replace('$1', substitutions?.[0] ?? '');
+        },
+      },
+    };
+
+    try {
+      const toast = new SpeedToast();
+      toast.show(1.5, video);
+
+      const region = document.getElementById('vsc-live-region');
+      expect(region!.textContent).toBe('Playback speed 1.5x');
+
+      const call = calls.find(([key]) => key === 'speedChanged');
+      expect(call, '必须取 speedChanged').toBeTruthy();
+      expect(call![1], '替换值必须原样交给 i18n').toEqual(['1.5']);
+
+      toast.destroy();
+    } finally {
+      (globalThis as Record<string, unknown>).chrome = original;
+    }
+  });
+
+  it('locale 里的倍速文案用 Chrome 原生占位符（$1），并声明了 placeholders', () => {
+    // 与 src/shared/i18n.test.ts 里 hintSpeed 那条同一套规矩。
+    // ⚠️ 期望值必须是**字面量**，不能拿被测常量拼出来。
+    (['en', 'zh_CN'] as const).forEach((locale) => {
+      const messages = JSON.parse(
+        readFileSync(resolve(process.cwd(), '_locales', locale, 'messages.json'), 'utf8'),
+      ) as Record<string, { message?: string; placeholders?: Record<string, { content?: string }> }>;
+
+      expect(messages.speedChanged?.message, `${locale}/speedChanged`).toContain('$1');
+      expect(messages.speedChanged?.placeholders?.rate?.content).toBe('$1');
+      expect(messages.speedCurrent?.message, `${locale}/speedCurrent`).toContain('$1');
+      expect(messages.speedCurrent?.placeholders?.rate?.content).toBe('$1');
+    });
   });
 });

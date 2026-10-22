@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { announce, announceThrottled, destroyLiveRegion } from './liveRegion';
+import { announce, announceThrottled, destroyLiveRegion, prepareLiveRegion } from './liveRegion';
 
 /**
  * 读屏播报通道。
@@ -50,6 +50,38 @@ const countWrites = (run: () => void) => {
   return writes;
 };
 
+/**
+ * 记下 live region 被写进去的**每一条**文本（按写入顺序）。
+ *
+ * 与 countWrites 同源的同步计数法 —— 必须包住 setter，MutationObserver
+ * 的回调是微任务，断言前没排空微任务的话读到的是 0。
+ */
+const recordWrites = (run: () => void) => {
+  const descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+  if (!descriptor?.set) {
+    throw new Error('拿不到 textContent 的 setter');
+  }
+
+  const values: string[] = [];
+  Object.defineProperty(Node.prototype, 'textContent', {
+    ...descriptor,
+    set(this: Node, value: string) {
+      if (this instanceof HTMLElement && this.id === REGION_ID && value) {
+        values.push(value);
+      }
+      descriptor.set!.call(this, value);
+    },
+  });
+
+  try {
+    run();
+  } finally {
+    Object.defineProperty(Node.prototype, 'textContent', descriptor);
+  }
+
+  return values;
+};
+
 describe('liveRegion', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -86,6 +118,8 @@ describe('liveRegion', () => {
     announce('2x');
 
     expect(document.querySelectorAll(`#${REGION_ID}`).length).toBe(1);
+    // 第二条要排队等第一条让位（见下面「后来的消息不能顶掉前一条」那条）。
+    vi.advanceTimersByTime(1000);
     expect(region()!.textContent).toBe('2x');
   });
 
@@ -107,12 +141,10 @@ describe('liveRegion', () => {
     // 先清空、再延迟写回，中间有一个窗口。用户在这 50ms 内又按了一次键，
     // 若旧文本仍会写回，读屏用户听到的就是**过期**的倍速。
     announce('1.5x');
-    announce('1.5x');
-    announce('2x');
+    announce('1.5x'); // 制造一个待写回的定时器
+    announce('2x'); // 新消息排队
 
-    expect(region()!.textContent).toBe('2x');
-
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(1000);
     expect(region()!.textContent, '过期的重播不能覆盖新文本').toBe('2x');
   });
 
@@ -164,6 +196,101 @@ describe('liveRegion', () => {
       // 必须放在 finally：断言失败时若跳过还原，覆盖会泄漏给后面所有用例。
       delete (document as unknown as { body?: unknown }).body;
     }
+  });
+
+  /**
+   * live region 必须**先存在、内容后变**。
+   *
+   * aria-live 的通行要求：区域先进入无障碍树，内容再变。
+   * 惰性创建的话，第一次播报是「插入一个带内容的节点」—— 部分读屏器
+   * （尤其 VoiceOver / JAWS 的某些配置）根本不播报首条内容。而那条首条
+   * 恰恰是整个产品对读屏用户最重要的确认（「按了 `=` 之后生效没有」）。
+   */
+  it('prepareLiveRegion 提前建好一个空的 live region', () => {
+    prepareLiveRegion();
+
+    const element = region();
+    expect(element, 'live region 必须先存在').not.toBeNull();
+    expect(element!.textContent, '建的时候必须是空的（内容后变）').toBe('');
+    expect(element!.getAttribute('role')).toBe('status');
+    expect(element!.getAttribute('aria-live')).toBe('polite');
+  });
+
+  /**
+   * 串行队列：两条消息不能互相顶掉。
+   *
+   * 这是产品的**功能**问题，不是体验问题：写入即替换时，后来的引导文案
+   * 会把先前的倍速播报**整段**顶掉，读屏用户按了 `=` 之后什么都没听到。
+   */
+  describe('串行队列', () => {
+    it('后来的消息不能立刻顶掉前一条', () => {
+      announce('播放速度 1.1x');
+      expect(region()!.textContent).toBe('播放速度 1.1x');
+
+      announce('网页全屏 · f');
+      expect(region()!.textContent, '后来的消息不能立刻顶掉前一条').toBe('播放速度 1.1x');
+
+      vi.advanceTimersByTime(1000);
+      expect(region()!.textContent, '队列轮到第二条时才上屏').toBe('网页全屏 · f');
+    });
+
+    it('按到达顺序播', () => {
+      // 顺序不能乱：每一条都要真的上过屏，而且次序与到达次序一致。
+      const seen = recordWrites(() => {
+        announce('第一条');
+        announce('第二条');
+        announce('第三条');
+        vi.advanceTimersByTime(3000);
+      });
+
+      expect(seen).toEqual(['第一条', '第二条', '第三条']);
+    });
+
+    it('长文案不会把后面的短文案饿死', () => {
+      // 首次引导那四行很长。队列的占位时长是固定的，所以它最多只让后面
+      // 那条短文案等一小会儿 —— 不会被无限期压住。
+      announce('网页全屏 · f\n= / - 调速\n点扩展图标可进入网页全屏\n全部快捷键可在扩展设置里改绑（右键扩展图标 → 选项）');
+      announce('已暂停');
+
+      vi.advanceTimersByTime(2000);
+      expect(region()!.textContent, '短文案必须排到长文案后面并被播出来').toBe('已暂停');
+    });
+
+    it('节流播报与普通播报共用同一条队列', () => {
+      announceThrottled('播放速度 1.1x');
+      announce('已进入网页全屏');
+
+      expect(region()!.textContent, '普通播报不能顶掉节流播报').toBe('播放速度 1.1x');
+
+      vi.advanceTimersByTime(1000);
+      expect(region()!.textContent).toBe('已进入网页全屏');
+    });
+
+    it('普通播报会作废攒着的节流文本（不能延迟补播一条过期的倍速）', () => {
+      announceThrottled('播放速度 1.1x'); // 立刻播
+      vi.advanceTimersByTime(200);
+      announceThrottled('播放速度 1.2x'); // 攒下，等窗口结束
+      announce('已暂停'); // 非节流消息插进来
+
+      vi.advanceTimersByTime(2000);
+      // 那条过期的 1.2x 不能在 1 秒后才被补播出来。
+      expect(region()!.textContent).toBe('已暂停');
+    });
+
+    it('非节流消息打断这一串节流播报之后，下一条节流播报重新起算', () => {
+      announceThrottled('播放速度 1.1x'); // 立刻播
+      vi.advanceTimersByTime(100);
+      announce('已暂停'); // 非节流消息打断这一串
+      vi.advanceTimersByTime(600); // 队列排空，通道空着
+
+      const writes = countWrites(() => {
+        // 同一个倍速，但这一串被打断过 → 应当重新播一遍。
+        announceThrottled('播放速度 1.1x');
+        vi.advanceTimersByTime(3000);
+      });
+
+      expect(writes, '打断之后同一个倍速应当重新播报').toBeGreaterThan(0);
+    });
   });
 
   /**

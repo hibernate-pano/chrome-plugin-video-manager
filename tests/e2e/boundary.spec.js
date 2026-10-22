@@ -1,7 +1,5 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { test, expect } from '@playwright/test';
+import { launchExtension } from './helpers/launch.js';
 
 /**
  * 影响边界回归守卫。
@@ -17,77 +15,6 @@ import { join, resolve } from 'node:path';
  * 与 real-extension.spec.js 的分工：那套测「正常页面上的正常功能」，
  * 这套测「异常环境下的失败模式」。
  */
-
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
-
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-};
-
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--autoplay-policy=no-user-gesture-required',
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-];
-
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-boundary-'));
-  const executablePath = findChromium();
-  const candidates = [
-    { options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-  let context = null;
-  for (const candidate of candidates) {
-    if ('executablePath' in candidate.options && candidate.options.executablePath === undefined) continue;
-    try {
-      context = await chromium.launchPersistentContext(profile, candidate.options);
-      break;
-    } catch {
-      // 换下一个候选
-    }
-  }
-  if (!context) {
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('无法启动带扩展的浏览器');
-  }
-  const sw = context.serviceWorkers()[0]
-    ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-  if (!sw) {
-    await context.close();
-    rmSync(profile, { recursive: true, force: true });
-    throw new Error('扩展没加载：没有等到 background service worker');
-  }
-  return {
-    context,
-    async close() {
-      await context.close();
-      rmSync(profile, { recursive: true, force: true });
-    },
-  };
-};
 
 const serve = (page, body, contentType = 'text/html') =>
   page.route('**/*', (route) => {
@@ -314,6 +241,12 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
   });
 
   test('iframe 内视频的调速提示应出现在视频附近，而不是屏幕角落', async () => {
+    // ⚠️ 6.1.0 之后：每个 frame 只管**自己 document 里**的视频。
+    // 所以要让 iframe 里的视频被调速，必须把**焦点**送进那个 iframe ——
+    // 浏览器只把键盘事件派发给焦点所在的那个文档。
+    //
+    // 点一下裸 <video> 就能做到：浏览器把焦点交给包含它的 frame
+    // （实测：顶层 document.activeElement 变成 IFRAME，iframe 的 hasFocus() 变 true）。
     const ext = await launchExtension();
     try {
       const page = await ext.context.newPage();
@@ -322,10 +255,13 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
       await page.goto('http://127.0.0.1:4173/');
       await page.waitForTimeout(700);
 
-      // 焦点留在顶层文档，否则按键进不了顶层的内容脚本。
-      await page.mouse.click(200, 100);
-      await page.waitForTimeout(200);
+      // 把焦点送进 iframe：点 iframe 里的那个视频。
+      const frame = page.frames().find((f) => f.url().includes('inner.html'));
+      expect(frame, '前置条件：没找到 iframe').toBeTruthy();
+      await frame.locator('#inner').click({ force: true });
+      await page.waitForTimeout(300);
 
+      // 视频在屏幕 y≈frameTop（在 iframe 自己的坐标系里就是 y≈16）。
       const frameTop = await page.evaluate(
         () => Math.round(document.getElementById('f1').getBoundingClientRect().top),
       );
@@ -335,16 +271,23 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
 
       const state = await page.evaluate(() => {
         const inner = document.getElementById('f1').contentDocument.getElementById('inner');
-        const toast = document.getElementById('vsc-speed-toast');
-        return { innerRate: inner.playbackRate, toastTop: toast?.style.top ?? null, toastText: toast?.textContent ?? null };
+        return { innerRate: inner.playbackRate };
+      });
+      const toast = await frame.evaluate(() => {
+        const el = document.getElementById('vsc-speed-toast');
+        return { top: el?.style.top ?? null, text: el?.textContent ?? null };
       });
 
       expect(state.innerRate, '同源 iframe 里的视频应能被调速').toBeCloseTo(1.1, 2);
-      expect(state.toastText, '应显示新速率').toBe('1.1x');
-      // 视频在屏幕 y≈frameTop，toast 应落在它附近；iframe 内坐标会让它跑到 16px。
+      expect(toast.text, '应显示新速率').toBe('1.1x');
+      // 提示住在**它自己那份文档**里（iframe 的视口），
+      // 于是坐标是 iframe 内坐标：视频上方 16px。
+      //
+      // ⚠️ 换算到顶层坐标是**错的**（frameOffset.ts 的文件头有实测记录）：
+      // 那样算出来的 top 会把提示推到 iframe 之外，用户什么也看不到。
       expect(
-        Math.abs(parseFloat(state.toastTop) - (frameTop + 16)),
-        `toast 应定位在视频附近（视频 y≈${frameTop}，实际 toast y=${state.toastTop}）`,
+        Math.abs(parseFloat(toast.top) - 16),
+        `toast 应贴在 iframe 内视频的上方（实际 top=${toast.top}，视频在顶层 y≈${frameTop}）`,
       ).toBeLessThan(50);
       expect(errors).toEqual([]);
     } finally {
@@ -366,6 +309,14 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
       await page.waitForTimeout(200);
 
       // 先用 = 证明扩展确实认到了 iframe 里那个视频。
+      //
+      // ⚠️ 必须把焦点送进 iframe：6.1.0 之后每个 frame 只管自己 document 里的
+      // 视频，而键盘事件只派发给焦点所在的那个文档。
+      const frame = page.frames().find((f) => f.url().includes('inner.html'));
+      expect(frame, '前置条件：没找到 iframe').toBeTruthy();
+      await frame.locator('#inner').click({ force: true });
+      await page.waitForTimeout(300);
+
       await page.keyboard.press('=');
       await page.waitForTimeout(250);
       const rate = await page.evaluate(
@@ -374,19 +325,39 @@ iframe{width:400px;height:300px;border:0;display:block;margin-left:50px}</style>
       expect(rate, '前置条件：扩展应能认到 iframe 内的视频').toBeCloseTo(1.1, 2);
 
       await page.keyboard.press('f');
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(700);
 
+      // ⚠️ 全屏的覆盖层住在**视频所在的那份文档**里 —— 这里是 iframe 的文档，
+      // 不是顶层。6.1.0 之后每个 frame 只管自己 document 里的视频，
+      // 于是「进了全屏」的证据也在那一层。
+      //
+      // 而 iframe 里的全屏还要**撑大父文档里那个 <iframe> 元素**
+      // （见 iframeExpansion.ts）—— 那才是用户真正看到的「铺满整个页面」。
       const state = await page.evaluate(() => ({
         seen: window.__seen,
+        f1: (() => {
+          const el = document.getElementById('f1');
+          const rect = el.getBoundingClientRect();
+          return { w: rect.width, h: rect.height };
+        })(),
+      }));
+      const innerState = await frame.evaluate(() => ({
         overlay: !!document.getElementById('vsc-page-fullscreen-overlay'),
       }));
 
+      // 三种可接受结果：进了全屏（覆盖层在 iframe 里 + iframe 被撑大）、
+      // 或者压根不吞键（让页面自己处理）。最糟的是「吞掉却什么都没发生」。
+      const enteredFullscreen = innerState.overlay;
       const swallowed = !state.seen.includes('f');
-      // 两种可接受结果：要么不吞（让页面自己处理），要么真的进了全屏。
       expect(
-        swallowed && !state.overlay,
+        swallowed && !enteredFullscreen,
         '按 f 被吞掉却没进入全屏 = 用户失去按键且无任何反馈',
       ).toBe(false);
+
+      if (enteredFullscreen) {
+        // 撑大的是**父文档里那个 iframe 元素**（不是视频自己变大）。
+        expect(state.f1.w, 'iframe 元素应被撑满顶层视口').toBeGreaterThan(300);
+      }
       expect(errors).toEqual([]);
     } finally {
       await ext.close();

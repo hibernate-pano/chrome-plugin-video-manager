@@ -1,10 +1,39 @@
 import { t } from '../shared/i18n';
-import { topLevelOffset } from './frameOffset';
-import { NOTICE_INSET, NOTICE_MAX_HEIGHT, NOTICE_ROW_HEIGHT } from './runtimeStyles';
+import { topLevelRect } from './frameOffset';
+import {
+  NOTICE_INSET,
+  NOTICE_MAX_HEIGHT,
+  NOTICE_PILL_TOKENS,
+  NOTICE_ROW_HEIGHT,
+  setImportant,
+} from './runtimeStyles';
 import { TransientPill } from './transientPill';
 
 const NOTICE_ID = 'vsc-takeover-notice';
 const NOTICE_DURATION = 2600;
+
+/**
+ * 接管提示的外观。
+ *
+ * ⚠️ 排版**不再自己写**：它与调速胶囊是同一类东西（都锚在视频上、
+ * 都是一次性的短提示），必须**像素一致** —— 两个形状相同的东西长得不一样，
+ * 用户会以为是两个不同的功能。所以两边的字号、字重、行高、内边距、圆角、
+ * 底色、淡入时长全部来自同一套 token（`NOTICE_PILL_TOKENS`）。
+ *
+ * 这里只补这条提示**自己的**东西：它比胶囊宽（文案更长），
+ * 以及它的锚点（贴视频左下角）。
+ *
+ * 导出成常量是为了让**高度预算**能跟着它一起被验证 ——
+ * `NOTICE_MAX_HEIGHT` 是「这条提示最多能有多高」的答案，
+ * 而答案必须由提问的那个东西算出来，不能各写各的。
+ * 见 `src/content/runtimeStyles.test.ts` 里的高度守卫。
+ */
+export const TAKEOVER_NOTICE_STYLES: Record<string, string> = {
+  ...NOTICE_PILL_TOKENS,
+  'max-width': 'min(420px, calc(100vw - 32px))',
+  bottom: '16px',
+  left: '16px',
+};
 
 /**
  * 「这个视频接管不了」的一次性提示。
@@ -22,6 +51,18 @@ export class TakeoverNotice {
     id: NOTICE_ID,
     visibleClass: 'vsc-visible',
     duration: NOTICE_DURATION,
+    /**
+     * 提示的外观。
+     *
+     * 全部走**内联样式**（而不是 runtimeStyles 里的 CSS 规则）：
+     * 提示挂在页面里，站点的 `div { ... !important }` 会打穿样式表里的
+     * 任何普通声明。隔离机制见 runtimeStyles.ts 的「页面级提示的样式隔离」。
+     *
+     * ⚠️ `bottom: 16px; left: 16px` 是**兜底位置**：真正贴视频的坐标由
+     * positionNear() 算出来覆盖掉它。没有它的话，提示在定位算完之前会
+     * 停在文档流末尾（屏幕外）。
+     */
+    styles: TAKEOVER_NOTICE_STYLES,
   });
 
   /**
@@ -45,7 +86,7 @@ export class TakeoverNotice {
 
   /** 控制条不可见时也常驻在视频附近，所以位置每次都要跟着视频走。 */
   show(video: HTMLVideoElement | null) {
-    const text = t('noticeCannotTakeOver', '这个视频暂时接管不了');
+    const text = t('noticeCannotTakeOver', '这个视频暂时控制不了');
     if (!this.pill.show(text)) {
       return;
     }
@@ -79,6 +120,29 @@ export class TakeoverNotice {
   }
 
   /**
+   * 「视频在嵌入框里」。
+   *
+   * 与上面两条提示是**三件事**，文案不能混用：
+   * - 接管不了 → 视频在，只是不归我们管；
+   * - 没有视频 → 页面上压根没有 <video>；
+   * - 视频在别处 → 视频在**另一个 frame** 里（嵌入框），这一层没有。
+   *
+   * 实测（真实 Chromium）：页面上唯一的视频在嵌入框里、焦点在顶层时，
+   * 按 `=`/`f` 什么都不会发生 —— 键穿透给了页面，页面没绑定。
+   * 用户能得出的唯一结论是「扩展坏了」。这条提示把真相说出来：
+   * 视频在，只是不在这一层。
+   */
+  showVideoElsewhere() {
+    const text = t('noticeVideoElsewhere', '视频在嵌入框里 —— 点一下它就能用快捷键');
+    if (!this.pill.show(text)) {
+      return;
+    }
+
+    this.detachFollowListeners();
+    this.positionAtViewportCorner();
+  }
+
+  /**
    * 没有视频可锚定时，贴到视口左上角。
    *
    * 提示是 position:fixed 且默认没有 top/left —— 静态位置在文档流末尾，
@@ -93,9 +157,12 @@ export class TakeoverNotice {
 
     // 两条路径的锚点不同（一条用 top、一条用 bottom），
     // 所以必须把另一条显式清掉 —— 否则上一次的坐标会残留下来。
-    root.style.setProperty('bottom', 'auto');
-    root.style.setProperty('left', '16px');
-    root.style.setProperty('top', '16px');
+    //
+    // ⚠️ 必须带 !important：提示的隔离底座里有 `all: initial !important`，
+    // 而站点的 `div { top: ... !important }` 同样压得住普通内联样式。
+    setImportant(root, 'bottom', 'auto');
+    setImportant(root, 'left', '16px');
+    setImportant(root, 'top', '16px');
   }
 
   /**
@@ -127,19 +194,23 @@ export class TakeoverNotice {
       return;
     }
 
-    const rect = video.getBoundingClientRect();
     // 视频在同源 iframe 里时 rect 用的是 iframe 自己的视口坐标，必须换算到顶层，
     // 否则提示会被钳到屏幕角落——这条路径**恰恰**以 iframe 视频为主，
     // 换算漏掉就等于在最常见的情况下错位（6.0.3 在调速提示上修过同一个坑）。
-    const { offsetX, offsetY } = topLevelOffset(video);
+    //
+    // ⚠️ 必须用**完整矩形**（topLevelRect），不能是「rect + 偏移量」：
+    // iframe 被 `transform: scale()` 缩放时，偏移量只能平移一个点，
+    // 视频的**高度**也要跟着缩 —— 用偏移量推下边缘会算出一个不存在的下边缘
+    // （实测：真实下边缘 519，被算成 688，提示偏了 169px）。
+    const absolute = topLevelRect(video);
 
     const viewportHeight = window.innerHeight || 0;
     if (viewportHeight <= 0) {
       return;
     }
 
-    const videoTop = rect.top + offsetY;
-    const videoBottom = rect.bottom + offsetY;
+    const videoTop = absolute.top;
+    const videoBottom = absolute.bottom;
 
     // 视频竖向完全不在视口里（整块滚上去了，或还在下面没滚到）：
     // 退回视口左下角。
@@ -172,9 +243,11 @@ export class TakeoverNotice {
     // （按最坏的两行算），保证提示整个露在屏幕上。
     bottom = Math.min(bottom, viewportHeight - NOTICE_MAX_HEIGHT - NOTICE_INSET);
 
-    root.style.setProperty('top', 'auto');
-    root.style.setProperty('bottom', `${Math.max(16, bottom)}px`);
-    root.style.setProperty('left', `${Math.max(16, rect.left + offsetX + NOTICE_INSET)}px`);
+    // ⚠️ 必须带 !important：提示的隔离底座里有 `all: initial !important`，
+    // 而站点的 `div { left: ... !important }` 同样压得住普通内联样式。
+    setImportant(root, 'top', 'auto');
+    setImportant(root, 'bottom', `${Math.max(16, bottom)}px`);
+    setImportant(root, 'left', `${Math.max(16, absolute.left + NOTICE_INSET)}px`);
   }
 
   /**
@@ -188,9 +261,9 @@ export class TakeoverNotice {
       return;
     }
 
-    root.style.setProperty('top', 'auto');
-    root.style.setProperty('bottom', '16px');
-    root.style.setProperty('left', '16px');
+    setImportant(root, 'top', 'auto');
+    setImportant(root, 'bottom', '16px');
+    setImportant(root, 'left', '16px');
   }
 
   /**

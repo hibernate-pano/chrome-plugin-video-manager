@@ -1,7 +1,7 @@
-import { test, expect, chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { test, expect } from '@playwright/test';
+import { resolve } from 'node:path';
+import { launchExtension } from './helpers/launch.js';
+import { anyLocale, anyLocaleFragment } from './helpers/i18n.js';
 
 /**
  * 设置页的真实浏览器回归。
@@ -20,95 +20,28 @@ import { join, resolve } from 'node:path';
  *   - 长绑定必须带完整 title / aria-label
  */
 
-const DIST = process.env.VSC_EXTENSION_DIR
-  ? resolve(process.env.VSC_EXTENSION_DIR)
-  : resolve(process.cwd(), 'dist');
+/**
+ * 设置页上有几行「可改键的动作」。
+ *
+ * ⚠️ 这个数字是**设置页自己的事实**，不是本文档写死的常数：
+ * 它由 SHORTCUT_DEFINITIONS 决定，而那份清单会随版本变
+ * （6.2.0 加了「重新显示使用引导」那一行）。
+ * 写死数字的代价是：加一行设置，**整份设置页的 e2e 全红**，
+ * 而那些红灯与设置页本身对不对毫无关系。
+ */
+const SHORTCUT_ROWS = 7;
 
-const findChromium = () => {
-  const cache = join(homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-  ];
-  const versions = readdirSync(cache)
-    .filter((name) => name.startsWith('chromium-'))
-    .map((name) => name.slice('chromium-'.length))
-    .filter((version) => /^\d+$/.test(version))
-    .sort((a, b) => Number(b) - Number(a));
-  for (const version of versions) {
-    for (const relative of relativeCandidates) {
-      const candidate = join(cache, `chromium-${version}`, relative);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return undefined;
-};
-
-const launchArgs = () => [
-  `--disable-extensions-except=${DIST}`,
-  `--load-extension=${DIST}`,
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-  // 固定界面语言：设置页的文案走 chrome.i18n，
-  // 而 chrome.i18n 挑 _locales 下的哪个目录由**浏览器界面语言**决定。
-  // 不固定的话，断言会随开发机的语言而失效。
-  '--lang=zh-CN',
-];
-
-const launchExtension = async () => {
-  const profile = mkdtempSync(join(tmpdir(), 'vsc-options-'));
-  const executablePath = findChromium();
-  const candidates = [
-    { options: { channel: 'chromium', headless: true, args: launchArgs() } },
-    { options: { executablePath, headless: true, args: launchArgs() } },
-  ];
-
-  const failures = [];
-  for (const candidate of candidates) {
-    if (
-      'executablePath' in candidate.options &&
-      candidate.options.executablePath === undefined
-    ) {
-      continue;
-    }
-
-    try {
-      const context = await chromium.launchPersistentContext(profile, candidate.options);
-      const worker = context.serviceWorkers()[0]
-        ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }).catch(() => null));
-      if (!worker) {
-        await context.close();
-        continue;
-      }
-
-      // 扩展 ID 从 service worker 的 URL 里取（chrome-extension://<id>/background.js）。
-      const extensionId = new URL(worker.url()).host;
-
-      return {
-        context,
-        extensionId,
-        async close() {
-          await context.close();
-          rmSync(profile, { recursive: true, force: true });
-        },
-      };
-    } catch (error) {
-      failures.push(String(error).slice(0, 200));
-    }
-  }
-
-  rmSync(profile, { recursive: true, force: true });
-  throw new Error(`无法启动带扩展的浏览器：\n${failures.join('\n')}`);
-};
-
-/** 打开设置页并等它渲染完（7 行 + 页脚）。 */
+/** 打开设置页并等它渲染完（动作行 + 页脚）。 */
 const openOptions = async (ext) => {
   const page = await ext.context.newPage();
   await page.goto(`chrome-extension://${ext.extensionId}/options.html`);
   await page.waitForSelector('.vsc__row');
-  await expect.poll(() => page.locator('.vsc__row').count()).toBe(7);
+  // ⚠️ 这里等的是「**至少**渲染出 7 个可改键的动作行」——
+  // 那一段的行数是稳定的（SHORTCUT_DEFINITIONS 决定），
+  // 而整页的行数还会因为别的卡片（引导重置）而变。
+  await expect
+    .poll(() => page.locator('#rows .vsc__row').count())
+    .toBe(SHORTCUT_ROWS);
   return page;
 };
 
@@ -130,12 +63,16 @@ const inputAt = (page, index) => page.locator('.vsc__key').nth(index);
 const FULLSCREEN_ROW = 6;
 
 test.describe('设置页：改键、保存、撤销', () => {
-  test('渲染出 7 行、真实版本号与两条使用提示', async () => {
+  test('渲染出 7 个可改键的动作、真实版本号与两条使用提示', async () => {
     const ext = await launchExtension();
     try {
       const page = await openOptions(ext);
 
-      await expect(page.locator('.vsc__row')).toHaveCount(7);
+      await expect(page.locator('#rows .vsc__row')).toHaveCount(SHORTCUT_ROWS);
+
+      // 「重新显示使用引导」是**独立的一张卡片**，不是可改键的动作行 ——
+      // 单独断言它在，免得以后有人把它混进行数里，数字又对不上了。
+      await expect(page.locator('#reset-hint')).toHaveCount(1);
 
       // ⚠️ 之前页脚是 "Version —"：chrome mock / stub 少了 getManifest()，
       // 版本号读不出来。截图上那行字看着像渲染坏了。
@@ -145,8 +82,8 @@ test.describe('设置页：改键、保存、撤销', () => {
 
       // 这两件事此前只写在 README 与商店文案里，产品内一处都没有。
       const tips = (await page.locator('#tips').textContent()) ?? '';
-      expect(tips).toContain('工具栏图标');
-      expect(tips).toContain('打开设置页');
+      expect(tips).toMatch(anyLocaleFragment('optTipsToolbar'));
+      expect(tips).toMatch(anyLocaleFragment('optTipsOptions'));
     } finally {
       await ext.close();
     }
@@ -162,7 +99,7 @@ test.describe('设置页：改键、保存、撤销', () => {
       await page.keyboard.press('k');
 
       await expect(page.locator('#save')).toContainText('•');
-      await expect(page.locator('#status')).toHaveText('有未保存的更改');
+      await expect(page.locator('#status')).toHaveText(anyLocale('optUnsaved'));
 
       // 刷新 = 放弃草稿。存下去的东西必须**没有**被改动。
       await page.reload();
@@ -184,7 +121,7 @@ test.describe('设置页：改键、保存、撤销', () => {
       await page.keyboard.press('k');
       await page.keyboard.press('Enter');
 
-      await expect(page.locator('#status')).toHaveText('已保存');
+      await expect(page.locator('#status')).toHaveText(anyLocale('optSaved'));
       await expect.poll(async () => (await storedShortcuts(page))?.fullscreen).toBe('k');
 
       await page.reload();
@@ -235,7 +172,7 @@ test.describe('设置页：改键、保存、撤销', () => {
       await expect.poll(async () => (await storedShortcuts(page))?.fullscreen).toBe('g');
 
       await page.locator('#reset').click();
-      await expect(page.locator('#status')).toHaveText('已恢复默认');
+      await expect(page.locator('#status')).toHaveText(anyLocale('optRestored'));
       await expect.poll(async () => (await storedShortcuts(page))?.fullscreen).toBe('f');
 
       // 刷新后仍然是默认值 —— 之前「恢复默认」只改界面，storage 里还是旧值。
@@ -264,7 +201,7 @@ test.describe('设置页：改键、保存、撤销', () => {
 
       const reloaded = inputAt(page, FULLSCREEN_ROW);
       await expect(reloaded).toHaveValue('');
-      await expect(reloaded).toHaveAttribute('placeholder', '未绑定（已禁用）');
+      await expect(reloaded).toHaveAttribute('placeholder', anyLocale('optDisabled'));
     } finally {
       await ext.close();
     }
@@ -285,11 +222,11 @@ test.describe('设置页：浏览器保留键一律拒绝保存', () => {
       await input.click();
       await page.keyboard.press('Control+Shift+U');
 
-      await expect(page.locator('#status')).toHaveText('这个键被浏览器占用，换一个');
+      await expect(page.locator('#status')).toHaveText(anyLocale('optReserved'));
 
       // 点保存：错误提示必须**留在屏幕上**，而且存不下去。
       await page.locator('#save').click();
-      await expect(page.locator('#status')).toHaveText('这个键被浏览器占用，换一个');
+      await expect(page.locator('#status')).toHaveText(anyLocale('optReserved'));
       expect((await storedShortcuts(page))?.fullscreen).toBe('f');
     } finally {
       await ext.close();
@@ -330,7 +267,7 @@ test.describe('设置页：长绑定与无障碍', () => {
 
       await input.click();
       // ⚠️ 之前是「按下按键」——四个字里少了一个「要」，读着别扭。
-      await expect(input).toHaveAttribute('placeholder', '按下要绑定的键');
+      await expect(input).toHaveAttribute('placeholder', anyLocale('optPressKey'));
     } finally {
       await ext.close();
     }

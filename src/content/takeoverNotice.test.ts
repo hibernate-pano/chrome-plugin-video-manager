@@ -4,21 +4,30 @@ import { TakeoverNotice } from './takeoverNotice';
 const NOTICE_ID = 'vsc-takeover-notice';
 
 /**
- * 胶囊那一行的下边缘（视口坐标）：内缩 16px + 那一行本身 46px = 62px。
+ * 胶囊那一行的下边缘（视口坐标）：内缩 16px + 那一行本身 47px = 63px。
  *
  * ⚠️ 这里必须是**字面量**。
  * 之前这条用例拿 NOTICE_INSET / NOTICE_ROW_HEIGHT 这些**被测常量**算出期望值 ——
  * 常量一改，期望值跟着一起变，断言恒成立（把 NOTICE_ROW_HEIGHT 改成 0
  * 测试照样绿）。那是重言式，不是守卫。
  *
- * 62 = 16 + 46 这两个数的来历写在 runtimeStyles.ts 的常量注释里：
- * 16px 是页面级提示与视频边缘的距离，46px 是胶囊那一行的高度
- * （14px 字号 × line-height 1.4 + 上下各 5px 内边距）。
+ * 63 = 16 + 47 这两个数的来历写在 runtimeStyles.ts 的常量注释里：
+ * 16px 是页面级提示与视频边缘的距离，47px 是胶囊那一行的高度
+ * （13px 字号 × line-height 1.4 + 上下各 6px 内边距 = 46.2，向上取整）。
+ *
+ * ⚠️ 胶囊的排版现在由 `NOTICE_PILL_TOKENS` 决定（见 runtimeStyles.ts），
+ * 14px → 13px、内边距 5px → 6px —— 那一行因此从 46px 变成 47px。
  */
-const PILL_ROW_BOTTOM = 62;
+const PILL_ROW_BOTTOM = 63;
 
-/** 提示自身的最大高度（最坏的两行），runtimeStyles.ts 里写的是 44px。 */
-const NOTICE_MAX_HEIGHT = 44;
+/**
+ * 提示自身的最大高度（最坏的两行），runtimeStyles.ts 里写的是 49px。
+ *
+ * 49 的来历：13px 字号 × line-height 1.4 = 每行 18.2px，两行 = 36.4px，
+ * 加上上下各 6px 内边距 = 48.4px，向上取整到 49。
+ * （之前这里写的是 44 —— 那是「两行 ≈ 44px」的估算，比实际少 4.4px。）
+ */
+const NOTICE_MAX_HEIGHT = 49;
 
 const mockRect = (element: HTMLElement, width: number, height: number, top = 0, left = 0) => {
   Object.defineProperty(element, 'getBoundingClientRect', {
@@ -59,7 +68,7 @@ describe('TakeoverNotice', () => {
     notice.show(video);
 
     const root = document.getElementById(NOTICE_ID)!;
-    expect(root.textContent).toBe('这个视频暂时接管不了');
+    expect(root.textContent).toBe('这个视频暂时控制不了');
     expect(root.classList.contains('vsc-visible')).toBe(true);
   });
 
@@ -101,15 +110,15 @@ describe('TakeoverNotice', () => {
     notice.show(video);
 
     const root = document.getElementById(NOTICE_ID)!;
-    // 胶囊那一行的下边缘在 62px 处；提示的下边缘必须低于它，
-    // 也就是提示的上边缘在 62px 以下 —— 两者不重叠。
+    // 胶囊那一行的下边缘在 63px 处；提示的下边缘必须低于它，
+    // 也就是提示的上边缘在 63px 以下 —— 两者不重叠。
     const limit = 768 - PILL_ROW_BOTTOM - NOTICE_MAX_HEIGHT;
     // 视频下边缘给的位置比这个上限低（视频太矮），所以必须被上限顶住。
     expect(parseFloat(root.style.bottom)).toBeLessThanOrEqual(limit);
-    // 确切值：768 - 62 - 44 = 662px。
+    // 确切值：768 - 63 - 49 = 656px。
     // 只写 toBeLessThanOrEqual 是不够的 —— 把 NOTICE_ROW_HEIGHT 改成 0
     // 之后这个上限会跟着变大，断言照样成立；写死确切值才咬得住。
-    expect(root.style.bottom).toBe('662px');
+    expect(root.style.bottom).toBe('656px');
     const noticeTop = 768 - parseFloat(root.style.bottom) - 26;
     expect(noticeTop).toBeGreaterThanOrEqual(PILL_ROW_BOTTOM);
   });

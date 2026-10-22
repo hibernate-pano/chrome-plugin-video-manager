@@ -1,9 +1,26 @@
 import { FullscreenControls } from './fullscreenControls';
+import { FrameExpander } from './iframeExpansion';
 import { findOverlayLayers, OverlayLayer } from './overlayLayers';
 import { restoreSubtitleOffset } from './subtitleOffset';
 import { SUBTITLE_Z_INDEX, VIDEO_Z_INDEX } from './runtimeStyles';
+import { mountViewportRoot } from './viewportRoot';
 
 type FullscreenMode = 'reparent' | 'css-cover';
+
+/**
+ * 退出全屏时，视频与字幕要回到哪里。
+ *
+ * ⚠️ 为什么要单独算：站点在**全屏期间**重渲染（React/Vue 换清晰度、
+ * SPA 虚拟列表）会把旧的播放器容器丢掉 —— 那时原来的父节点已经**不在文档里**。
+ * 往那个游离容器里插 = 节点还在，但没人看得见：站点播放器变成黑框，
+ * 字幕从此永久消失。所以落点必须先判一次「原父节点还在不在文档里」。
+ */
+interface RestorePlan {
+  /** 视频与字幕的落点。null = 没有可用落点（极端情况）。 */
+  host: ParentNode | null;
+  /** 落点是「可见兜底」而不是站点原来的位置吗？ */
+  fallback: boolean;
+}
 
 interface FullscreenSnapshot {
   video: HTMLVideoElement | null;
@@ -11,6 +28,23 @@ interface FullscreenSnapshot {
   originalParent: ParentNode | null;
   originalNextSibling: Node | null;
   originalStyle: string;
+  /**
+   * 全屏布局那组属性在**搬运前**的内联值与优先级。
+   *
+   * 为什么单独记：正常退出时把整个 style 属性还原成 originalStyle 就够了。
+   * 但「站点在全屏期间把视频拿回去了」（重渲染时把节点插回新的播放器容器）
+   * 这时整个 style 属性已经是**站点自己的新样式**了，照原样还原会把站点刚写
+   * 的样式抹掉。于是那条路径改成**逐属性**还原：只动我们当初写过的那些属性，
+   * 而且只在「当前值仍是我们写的那份」时才动 —— 站点自己后来改的值不碰。
+   */
+  originalInlineStyles: Map<string, InlineValue>;
+  /**
+   * 我们写进视频的那份内联值与优先级（浏览器归一化之后的）。
+   *
+   * 用来判断「这个属性现在还是不是我们写的」—— 浏览器会把 `inset: 0`
+   * 归一化成 `0px`，直接拿常量比对会永远不相等。
+   */
+  appliedInlineStyles: Map<string, InlineValue>;
   originalControls: boolean;
   originalBodyOverflow: string;
   currentTime: number;
@@ -29,6 +63,12 @@ interface FullscreenSnapshot {
   overlayLayers: OverlayLayer[];
 }
 
+/** 一个内联属性的值与优先级。 */
+interface InlineValue {
+  value: string;
+  priority: string;
+}
+
 interface PlaybackSnapshot {
   currentTime: number;
   playbackRate: number;
@@ -39,6 +79,25 @@ interface PlaybackSnapshot {
 const OVERLAY_ID = 'vsc-page-fullscreen-overlay';
 const STAGE_ID = 'vsc-page-fullscreen-stage';
 
+/**
+ * 撑满画面时我们写进视频内联样式的那组属性。
+ *
+ * 退出时要**逐个**精确还原（见 FullscreenSnapshot.originalInlineStyles）：
+ * 整块写回 style 属性会把站点在这期间自己写下的样式一起抹掉。
+ */
+const FULLSCREEN_LAYOUT_PROPERTIES: Record<string, string> = {
+  position: 'fixed',
+  inset: '0',
+  margin: 'auto',
+  width: '100vw',
+  height: '100vh',
+  'max-width': '100vw',
+  'max-height': '100vh',
+  'object-fit': 'contain',
+  'z-index': String(VIDEO_Z_INDEX),
+  background: '#000',
+};
+
 export class FullscreenController {
   private state: FullscreenSnapshot = {
     video: null,
@@ -46,6 +105,8 @@ export class FullscreenController {
     originalParent: null,
     originalNextSibling: null,
     originalStyle: '',
+    originalInlineStyles: new Map(),
+    appliedInlineStyles: new Map(),
     originalControls: false,
     originalBodyOverflow: '',
     currentTime: 0,
@@ -58,6 +119,34 @@ export class FullscreenController {
 
   private healthTimer: number | null = null;
   private controls: FullscreenControls | null = null;
+
+  /**
+   * 站点在全屏期间把视频**拿回去了**吗？
+   *
+   * 站点重渲染时可能把 <video> 节点插回它的新播放器容器 —— 那时视频仍然
+   * connected（`video.isConnected` 挡不住这种情况），但它已经不在我们手上了。
+   * 这时候再把它「还原」到原位置，等于把站点刚建好的播放器掏空。
+   */
+  private videoTakenBackBySite = false;
+
+  /**
+   * 「iframe 里的网页全屏」：把装着这个视频的那个 <iframe> 元素撑满顶层视口。
+   *
+   * 为什么它住在控制器里、而不是 runtime.ts：
+   * - 进/出全屏时正是**发起与撤销**这次撑大的那一方，控制器天然知道时机；
+   * - 父文档侧要处理「子 frame 请求撑大」的消息，而消息处理的落点也正是
+   *   「全屏」这件事本身（撑大 = 让全屏铺满页面）；
+   * - runtime.ts 正在被别的地方改动，把这块自成一体的新机制留在控制器里，
+   *   两边就不会互相踩。
+   */
+  private readonly frameExpander = new FrameExpander();
+
+  constructor() {
+    // 父文档侧的消息监听装在这里：控制器在每个文档里都有一个（内容脚本
+    // 注入到所有 frame），于是任何一个「装着别人 iframe 的文档」都能认领
+    // 子 frame 的撑大请求 —— 顶层文档是其中最常见的一个。
+    this.frameExpander.install();
+  }
 
   isActive() {
     return this.state.video !== null;
@@ -102,7 +191,11 @@ export class FullscreenController {
       overlay = document.createElement('div');
       overlay.id = OVERLAY_ID;
       overlay.innerHTML = `<div id="${STAGE_ID}"></div>`;
-      document.body.appendChild(overlay);
+      // ⚠️ 挂到 <html> 而不是 <body>：body 带 transform 时它会变成
+      // fixed 后代的包含块，背板就会铺成 body 那么高（而不是视口高），
+      // 视频与控制条全部落到屏外 —— 网页全屏直接报废。
+      // 详见 viewportRoot.ts。
+      mountViewportRoot(overlay);
     }
 
     const stage = overlay.querySelector(`#${STAGE_ID}`);
@@ -196,8 +289,12 @@ export class FullscreenController {
     }
   }
 
-  /** 退出时把浮层放回它们原来的父节点与兄弟位置。 */
-  private restoreOverlayers(layers: OverlayLayer[]) {
+  /**
+   * 退出时把浮层放回它们原来的父节点与兄弟位置。
+   *
+   * @param plan 落点方案（见 RestorePlan）。
+   */
+  private restoreOverlayers(layers: OverlayLayer[], plan: RestorePlan) {
     for (const { element, originalParent, originalNextSibling, originalZIndex } of layers) {
       // z-index 一定要还原：字幕带着 2147483647 回到站点播放器里，
       // 会盖住站点自己的控件（音量气泡、播放按钮），退出全屏后页面就花了。
@@ -212,7 +309,15 @@ export class FullscreenController {
       // 站点里原本居中的字幕就歪了。
       restoreSubtitleOffset(element);
 
-      if (!originalParent) {
+      // ⚠️ 原父节点可能已经**不在文档里**了：站点在全屏期间重渲染，
+      // 旧的播放器容器被丢掉。往那个游离容器里插 = 字幕从此消失
+      // （节点没丢，但没人看得见）—— 那正是我们要修的故障。
+      //
+      // 所以：原父节点还在文档里 → 回原位；已经游离 → 退到**可见的兜底落点**
+      // （与视频同一个落点，绝不让字幕单独消失）。
+      const parentStillVisible = originalParent !== null && originalParent.isConnected;
+      const host = parentStillVisible ? originalParent : plan.host;
+      if (!host) {
         continue;
       }
 
@@ -220,8 +325,51 @@ export class FullscreenController {
       // 移走或重建，insertBefore 指向已脱离的节点会抛 NotFoundError
       // 打断整个退出流程，让视频永久卡在全屏里。sibling 失效就退回 append。
       const siblingStillValid =
-        originalNextSibling !== null && originalNextSibling.parentNode === originalParent;
-      originalParent.insertBefore(element, siblingStillValid ? originalNextSibling : null);
+        originalNextSibling !== null && originalNextSibling.parentNode === host;
+      try {
+        host.insertBefore(element, siblingStillValid ? originalNextSibling : null);
+      } catch {
+        // 兜底：退出全屏**必须**成功，抛出去就等于全屏退不干净
+        // （overlay 残留、body 滚动锁死、isActive 卡在 true）。
+      }
+
+      // 可见性兜底：只在「我们把它放到了一个它不熟悉的位置」时做 ——
+      // 站点的 CSS 可能给那个位置准备了隐藏规则，那时节点在、用户看不见，
+      // 与「字幕消失」是同一种故障。
+      if (!parentStillVisible) {
+        this.ensureRestoredVisible(element);
+      }
+    }
+  }
+
+  /**
+   * 可见性兜底：还原之后自检一次「这个节点是不是真的看得见」。
+   *
+   * 只在**兜底落点**上做：正常还原时样式是站点自己的，我们一个字都不该碰。
+   */
+  private ensureRestoredVisible(element: HTMLElement) {
+    // 页面已经把它丢弃了 —— 不复活（复活一个没人要的节点只会多一个幽灵视频）。
+    if (!element.isConnected) {
+      return;
+    }
+
+    const view = element.ownerDocument.defaultView;
+    if (!view) {
+      return;
+    }
+
+    let style: CSSStyleDeclaration;
+    try {
+      style = view.getComputedStyle(element);
+    } catch {
+      return;
+    }
+
+    if (style.display === 'none') {
+      element.style.setProperty('display', 'block', 'important');
+    }
+    if (style.visibility === 'hidden') {
+      element.style.setProperty('visibility', 'visible', 'important');
     }
   }
 
@@ -281,16 +429,93 @@ export class FullscreenController {
 
   private applyFullscreenLayout(video: HTMLVideoElement, mode: FullscreenMode) {
     video.classList.add('vsc-page-fullscreen-video', `vsc-page-fullscreen-video--${mode}`);
-    video.style.setProperty('position', 'fixed', 'important');
-    video.style.setProperty('inset', '0', 'important');
-    video.style.setProperty('margin', 'auto', 'important');
-    video.style.setProperty('width', '100vw', 'important');
-    video.style.setProperty('height', '100vh', 'important');
-    video.style.setProperty('max-width', '100vw', 'important');
-    video.style.setProperty('max-height', '100vh', 'important');
-    video.style.setProperty('object-fit', 'contain', 'important');
-    video.style.setProperty('z-index', String(VIDEO_Z_INDEX), 'important');
-    video.style.setProperty('background', '#000', 'important');
+    Object.entries(FULLSCREEN_LAYOUT_PROPERTIES).forEach(([property, value]) => {
+      video.style.setProperty(property, value, 'important');
+    });
+  }
+
+  /**
+   * 记下某组属性在**此刻**的内联值与优先级。
+   *
+   * 搬运前记一次（原样），写完布局再记一次（我们写下的那份）——
+   * 退出时靠后者判断「这个属性现在还是不是我们写的」。
+   */
+  private captureInlineStyles(
+    video: HTMLVideoElement,
+  ): Map<string, InlineValue> {
+    const styles = new Map<string, InlineValue>();
+    for (const property of Object.keys(FULLSCREEN_LAYOUT_PROPERTIES)) {
+      styles.set(property, {
+        value: video.style.getPropertyValue(property),
+        priority: video.style.getPropertyPriority(property),
+      });
+    }
+    return styles;
+  }
+
+  /**
+   * 逐属性还原我们在视频上写过的全屏布局样式。
+   *
+   * ⚠️ 只在「当前值仍是我们写的那份」时才还原：站点自己在这期间改过的值
+   * 不能被我们覆盖回去（那是站点对新播放器的布局，不是我们的残留）。
+   *
+   * ⚠️ 只动**我们当初写过的那些属性**：整个 style 属性写回去会把站点
+   * 在这期间写下的新样式一起抹掉。
+   */
+  private restoreLayoutProperties(video: HTMLVideoElement) {
+    for (const property of Object.keys(FULLSCREEN_LAYOUT_PROPERTIES)) {
+      const applied = this.state.appliedInlineStyles.get(property);
+      if (!applied) {
+        continue;
+      }
+      if (video.style.getPropertyValue(property) !== applied.value) {
+        continue;
+      }
+      if (video.style.getPropertyPriority(property) !== applied.priority) {
+        continue;
+      }
+
+      const original = this.state.originalInlineStyles.get(property);
+      if (original && original.value) {
+        video.style.setProperty(property, original.value, original.priority);
+      } else {
+        video.style.removeProperty(property);
+      }
+    }
+  }
+
+  /**
+   * 视频现在还在我们自己的 stage 里吗？
+   *
+   * 为什么要问：`video.isConnected` 挡不住「站点把视频拿回去了」这一种情况 ——
+   * 全屏时视频在我们的 overlay 里，connected 恒为 true；而站点重渲染后
+   * 把节点插回它的新播放器容器时，视频同样 connected，却已经不在我们手上了。
+   */
+  private isInsideOurStage(node: Node): boolean {
+    const stage = document.getElementById(STAGE_ID);
+    return stage ? stage.contains(node) : false;
+  }
+
+  /**
+   * 算好退出时的落点。
+   *
+   * ⚠️ 核心判据是 **`originalParent.isConnected`**，不是「非空」：
+   * 站点在全屏期间重渲染会把旧的播放器容器丢掉，那个容器**非空**，
+   * 却已经不在文档里了。往它里面插 = 视频与字幕从此没人看得见。
+   */
+  private resolveRestorePlan(): RestorePlan {
+    const parent = this.state.originalParent;
+    if (parent && parent.isConnected) {
+      return { host: parent, fallback: false };
+    }
+
+    // 兜底落点必须是**用户看得见**的地方：body 是页面里唯一一直可见的容器。
+    const body = document.body;
+    if (body && body.isConnected) {
+      return { host: body, fallback: true };
+    }
+
+    return { host: null, fallback: false };
   }
 
   /**
@@ -411,15 +636,17 @@ export class FullscreenController {
     }
 
     const playbackSnapshot = this.capturePlaybackSnapshot(video);
+    // 落点一次算好：视频与字幕必须落在**同一个**地方。
+    const plan = this.resolveRestorePlan();
     // 浮层已经被搬进 overlay 了：回退到 css-cover 必须先把它们放回页面，
     // 否则字幕会被永久留在 overlay 里，而视频已经回到站点 DOM ——
     // 字幕从此再也不跟着视频走，且没有任何提示。
     //
     // 这里必须**立刻**还原（而不是等 release()）：视频此刻就要回到站点 DOM，
     // 字幕必须先回到它自己的容器，否则两者会短暂错位。
-    this.restoreOverlayers(this.state.overlayLayers);
+    this.restoreOverlayers(this.state.overlayLayers, plan);
     this.state.overlayLayers = [];
-    this.restoreToOriginalSlot(video);
+    this.restoreToOriginalSlot(video, plan);
     this.state.mode = 'css-cover';
     // 摘掉 vsc-active 即彻底 display:none（runtimeStyles.ts:4-16），一个像素都不画。
     // overlay 此刻仍在 DOM 里（只有 exit 会 remove 它），不清掉就会留下一层
@@ -477,10 +704,19 @@ export class FullscreenController {
     // 若页面正处于系统原生全屏（如之前点了站点自己的全屏按钮），先退出：
     // 否则后续按 ESC 会被浏览器拿去退系统全屏，keydown 不再派发给页面，
     // 我们的 overlay 盖在最上层，看起来就像“按 ESC 没反应”。
+    //
+    // ⚠️ 还必须退，否则「扩展的全屏」与「站点的原生全屏」会**同时存在**：
+    // 原生全屏的元素被渲染在浏览器的 top layer，压在一切普通内容（包括
+    // 我们的 overlay）之上。用户看到的会是站点的原生全屏 —— 而那个播放器里的
+    // 视频已经被我们搬走了，屏幕上是一个黑框。
     if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => {
-        // Best effort.
-      });
+      try {
+        void document.exitFullscreen().catch(() => {
+          // Best effort：退不掉也不该打断我们自己的全屏。
+        });
+      } catch {
+        // 极端环境（文档不是 active）下 exitFullscreen 可能直接抛 —— 忽略。
+      }
     }
     // 进入本方法前已用 canEnter() 提前 return，而所有适配器的
     // shouldTryReparent 都是同一个判断，因此这里恒为 reparent；css-cover 只在
@@ -491,12 +727,18 @@ export class FullscreenController {
     // getBoundingClientRect，而那时视频还没被搬走，坐标才是对的。
     const layersToAttach = this.collectLayersToAttach(video);
 
+    // 搬运前先记下全屏布局那组属性的内联值：站点可能在全屏期间重渲染并
+    // 改掉它们，退出时必须**逐属性**精确还原（见 restoreLayoutProperties）。
+    const originalInlineStyles = this.captureInlineStyles(video);
+
     this.state = {
       video,
       mode,
       originalParent: video.parentNode,
       originalNextSibling: video.nextSibling,
       originalStyle: video.getAttribute('style') ?? '',
+      originalInlineStyles,
+      appliedInlineStyles: new Map(),
       originalControls: video.controls,
       originalBodyOverflow: document.body.style.overflow,
       currentTime: video.currentTime,
@@ -537,6 +779,9 @@ export class FullscreenController {
 
     const playbackSnapshot = this.capturePlaybackSnapshot(video);
     this.applyFullscreenLayout(video, 'reparent');
+    // 记下**我们写下的**那一份（浏览器会归一化值，`inset: 0` 可能变成 `0px`）：
+    // 退出时靠它判断「这个属性现在还是不是我们写的」。
+    this.state.appliedInlineStyles = this.captureInlineStyles(video);
     stage.appendChild(video);
     // 先建字幕容器（与画面等大、居中），再对齐它 —— 顺序反了尺寸就对不上。
     this.attachOverlayers(stage, layersToAttach);
@@ -549,6 +794,14 @@ export class FullscreenController {
     // 视口变了，画面框就变了，字幕参照物必须跟着重新算（见 boundHandleViewportChange）。
     window.addEventListener('resize', this.boundHandleViewportChange);
     window.visualViewport?.addEventListener('resize', this.boundHandleViewportChange);
+    // 站点在我们的全屏期间进原生全屏时，两层会叠在一起 —— 让位（见 boundHandleFullscreenChange）。
+    document.addEventListener('fullscreenchange', this.boundHandleFullscreenChange);
+    // iframe 里的视频：覆盖层与画面参照的都是**iframe 自己的视口**，
+    // 只有请父文档把那个 iframe 元素撑满顶层视口，网页全屏才名副其实。
+    //
+    // ⚠️ 放在监听器注册**之后**：撑大会改变 iframe 的视口尺寸，随之而来
+    // 的 resize 事件必须有人接（字幕参照物要按新的画面框重算）。
+    this.frameExpander.setOwnFullscreen(true);
     this.restoreIfLost(video, playbackSnapshot);
 
     window.setTimeout(() => {
@@ -589,6 +842,15 @@ export class FullscreenController {
   // 只清理、不碰视频在页面里的位置。给「节点已经不在文档里」的路径用：
   // 还原 class/style/controls 对游离节点是 no-op，无副作用。
   private release() {
+    // ⚠️ 必须在最前面：撑大与还原必须**成对**。
+    // 父文档那边被撑大的 iframe 元素若不还原，用户页面就被永久改成
+    // 「一个巨大的 iframe」，而且顶层页面再也滚不动。
+    // 放在最前面是因为这一行在「视频已经被页面丢弃」（state.video 为 null）
+    // 的路径上也要执行 —— 那条路径同样需要把撑大撤销掉。
+    this.frameExpander.setOwnFullscreen(false);
+    // 同样必须无条件卸掉：监听器在 enter() 里注册，release() 是它的对称操作。
+    document.removeEventListener('fullscreenchange', this.boundHandleFullscreenChange);
+
     const video = this.state.video;
     if (!video) {
       return;
@@ -606,7 +868,7 @@ export class FullscreenController {
     //
     // 还原必须先于删除 overlay：字幕要回到它的原父节点（原站点播放器容器），
     // 而不是留在 overlay 里。
-    this.restoreOverlayers(this.state.overlayLayers);
+    this.restoreOverlayers(this.state.overlayLayers, this.resolveRestorePlan());
     this.state.overlayLayers = [];
 
     // 摘掉元数据监听：视频已经交回站点，它再改尺寸不该再牵动我们的 stage。
@@ -617,7 +879,13 @@ export class FullscreenController {
 
     video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--css-cover');
     video.controls = this.state.originalControls;
-    video.setAttribute('style', this.state.originalStyle);
+    if (this.videoTakenBackBySite && video.isConnected) {
+      // 站点把视频拿回去了 → 只撤掉**我们**写的那几个属性，
+      // 站点自己在这期间写下的样式一个字都不碰。
+      this.restoreLayoutProperties(video);
+    } else {
+      video.setAttribute('style', this.state.originalStyle);
+    }
 
     document.getElementById(OVERLAY_ID)?.remove();
     // 正常情况下 body 必然存在（enter 已用 ensureOverlay 守过）；这里额外
@@ -631,12 +899,15 @@ export class FullscreenController {
       this.healthTimer = null;
     }
 
+    this.videoTakenBackBySite = false;
     this.state = {
       video: null,
       mode: null,
       originalParent: null,
       originalNextSibling: null,
       originalStyle: '',
+      originalInlineStyles: new Map(),
+      appliedInlineStyles: new Map(),
       originalControls: false,
       originalBodyOverflow: '',
       currentTime: 0,
@@ -651,22 +922,61 @@ export class FullscreenController {
   // sibling 守卫：全屏期间页面可能把 originalNextSibling 移走了（重排 DOM），
   // 此时 insertBefore(video, 已脱离的节点) 会抛 NotFoundError 打断流程，
   // 让视频卡死在 overlay、body 滚动锁死。sibling 不再是原父节点的孩子时改用 append。
-  private restoreToOriginalSlot(video: HTMLVideoElement) {
-    const parent = this.state.originalParent;
-    if (!parent) {
+  private restoreToOriginalSlot(video: HTMLVideoElement, plan: RestorePlan) {
+    const host = plan.host;
+    if (!host) {
       return;
     }
 
+    // sibling 守卫：全屏期间页面可能把 originalNextSibling 移走了（重排 DOM），
+    // 此时 insertBefore(video, 已脱离的节点) 会抛 NotFoundError 打断流程，
+    // 让视频卡死在 overlay、body 滚动锁死。sibling 不再是落点的孩子时改用 append。
     const sibling = this.state.originalNextSibling;
-    const siblingStillValid = sibling !== null && sibling.parentNode === parent;
-    parent.insertBefore(video, siblingStillValid ? sibling : null);
+    const siblingStillValid = sibling !== null && sibling.parentNode === host;
+    try {
+      host.insertBefore(video, siblingStillValid ? sibling : null);
+    } catch {
+      // 兜底：退出全屏**必须**成功 —— 抛出去就等于全屏退不干净。
+    }
   }
+
+  /**
+   * 站点在**我们**的全屏期间进了原生全屏 → 两层会叠在一起。
+   *
+   * 原生全屏的元素被渲染在浏览器的 top layer，压在一切普通内容之上，
+   * 于是用户看到的是站点的原生全屏 —— 而那个播放器里的视频已经被我们搬走了，
+   * 屏幕上是一个黑框。
+   *
+   * 站点主动进原生全屏是用户的明确手势（点了站点自己的全屏按钮），
+   * 与其跟它抢，不如让位：退出我们的网页全屏，把视频还给站点，
+   * 站点的原生全屏于是能正常显示。
+   *
+   * ⚠️ 只在 `document.fullscreenElement` **非空**时才动：我们自己进全屏时
+   * 主动调用 exitFullscreen() 也会触发这个事件（那时 fullscreenElement 是 null），
+   * 不区分的话，我们刚进全屏就会立刻把自己退掉。
+   */
+  private readonly boundHandleFullscreenChange = () => {
+    if (!document.fullscreenElement) {
+      return;
+    }
+    if (!this.isActive()) {
+      return;
+    }
+
+    // ⚠️ 绝不能在这里退掉原生全屏：那是站点自己的全屏，用户要的是它。
+    // 让位的方式是退出**我们**的全屏（exit 里不会碰原生全屏）。
+    this.exit();
+  };
 
   exit() {
     const video = this.state.video;
     if (!video) {
       return;
     }
+
+    // 落点一次算好，视频与字幕必须落在**同一个**地方 ——
+    // 否则会出现「视频回到页面、字幕留在 overlay」这种半吊子状态。
+    const plan = this.resolveRestorePlan();
 
     // 还原顺序：浮层先、视频后。
     //
@@ -680,21 +990,43 @@ export class FullscreenController {
     // originalNextSibling 仍然有效，而字幕就是那个 sibling。
     // release() 里还有一次还原，那是给「没走 exit() 的路径」兜底的 ——
     // 它看到 overlayLayers 已空就不会重复动作。
-    this.restoreOverlayers(this.state.overlayLayers);
+    this.restoreOverlayers(this.state.overlayLayers, plan);
     this.state.overlayLayers = [];
 
-    // isConnected 守卫：页面若已把视频连同 originalNextSibling 一起丢弃，
-    // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。
-    if (this.state.mode === 'reparent' && this.state.originalParent && video.isConnected) {
-    const playbackSnapshot = this.capturePlaybackSnapshot(video);
-    this.restoreToOriginalSlot(video);
-    this.restoreIfLost(video, playbackSnapshot);
-  }
+    if (this.state.mode === 'reparent' && this.state.originalParent) {
+      const playbackSnapshot = this.capturePlaybackSnapshot(video);
 
-  this.release();
-}
+      // isConnected 守卫：页面若已把视频连同 originalNextSibling 一起丢弃，
+      // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。
+      if (video.isConnected) {
+        if (this.isInsideOurStage(video)) {
+          // 我们还占着它 → 必须把它还给站点。
+          this.restoreToOriginalSlot(video, plan);
+          this.restoreIfLost(video, playbackSnapshot);
+        } else {
+          // 站点已经把视频拿回去了（重渲染时插回了它的新播放器容器）。
+          //
+          // ⚠️ 千万别再动它的位置：把它从站点刚建好的播放器里拔出来，
+          // 等于把站点的新播放器掏空 —— 那正是「站点变成空壳」的做法。
+          // 位置一个字都不碰，只在 release() 里撤掉我们写在它身上的样式。
+          this.videoTakenBackBySite = true;
+        }
+      }
+    }
+
+    // 可见性兜底：只在**兜底落点**上做（正常还原时样式是站点自己的，不能碰）。
+    if (plan.fallback && video.isConnected) {
+      this.ensureRestoredVisible(video);
+    }
+
+    this.release();
+  }
 
 destroy() {
   this.exit();
+  // 卸掉父文档侧的监听器，并把还撑大着的 iframe 元素全部还原。
+  // （exit() 覆盖的是「我们自己还在全屏」这条路径；这里兜住
+  //  「我们自己没在全屏、但某个子 frame 的请求还挂着」的情况。）
+  this.frameExpander.uninstall();
 }
 }
