@@ -69,9 +69,22 @@ Video Speed Controller — Fullscreen & Keys
 
   6.0.6 与 6.0.8 两次发布，CWS 都返回了 `INCONSISTENT_LOCALE_METADATA`
   （"Mismatching metadata: Discrepancies in feature desc…"）——
-  已经排除扩展包内 i18n 的可能（`_locales/en` 与 `_locales/zh_CN` 各 48 个键、
-  键集合完全一致，且不含 name/description 键），成因就在**商店 listing 的
-  中英文描述之间**。
+  成因在**商店 listing 的中英文描述之间**。
+
+  ⚠️ 2026-10-22 复核更正：原文写着「已经排除扩展包内 i18n 的可能
+  （各 48 个键、键集合完全一致，且**不含 name/description 键**）」——
+  那句话对 6.0.8 是对的，对 6.2.0 **已经不对了**：
+
+  - `_locales/en` 与 `_locales/zh_CN` 现在各 **75 个键**（不是 48）；
+  - 而且 6.2.0 **第一次**把 `manifest.json` 的 `description` 本地化了
+    （`__MSG_extensionDescription__`）—— 也就是说，扩展包里**现在有**
+    一个 description 键，且它会被商店读到。
+
+  ⚠️ 为什么这件事值得记：6.0.6 与 6.0.8 的 description 是**字面英文**
+  （"…for any HTML5 video" —— 连 `any` 都在里面，那是 CWS 拒审清单上的词）。
+  6.2.0 把它换成本地化版本，顺手把这个绝对化表述改掉了 ——
+  但「逐段对齐」这套流程**没有覆盖到它**，于是多了一块新的风险面。
+  **提交前必须再核一遍这两版 description 的语义是否等价。**
 
   「逐段对齐」在这里的定义：两边段落数相同、顺序相同、每段讲同一件事。
   这样审核员对照两种语言时，看到的是同一条承诺的两种说法，而不是两份功能清单。
@@ -90,13 +103,13 @@ Video Speed Controller 把网页里的视频变成一个干净的全屏播放器
 只接管你正在看的那个视频：页面上有多个视频时，扩展只对正在播、或者你刚刚点过/操作过的那个生效；分不清是哪一个时它会让路，把按键还给页面，而不是替你猜一个。
 嵌入框（iframe）里的视频同样被接管，同源还是跨域都一样：能调速、能快进，也能进网页全屏 —— 而且网页全屏会铺满整个页面，不只是铺满那个嵌入框自己的一小块。快捷键只作用在焦点所在的那一层（见下方「适用范围」）。
 快捷键由你决定：全部 7 个动作都能在设置页改绑，留空即禁用该动作。重复绑定、以及浏览器自己占用的键（如 Ctrl+Shift+I），都会在保存前被拦下 —— 存下去也永远不会生效的绑定，不如不让你存。
-点击工具栏图标即可切换网页全屏 —— **视频在嵌入框（iframe）里时，直接作用到框里那个视频**；鼠标悬停在图标上时，提示里会显示这个标签页当前的倍速（倍速是 1.0x 时只显示扩展名字，因为 1.0x 没什么可报的）。
+点击工具栏图标即可切换网页全屏 —— 视频在嵌入框（iframe）里时，直接作用到框里那个视频；鼠标悬停在图标上时，提示里会显示这个标签页当前的倍速（倍速是 1.0x 时只显示扩展名字，因为 1.0x 没什么可报的）。
 
 怎么用
 安装后无需任何配置即可使用。需要改键时按 Ctrl+Shift+, 打开设置页（macOS 上是 ⌘⇧,），点一下想改的那一行，直接按新键即可；也可以右键扩展图标选择「选项」。设置页支持简体中文与 English。
 
 适用范围
-只控制视频，不控制纯音频。iframe（嵌入框）里的视频也会被接管，同源还是跨域都一样：能调速、能快进，也能进网页全屏 —— 而且网页全屏会**铺满整个页面**（扩展会让装着播放器的那一整块嵌入框撑满屏幕），不只是铺满嵌入框自己那一小块。快捷键只作用于焦点所在的那一层：焦点在顶层页面时，嵌入框里的视频不会被牵连；焦点在嵌入框里时，顶层页面里的视频既不会被调速，也进不了网页全屏。要让快捷键作用到嵌入框里的视频，先把焦点点进那个嵌入框；反过来，焦点在顶层而视频在嵌入框里时，扩展会提示「视频在嵌入框里」，而不是让你白按一场。点扩展工具栏图标则会直接作用到页面上真正有视频的那一层。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
+只控制视频，不控制纯音频。iframe（嵌入框）里的视频也会被接管，同源还是跨域都一样：能调速、能快进，也能进网页全屏 —— 而且网页全屏会铺满整个页面（扩展会让装着播放器的那一整块嵌入框撑满屏幕），不只是铺满嵌入框自己那一小块。快捷键只作用于焦点所在的那一层：焦点在顶层页面时，嵌入框里的视频不会被牵连；焦点在嵌入框里时，顶层页面里的视频既不会被调速，也进不了网页全屏。要让快捷键作用到嵌入框里的视频，先把焦点点进那个嵌入框；反过来，焦点在顶层而视频在嵌入框里时，扩展会提示「视频在嵌入框里」，而不是让你白按一场。点扩展工具栏图标则会直接作用到页面上真正有视频的那一层。受保护的点播内容（例如流媒体平台的加密视频）由浏览器保护，无法接管。极少数页面在重建布局时会退回更简单的显示方式。
 
 隐私
 不收集任何个人数据，也不向开发者发送任何数据。你的快捷键设置保存在 Chrome 的同步扩展存储中，因此会跟随你的 Chrome 账号。扩展不保存你的浏览记录，也不跨设备同步你的倍速——倍速只留在当前这个标签页里，关掉浏览器就没了。它只在页面上查找并控制视频元素。
@@ -121,7 +134,7 @@ How to use
 Works out of the box with no setup. To rebind a key, press Ctrl+Shift+, to open the options page (⇧⌘, on macOS), click the row you want, and press the new key; you can also right-click the extension icon and choose "Options". The options page is available in English and Simplified Chinese.
 
 Scope
-Controls video only, not audio-only players. A video inside an iframe is taken over as well, whether that iframe is same-origin or cross-origin: it can be sped up and skipped, and it can enter page fullscreen — and that fullscreen fills the **whole page** (the extension expands the frame that holds the player to fill the screen), not just the iframe's own small box. Shortcuts only reach the layer that holds the focus: while the focus is on the top-level page, the video inside the iframe is left alone; while the focus is inside the iframe, the top-level page's video is not sped up and cannot enter page fullscreen. Click into the iframe first to have the shortcuts act on its video; the other way round — focus on the top-level page while the video sits in an iframe — the extension tells you where the video is instead of leaving you pressing keys at nothing. Clicking the toolbar icon always acts on the layer that actually holds the video. Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
+Controls video only, not audio-only players. A video inside an iframe is taken over as well, whether that iframe is same-origin or cross-origin: it can be sped up and skipped, and it can enter page fullscreen — and that fullscreen fills the whole page (the extension expands the frame that holds the player to fill the screen), not just the iframe's own small box. Shortcuts only reach the layer that holds the focus: while the focus is on the top-level page, the video inside the iframe is left alone; while the focus is inside the iframe, the top-level page's video is not sped up and cannot enter page fullscreen. Click into the iframe first to have the shortcuts act on its video; the other way round — focus on the top-level page while the video sits in an iframe — the extension tells you where the video is instead of leaving you pressing keys at nothing. Clicking the toolbar icon always acts on the layer that actually holds the video. Protected on-demand content, such as encrypted video on streaming services, is protected by the browser and cannot be taken over. A few pages fall back to a simpler display mode when they rebuild their layout.
 
 Privacy
 No personal data is collected, and nothing is sent to the developer. Your shortcut settings are stored in Chrome's synced extension storage, so they follow your Chrome account. The extension keeps no record of which sites you visit, and your playback rate never leaves the tab it belongs to — it is gone once you close the browser. It only looks for and controls video elements on the pages you visit.
@@ -405,10 +418,10 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 6.2.0 — 嵌入框里的视频也能接管了：跨域嵌入框同样能调速、能快进、能进网页全屏，
 而且那个全屏现在真的铺满整个页面。焦点在顶层而视频在嵌入框里时，扩展会告诉你
 视频在哪儿，不再让你白按一场键。空格不再抢「文章里嵌的小播放器」。
-首次引导现在真的会出现了 —— 此前它一次都没弹过，你从来没见过它说的那些快捷键。
+首次引导现在更可靠了，而且它教的是你当前真正绑定的那些键（此前固定教一个大写 F）。
 手机窄屏上，全屏的「退出」按钮不再被挤出屏幕（此前在 390px 宽的手机上根本点不到，
 你会被关在全屏里）；而且全屏里始终留着一枚退出按钮，不会跟着控制条一起消失。
-在有些站点上（那些给页面加了 transform 做加速的），网页全屏之前是一片黑 ——
+在有些站点上（那些给页面内容加了 transform 做加速的），网页全屏之前是一片黑 ——
 没有画面、没有控制条、连退出按钮都看不见；现在正常了。
 窄屏手机上，那枚常驻的退出按钮与控制条里的退出按钮也对齐了（此前是两个位置，
 你不知道该点哪个）。系统的「减少动效」现在同样管到「扩展已更新，请刷新本页」。
@@ -422,13 +435,13 @@ can be sped up, skipped, and taken to fullscreen, and that fullscreen really
 fills the whole page. When the focus is on the top page but the video is in an
 embed, the extension tells you where it is instead of letting you press keys at
 nothing. Space no longer hijacks a small player embedded in an article.
-The first-run guide now actually shows up — it used to never appear, so you
-have never seen the shortcuts it describes. On a narrow phone screen the
-fullscreen exit button is no longer pushed off the edge (at 390px wide you
+The first-run guide is more reliable now, and it now teaches the keys you
+actually have bound (it used to teach a capital "F"). On a narrow phone screen
+the fullscreen exit button is no longer pushed off the edge (at 390px wide you
 could not click it, which left you stuck in fullscreen), and there is now
 always an exit button in fullscreen instead of it vanishing with the bar.
-On some sites (those that add a CSS transform to the page for speed), page
-fullscreen used to be a black screen — no picture, no controls, not even an
+On some sites (those that add a CSS transform to the page content for speed),
+page fullscreen used to be a black screen — no picture, no controls, not even an
 exit button; it works now. On narrow phones the always-on exit button also
 lines up with the one in the control bar (they used to sit in two different
 places, so you never knew which one to click). Your system's "reduce motion"

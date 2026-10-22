@@ -312,4 +312,111 @@ describe('发布包承诺：商店文案与真实行为对得上', () => {
       'no third-party libraries',
     );
   });
+
+  it('要贴进商店的正文里没有 markdown 星号（CWS 会剥离 markdown）', () => {
+    // ⚠️ 这条守的是一个真实发生过的问题（2026-10-22 复核发现）：
+    // 详细描述里有三处 `**粗体**`，而 CWS **会剥离 markdown** ——
+    // 用户在商店页面上看到的是**字面的星号**。
+    //
+    // 为什么它值得一条守卫：这一栏是**手工粘贴**到 Dashboard 的，
+    // 没有 CI 参与。粘贴的那一刻没有任何东西会检查它，
+    // 而这一栏里的每一句都会被审核员当真的读。
+    //
+    // ⚠️ 判据只覆盖「要贴进去的那两段正文」
+    // （Detailed Description 与 Version History），
+    // 不覆盖本文件其余部分 —— 那里的 `**` 是给维护者看的标记，不会被贴出去。
+    const storeDoc = readFileSync(resolve(repoRoot, 'CHROMEWEBSTORE.md'), 'utf8');
+    const lines = storeDoc.split('\n');
+
+    // 详细描述正文：从「Video Speed Controller 把网页里的视频」起，
+    // 到「**Category** [REQUIRED]」之前 —— 那之后是别的元数据小节，
+    // 它们的 `**` 是给维护者看的标记，不会被贴进商店。
+    const descStart = lines.findIndex((line) =>
+      line.startsWith('Video Speed Controller 把网页里的视频'),
+    );
+    expect(descStart, '找不到详细描述正文的起点').toBeGreaterThan(-1);
+    const descEnd = lines.findIndex(
+      (line, index) => index > descStart && line.startsWith('**Category**'),
+    );
+    expect(descEnd, '找不到详细描述正文的终点（**Category** 那行不见了？）').toBeGreaterThan(descStart);
+    const description = lines.slice(descStart, descEnd);
+
+    // Version History 的两个代码块（中文段与英文段）。
+    const versionHistory = extractVersionHistoryBlocks(storeDoc);
+
+    const offenders: string[] = [];
+    description.forEach((line, index) => {
+      if (line.includes('**')) {
+        offenders.push(`详细描述 第 ${descStart + index + 1} 行: ${line.trim().slice(0, 60)}`);
+      }
+    });
+    versionHistory.forEach((block, index) => {
+      block.split('\n').forEach((line, lineIndex) => {
+        if (line.includes('**')) {
+          offenders.push(`Version History 第 ${index + 1} 段 第 ${lineIndex + 1} 行: ${line.trim().slice(0, 60)}`);
+        }
+      });
+    });
+
+    expect(
+      offenders,
+      `要贴进商店的正文里出现了 markdown 星号：\n${offenders.join('\n')}\n` +
+        'CWS 会剥离 markdown —— 用户会看到字面的星号。',
+    ).toEqual([]);
+  });
+
+  it('商店正文里没有绝对化表述（CWS 拒审清单上的词）', () => {
+    // 「any web video」这类说法在 CWS 的拒审清单上 ——
+    // 它会被读成「支持所有网站」，而扩展的实际能力是「控制你正在看的那个视频」。
+    //
+    // ⚠️ 6.0.8 的 manifest description 里就带着 `for any HTML5 video` ——
+    // 那句话**现在还在线上**。6.2.0 把它换成了本地化版本（不含 any），
+    // 所以这条守的是「别让它回来」。
+    const manifest = JSON.parse(
+      readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8'),
+    ) as { description?: string };
+
+    // manifest 的 description 是 `__MSG_xxx__` 时，实际文案在 _locales 里。
+    const description = manifest.description ?? '';
+    const localeMessage = description.startsWith('__MSG_')
+      ? readLocaleMessage(description)
+      : description;
+
+    expect(
+      /\bany\b/i.test(localeMessage),
+      `扩展的商店描述里出现了 "any"：${localeMessage}\n` +
+        'CWS 的拒审清单上绝对化表述（如 "any web video"）是一票否决项。',
+    ).toBe(false);
+  });
 });
+
+/**
+ * 取出 Version History 那一栏里「要贴进 Dashboard 的两段」。
+ *
+ * ⚠️ **只取前两个**代码块 —— 那一节后面还有别的 ``` 块
+ * （「提交前自检」之类的内部记录），那些**不该被贴出去**，
+ * 里面带 `**Published**`、`**复核发现那是假的**` 这类给维护者看的标记。
+ *
+ * 取「前两个」而不是「按位置猜」：文件里明写着
+ * 「贴进 Dashboard 用这一段」，紧接着就是中文块与英文块。
+ */
+const extractVersionHistoryBlocks = (doc: string): string[] => {
+  const section = doc.slice(doc.indexOf('## Version History'));
+  const blocks: string[] = [];
+  const pattern = /```\n([\s\S]*?)```/g;
+  let match = pattern.exec(section);
+  while (match && blocks.length < 2) {
+    blocks.push(match[1]);
+    match = pattern.exec(section);
+  }
+  return blocks;
+};
+
+/** 从 `_locales/<locale>/messages.json` 里取 `__MSG_key__` 对应的文案。 */
+const readLocaleMessage = (description: string): string => {
+  const key = description.slice('__MSG_'.length, -2);
+  const messages = JSON.parse(
+    readFileSync(resolve(repoRoot, '_locales', 'en', 'messages.json'), 'utf8'),
+  ) as Record<string, { message?: string }>;
+  return messages[key]?.message ?? description;
+};
