@@ -27,14 +27,35 @@ import { formatHostLoad, hostLoad, saturation } from './host-load.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 失败用例的最小记录（只留能定位的信息，堆栈已经在 Playwright 的输出里）。 */
-const describeFailure = (test, result) => ({
-  title: test.title,
-  file: test.location?.file,
-  line: test.location?.line,
-  status: result.status,
-  error: (result.error?.message ?? '').split('\n')[0]?.slice(0, 200),
-});
+/**
+ * 失败用例的最小记录（只留能定位的信息，堆栈已经在 Playwright 的输出里）。
+ *
+ * ⚠️ 只取**第一行**是不够的：Playwright 的断言错误第一行长这样 ——
+ *
+ *     Error: expect(received).toBe(expected) // Object.is equality
+ *
+ * 「期望什么、实际什么」全在**后面几行**。只留第一行等于告诉你
+ * 「有个断言挂了」，却没告诉你挂在哪 —— 而这正是失败报告唯一该回答的事。
+ * 所以留前几行（够看到 Expected / Received），并设一个总长上限。
+ */
+const describeFailure = (test, result) => {
+  const message = (result.error?.message ?? '')
+    .replace(/\u001b?\[\d+m/g, '') // 去掉 ANSI 颜色，免得日志里全是转义序列
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== '')
+    .slice(0, 4)
+    .join('\n      ')
+    .slice(0, 400);
+
+  return {
+    title: test.title,
+    file: test.location?.file,
+    line: test.location?.line,
+    status: result.status,
+    error: message,
+  };
+};
 
 export default class HostLoadReporter {
   constructor() {

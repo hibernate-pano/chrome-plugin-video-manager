@@ -238,12 +238,28 @@ test.describe('缩放过的 iframe：坐标换算', () => {
       // （内容脚本 → background → 各 frame 回答 → 回到 background → 回到内容脚本），
       // 机器一忙（多标签页同时加载）整条链路可以慢到几百毫秒。
       // 固定等待会把「慢」误判成「失败」。
+      //
+      // ⚠️ 而且轮询的必须是**断言本身**（`bottom` 已经是 auto），
+      // 不能只轮询「元素出现了没」再同步读一个属性。
+      //
+      // 「元素出现」与「坐标算完」在实现里是同一个同步任务
+      // （`pill.show()` 之后紧跟着 `positionAtViewportCorner()`），
+      // 所以按构造不该有中间态 —— 但**用例不该把实现的原子性当成契约**。
+      // 哪天实现拆成两个 tick，这条就会变成一条**随机红**，
+      // 而报出来的是「提示贴错位置」——一个**不存在**的产品缺陷。
+      //
+      // 轮询断言本身：成功条件与实现的原子性无关；真不对的话 10 秒后照样红。
       await expect
         .poll(
-          () => page.evaluate(() => Boolean(document.getElementById('vsc-takeover-notice'))),
-          { timeout: 10_000 },
+          () => page.evaluate(
+            () => document.getElementById('vsc-takeover-notice')?.style.bottom ?? null,
+          ),
+          {
+            timeout: 10_000,
+            message: '「视频在嵌入框里」贴着视口上边（bottom 必须是 auto）',
+          },
         )
-        .toBe(true);
+        .toBe('auto');
 
       const notice = await page.evaluate(() => {
         const element = document.getElementById('vsc-takeover-notice');
@@ -272,9 +288,12 @@ test.describe('缩放过的 iframe：坐标换算', () => {
       //
       // 贴左上角还有一个好处：它**不会**被 iframe 里的内容盖住 ——
       // 那是用户在顶层这一层唯一能看见的位置。
+      //
+      // `bottom === 'auto'` 这条已经由上面那次轮询断言过了（轮询的就是它）；
+      // 这里只把读到的值带进失败信息里，方便下一次分诊。
       expect(
         notice.bottom,
-        '「视频在嵌入框里」贴着视口上边（bottom 必须是 auto）',
+        `「视频在嵌入框里」的 bottom 必须还是 auto（读到 ${JSON.stringify(notice.bottom)}）`,
       ).toBe('auto');
 
       expect(errors).toEqual([]);

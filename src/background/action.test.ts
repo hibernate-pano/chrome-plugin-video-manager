@@ -58,6 +58,15 @@ interface OwnerAnswer {
   explicit: boolean;
   watched: boolean;
   playing: boolean;
+  /**
+   * 这个 frame 从**第一次被问**算起，过多久才答得上来（毫秒，默认 0）。
+   *
+   * ⚠️ 必须是「从第一次被问到能回答」的**绝对**时刻，不能写成
+   * 「每次问都延迟 delayMs」。真实世界里主线程被占住时，**所有**排队的
+   * 消息会在它空出来的那一刻一起被处理 —— 不是每条消息各自再等一遍。
+   * 写成 per-ask 延迟会模拟出一个「越问越晚」的世界，retry 永远不会赢。
+   */
+  delayMs?: number;
 }
 
 /**
@@ -79,37 +88,50 @@ const createSendMessageStub = (
   messageListeners: MessageListener[],
   owners: OwnerAnswers = {},
   onMissingFrame?: (frameId: number) => void,
-): Mock<any[]> => vi.fn((tabId: number, message: unknown, options?: unknown, callback?: unknown) => {
-  const frameOptions = (typeof options === 'object' && options !== null)
-    ? options as { frameId: number }
-    : undefined;
-  const done = (typeof options === 'function' ? options : callback) as (() => void) | undefined;
+): Mock<any[]> => {
+  /** 第一次广播的时刻 —— 各 frame 的「能回答的时刻」以它为原点。 */
+  let firstAskAt = 0;
 
-  const type = (typeof message === 'object' && message !== null)
-    ? (message as { type?: unknown }).type
-    : undefined;
+  return vi.fn((tabId: number, message: unknown, options?: unknown, callback?: unknown) => {
+    const frameOptions = (typeof options === 'object' && options !== null)
+      ? options as { frameId: number }
+      : undefined;
+    const done = (typeof options === 'function' ? options : callback) as (() => void) | undefined;
 
-  if (type === VIDEO_OWNER_ASK_MESSAGE) {
-    // 各 frame 异步回答（真实的跨进程往返不是同步的）。
-    setTimeout(() => {
-      for (const [frameId, answer] of Object.entries(owners)) {
-        for (const listener of messageListeners) {
-          listener(
-            { type: VIDEO_OWNER_REPORT_MESSAGE, ...answer },
-            { tab: { id: tabId }, frameId: Number(frameId) },
-          );
-        }
+    const type = (typeof message === 'object' && message !== null)
+      ? (message as { type?: unknown }).type
+      : undefined;
+
+    if (type === VIDEO_OWNER_ASK_MESSAGE) {
+      if (firstAskAt === 0) {
+        firstAskAt = Date.now();
       }
-    }, 0);
-    done?.();
-    return;
-  }
 
-  if (frameOptions && onMissingFrame) {
-    onMissingFrame(frameOptions.frameId);
-  }
-  done?.();
-}) as unknown as Mock<any[]>;
+      // 各 frame 异步回答（真实的跨进程往返不是同步的）。
+      //
+      // 每个 frame 的「能回答的时刻」是**绝对**的（第一次广播 + delayMs）：
+      // 主线程被占住的 frame 只会晚答，不会因为被多问几次就更晚。
+      for (const [frameId, answer] of Object.entries(owners)) {
+        const { delayMs = 0, ...report } = answer;
+        setTimeout(() => {
+          for (const listener of messageListeners) {
+            listener(
+              { type: VIDEO_OWNER_REPORT_MESSAGE, ...report },
+              { tab: { id: tabId }, frameId: Number(frameId) },
+            );
+          }
+        }, Math.max(0, firstAskAt + delayMs - Date.now()));
+      }
+      done?.();
+      return;
+    }
+
+    if (frameOptions && onMissingFrame) {
+      onMissingFrame(frameOptions.frameId);
+    }
+    done?.();
+  }) as unknown as Mock<any[]>;
+};
 
 /**
  * 把微任务队列排空。
@@ -459,9 +481,12 @@ describe('background 回答「别的 frame 有没有视频」', () => {
       (response: unknown) => responses.push(response),
     );
 
+    // ⚠️ 这个答案要等到**总预算用完**才给得出来（1.8 秒）：零份可用回答
+    // 也可能只是「真正有视频的那个 frame 还没答」。用户这一侧看不到区别
+    // ——两种结论都是「不弹提示」——所以宁可晚一秒下结论。
     await vi.waitFor(() => {
       expect(responses).toEqual([{ frameId: null, playing: false }]);
-    });
+    }, { timeout: 3_000 });
   });
 
   it('问的人自己不参与回答', async () => {
@@ -486,6 +511,89 @@ describe('background 回答「别的 frame 有没有视频」', () => {
     await vi.waitFor(() => {
       expect(responses).toEqual([{ frameId: 3, playing: false }]);
     });
+  });
+
+  /**
+   * 慢 frame 不是边角情况，是**常态**：嵌入框里在解码视频、跑广告脚本时，
+   * 它的主线程会被占住几百毫秒。而回答只能由那个主线程发出来。
+   *
+   * 实测（真实 Chromium，宿主负载 65/12 核）：同一个 frame 的回答延迟在
+   * **2ms ~ 870ms** 之间跳。旧实现的总预算 320ms 之外的回答会被直接丢掉，
+   * 于是用户按下 `f` 之后什么都没有 —— 而「按键不能毫无反应」正是这条
+   * 提示存在的理由。
+   */
+  it('回答慢到超过一次广播的预算 → 仍然等到它，不能静默', async () => {
+    const messageListeners: MessageListener[] = [];
+    const sendMessage = createSendMessageStub(messageListeners, {
+      3: { explicit: true, watched: true, playing: true, delayMs: 500 },
+    });
+    stubChrome(messageListeners, sendMessage);
+
+    await import('./index');
+
+    const responses: unknown[] = [];
+    messageListeners[0]?.(
+      { type: VIDEO_OWNER_QUERY_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+      (response: unknown) => responses.push(response),
+    );
+
+    await vi.waitFor(() => {
+      expect(responses).toEqual([{ frameId: 3, playing: true }]);
+    }, { timeout: 3_000 });
+  });
+
+  it('有人回「我没视频」不算答完 —— 真正有视频的 frame 慢一点也要等', async () => {
+    // ⚠️ 旧实现用 `reports.length > 0` 当「有人答了」，于是
+    // 「旁观 frame 秒回、真正有视频的 frame 慢」时，第二个 frame 的回答
+    // 还没到就已经收工了 —— 结果和「全都没有视频」一模一样。
+    const messageListeners: MessageListener[] = [];
+    const sendMessage = createSendMessageStub(messageListeners, {
+      2: { explicit: false, watched: false, playing: false },
+      3: { explicit: true, watched: true, playing: true, delayMs: 400 },
+    });
+    stubChrome(messageListeners, sendMessage);
+
+    await import('./index');
+
+    const responses: unknown[] = [];
+    messageListeners[0]?.(
+      { type: VIDEO_OWNER_QUERY_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+      (response: unknown) => responses.push(response),
+    );
+
+    await vi.waitFor(() => {
+      expect(responses).toEqual([{ frameId: 3, playing: true }]);
+    }, { timeout: 3_000 });
+  });
+
+  it('有 frame 说「我有视频」→ 立刻收工，不等满单次预算', async () => {
+    // 单次预算给到了 250ms。若仍要等满预算，那么**每一次成功**的问询
+    // 都会白白慢 250ms（提示本来就只要一声「视频在别处」）。
+    const messageListeners: MessageListener[] = [];
+    const sendMessage = createSendMessageStub(messageListeners, {
+      3: { explicit: true, watched: true, playing: true, delayMs: 10 },
+    });
+    stubChrome(messageListeners, sendMessage);
+
+    await import('./index');
+    vi.useFakeTimers();
+
+    try {
+      const responses: unknown[] = [];
+      messageListeners[0]?.(
+        { type: VIDEO_OWNER_QUERY_MESSAGE },
+        { tab: { id: 7 }, frameId: 0 },
+        (response: unknown) => responses.push(response),
+      );
+
+      // 50ms 远小于单次预算（250ms）：答案已经到了就必须已经回答。
+      await vi.advanceTimersByTimeAsync(50);
+      expect(responses).toEqual([{ frameId: 3, playing: true }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

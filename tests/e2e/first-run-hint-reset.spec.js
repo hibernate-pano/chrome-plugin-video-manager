@@ -158,11 +158,30 @@ test.describe('首次引导：「重新显示使用引导」必须兑现', () =>
       // 认领那次跨进程往返稍慢就滑出去，用例红，而**产品是对的**。
       // 那属于「机器忙」不是「产品坏」，但这两种在症状上一样（见判据 13）。
       //
-      // 现在给 4 倍余量：产品真坏了（永远不回来）仍然会红，
-      // 而机器慢一点不再误报。
+      // ⚠️ **别再用固定窗口**（2026-10-22 第二轮改）。
+      //
+      // 固定窗口的毛病：它把「机器快慢」与「产品对不对」绑在了一起。
+      // 产品自己的 `WATCH_DELAY` 是 2.5 秒，但机器被压垮时 `setTimeout`
+      // 会晚很多（实测：宿主负载 56 / 12 核时，全量跑里这条红过；
+      // 单跑 6/6 全绿）。于是窗口给到 8 秒也仍然是在**赌**，
+      // 赌输了报出来的却是「产品没把引导还回来」—— 一条**假**结论。
+      //
+      // 改成**条件驱动**：采样器每 50ms 记一次，这里只要它记到
+      // `sawVisible` 就立刻通过；只有到截止时间还没记到才判失败。
+      // 于是 ——
+      // - 机器快：2.2 秒就绿（不再白等 8 秒）；
+      // - 机器慢：等到截止时间，而不是等一个拍脑袋的数字；
+      // - 产品真坏了：**照样红**，而且报的还是那句「引导没回来」。
+      //
+      // 判据：**成功条件与时间无关，失败条件才受时间限制。**
       await startSampler(page);
-      await page.waitForTimeout(8000);
-      const probe = await stopSampler(page);
+      const deadline = Date.now() + 20_000;
+      let probe = await page.evaluate(() => window.__vscProbe);
+      while (!probe?.sawVisible && Date.now() < deadline) {
+        await page.waitForTimeout(100);
+        probe = await page.evaluate(() => window.__vscProbe);
+      }
+      probe = await stopSampler(page);
 
       // ⚠️ 先证明采样真的跑过。
       expect(probe.samples, '采样器必须真的采到过').toBeGreaterThan(0);

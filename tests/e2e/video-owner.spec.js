@@ -115,7 +115,12 @@ test.describe('视频在别处时不能静默', () => {
 
       await page.keyboard.press('=');
       // 反向断言只能等够久：等得不够就会「还没弹出来」被误判成「没弹」。
-      await page.waitForTimeout(1200);
+      //
+      // ⚠️ 这个「够久」由**产品自己的预算**决定，不是拍脑袋：background 问一圈
+      // 会在 **1.8 秒**（VIDEO_OWNER_QUERY_BUDGET_MS）之内持续重问，
+      // 只有到那时才会给出「真的没有视频」的结论。等 1.2 秒就断言，
+      // 测到的只是「1.2 秒时还没弹」—— 恒真的守卫。
+      await page.waitForTimeout(2_600);
 
       const notice = await readTopNotice(page);
       expect(notice, '没有视频的页面上不该说「视频在嵌入框里」').toBeNull();

@@ -552,8 +552,114 @@ const captureTopLevelNotices = async (page, tokens) => {
   return { hint, pill, state, badge };
 };
 
+/**
+ * 按一个键，直到某个条件成立（或超过截止时间）。
+ *
+ * ⚠️ 为什么允许重按：`#vsc-runtime-styles` **不是**「可以按键了」的信号。
+ *
+ * 它在 `ContentRuntime.start()` 的**第一行**注入，而键盘监听器要等
+ * `await loadSettings()` **之后**才挂上。于是「等到样式节点 → 按键」
+ * 中间有一段**用例看不见的空档**；机器一忙（实测：宿主负载 70 / 12 核）
+ * 第一次按键就落进去，被放行给页面，然后用例只会等到「什么都没发生」。
+ *
+ * ⚠️ 这**不是**产品缺陷：内容脚本在 `document_start` 就跑了，
+ * 等用户看得见页面、能伸手按键时，设置早就读完了 ——
+ * 这段空档只对「拿到页面句柄就立刻按键」的用例可见。
+ *
+ * 判据见 `docs/ARCHITECTURE.md` 判据 16。
+ *
+ * @param page Playwright 页面
+ * @param key 要按的键
+ * @param predicate 每次按完轮询的条件
+ * @param options `attempts` 最多按几次；`settleMs` 每次按完最多等多久
+ */
+const pressUntil = async (page, key, predicate, { attempts = 4, settleMs = 3_000 } = {}) => {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await page.keyboard.press(key);
+    const deadline = Date.now() + settleMs;
+    while (Date.now() < deadline) {
+      if (await predicate()) {
+        return true;
+      }
+      await page.waitForTimeout(100);
+    }
+  }
+  return false;
+};
+
+/**
+ * 在 background 里挂一个只读观察者：把「谁有视频」这条协议上的消息全部记下来。
+ *
+ * ⚠️ 这不是调试残留，是**可诊断性**：这条链路有四段（按键 → 内容脚本 →
+ * background → 各 frame 回答 → 回到内容脚本 → 改 DOM），失败时只报
+ * 「提示没出现」的话，四种完全不同的故障会长得一模一样：
+ * - 按键没进内容脚本 → **一条查询都没有**；
+ * - 回答了「我没有视频」 → 有 query、有 report，但 explicit/watched 都是 false；
+ * - 回答了「有视频」但提示没出来 → 有可用 report，却没有 DOM；
+ * - 机器太慢 → 消息都有，只是晚。
+ *
+ * 失败信息里带上这段日志，下一次就不用再猜。
+ *
+ * ⚠️ 观察者装不上（service worker 恰好被回收）不许让用例红 —— 它只是诊断。
+ */
+const startOwnerProbe = (ext) => ext.serviceWorker.evaluate(() => {
+  globalThis.__vscOwnerProbe = { startedAt: Date.now(), msgs: [] };
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    const type = message?.type;
+    if (typeof type !== 'string' || !type.startsWith('vsc-video-owner')) {
+      return;
+    }
+    globalThis.__vscOwnerProbe.msgs.push({
+      type,
+      frameId: sender?.frameId,
+      explicit: message?.explicit,
+      watched: message?.watched,
+      at: Date.now() - globalThis.__vscOwnerProbe.startedAt,
+    });
+  });
+});
+
+const readOwnerProbe = (ext) => ext.serviceWorker
+  .evaluate(() => globalThis.__vscOwnerProbe)
+  .catch((error) => ({ error: String(error) }));
+
 /** 接管提示：iframe 里的视频按 f → 提示出现在顶层文档。 */
-const captureTakeoverNotice = async (page) => {
+const captureTakeoverNotice = async (page, ext) => {
+  // ⚠️ 前置条件：嵌入框里的那个视频**必须真的在播**。
+  //
+  // 这条链路的最后一跳是 background 的 `pickVideoOwner`：它先挑
+  // 「焦点所在的 frame」，再挑「正在播的那个」，最后才退到「随便一个有视频的」。
+  // 视频没播起来（`readyState: 0` / 一直 paused）时，这一段在**不同负载下**
+  // 会走到不同的分支 —— 实测（真实 Chromium，同一份页面）：
+  //   · 视频在播 → 提示出现；
+  //   · 视频没播起来 → **顶层完全沉默**。
+  // 而用例看到的只有「提示没出现」，与「产品坏了」一模一样。
+  //
+  // 页面里的 `play()` 是在 300ms 后调的，而这条用例在 `waitForSelector`
+  // 之后就按键 —— 机器一忙，这个先后顺序就不成立了。
+  // 所以先把前提**量出来**：不是猜「应该播了」，而是等到它真的播了。
+  // 夹具坏了的话，失败信息会说「嵌入框里的视频没播起来」——
+  // 与「产品没给提示」是两件事。
+  //
+  // ⚠️ 判据不能只是 `!paused`（2026-10-22 第二轮改）。
+  // `play()` 被调用之后 `paused` 立刻变成 false，**而此时可能一帧都还没解码**
+  // （`readyState: 0`、`videoWidth: 0`）—— 机器被压垮时这段空档能持续好几秒。
+  // 在这段空档里，产品是对的（这一层没有「可接管的视频」可言），
+  // 但用例看到的是「按 f 没反应」——又是一条**假**的产品结论。
+  // 所以要求三件事同时成立：在播、有当前帧、视频尺寸真的量出来了。
+  await expect
+    .poll(
+      () => page.frameLocator('#f1').locator('#inner').evaluate(
+        (video) => !video.paused && video.readyState >= 2 && video.videoWidth > 0,
+      ),
+      {
+        timeout: 30_000,
+        message: '前置条件：嵌入框里的视频应该真的在播'
+          + '（paused=false、readyState≥2、videoWidth>0 三者同时成立）',
+      },
+    )
+    .toBe(true);
+
   // ⚠️ 焦点必须**确实**留在顶层文档，否则这个键进不了顶层的内容脚本 ——
   // 而「点一下 (200,100) 焦点就在顶层」是**假定**，不是事实（实测踩过）：
   // 那一下的落点旁边就是嵌入框，浏览器有时会把焦点送进框里。
@@ -570,13 +676,62 @@ const captureTakeoverNotice = async (page) => {
     )
     .not.toBe('IFRAME');
 
-  await page.keyboard.press('f');
-  await expect
-    .poll(
-      () => page.evaluate(() => Boolean(document.getElementById('vsc-takeover-notice'))),
-      { timeout: 10_000 },
-    )
-    .toBe(true);
+  // ⚠️ 允许**重按**，而不是「按一次、等 10 秒」。
+  //
+  // 代码事实：内容脚本的键盘监听器挂在 `await loadSettings()` **之后**，
+  // 而 `#vsc-runtime-styles` 在 `start()` 的**第一行**就注入了 ——
+  // 所以「等到样式节点 → 现在可以按键」并不严格成立，
+  // 第一次按键**可能**落在监听器还没挂上的那段空档里。
+  // （这段空档对**用户**不可见：内容脚本在 `document_start` 就跑，
+  // 等用户看得见页面时设置早读完了。它只对「拿到页面句柄就按键」的用例可见。）
+  //
+  // ⚠️ 但**别把重按当成万能药**：这条用例真正翻车的原因是上面那条
+  // 前置条件（嵌入框里的视频没播起来），不是丢按键 ——
+  // 重按只是顺带把另一条可能的假红也堵上。重按在这里幂等：
+  // 顶层这一层没有视频 → 每次都是同一条放行路径。
+  await startOwnerProbe(ext).catch(() => undefined);
+
+  // 主世界里的按键计数器：区分「键没送到页面」与「送到了但内容脚本没理会」。
+  // 这两件事的产品含义完全不同（前者是测试环境，后者是产品缺陷），
+  // 而失败时它们都表现为「提示没出现」。
+  await page.evaluate(() => {
+    window.__vscKeydowns = 0;
+    window.addEventListener('keydown', () => {
+      window.__vscKeydowns += 1;
+    }, true);
+  });
+
+  const shown = await pressUntil(
+    page,
+    'f',
+    () => page.evaluate(() => Boolean(document.getElementById('vsc-takeover-notice'))),
+  );
+
+  if (!shown) {
+    // ⚠️ 失败信息必须能分诊（见 startOwnerProbe 的说明）。
+    const probe = await readOwnerProbe(ext);
+    const view = await page.evaluate(() => ({
+      activeElement: document.activeElement?.tagName ?? null,
+      notice: Boolean(document.getElementById('vsc-takeover-notice')),
+      keydowns: window.__vscKeydowns ?? null,
+    }));
+    const inner = await page.frameLocator('#f1').locator('#inner')
+      .evaluate((video) => ({
+        paused: video.paused,
+        readyState: video.readyState,
+        videoWidth: video.videoWidth,
+        currentTime: video.currentTime,
+      }))
+      .catch((error) => ({ error: String(error) }));
+
+    expect(
+      shown,
+      '按 f 之后顶层必须出现「视频在嵌入框里」的提示'
+      + `\n诊断：顶层 ${JSON.stringify(view)}`
+      + `\n诊断：嵌入框里的视频 ${JSON.stringify(inner)}`
+      + `\n诊断：background 收到的协议消息 ${JSON.stringify(probe)}`,
+    ).toBe(true);
+  }
   await page.waitForTimeout(400);
   return noticeSnapshot(page, 'vsc-takeover-notice');
 };
@@ -611,7 +766,7 @@ const measureFlavor = async (hostile, tokens) => {
     await servePages(takeoverPage, takeoverOuterPage(hostile), takeoverInnerPage);
     await takeoverPage.goto('https://vsc-takeover.example/');
     await takeoverPage.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
-    const takeover = await captureTakeoverNotice(takeoverPage);
+    const takeover = await captureTakeoverNotice(takeoverPage, ext);
     priorities.takeover = await noticeInlinePriorities(takeoverPage, 'vsc-takeover-notice');
     await takeoverPage.close();
 

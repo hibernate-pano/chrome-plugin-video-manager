@@ -708,6 +708,46 @@ interface VideoOwnerReport {
 const VIDEO_OWNER_TIMEOUT_MS = 120;
 
 /**
+ * 「快捷键问一圈（你这个提示层里没有视频，别的 frame 有吗）」的**单次**预算。
+ *
+ * ⚠️ 比点图标那条路径宽（250ms vs 120ms），因为它的代价结构完全不同：
+ * - 点图标：用户正等着画面全屏，多等 200ms 是**能感觉到**的；
+ * - 问一圈：等的是一句提示，而且**只有这一层确实没有视频**时才会问。
+ *
+ * 单次预算放宽不等于「每次都要等满」：只要有 frame 回答「我有视频」，
+ * `finish` 立刻结束（见 VIDEO_OWNER_REPORT_MESSAGE 的处理）。
+ */
+const VIDEO_OWNER_QUERY_TIMEOUT_MS = 250;
+
+/**
+ * 「问一圈」从开口到放弃的**总**预算（毫秒）。
+ *
+ * ⚠️ 这不是「多等一会儿比较稳」，而是**修一个会静默的缺陷**（2026-10-22）：
+ * 回答的延迟不归我们控制 —— 它取决于那个 frame 的主线程忙不忙。
+ * 实测（真实 Chromium，宿主负载 65/12 核，嵌入框里在解码 10 秒 WebM）：
+ * 同一个 frame 的回答延迟在 **2ms ~ 870ms** 之间跳，而旧实现的总预算只有
+ * 120 + 80 + 120 = **320ms** —— 落在 320ms 之外的回答会被**直接丢掉**，
+ * 于是用户按下 `f` 之后**什么都没有**，而那正是这条提示存在的理由
+ * （「按键不能毫无反应」）。
+ *
+ * 所以：放弃的条件不是「等够了多少个 120ms」，而是「**真的没人有视频**」
+ * 或「等到总预算用完」。
+ *
+ * 总预算取 1.8 秒，理由有两条：
+ * 1. **它要覆盖的不止主线程被占住的时间，还包括两次跨进程往返**。
+ *    实测（同一台机器、同一时刻）：嵌入框主线程只占住 600ms，而从
+ *    「广播发出」到「回答回到 background」用了 **830ms ~ 1450ms** ——
+ *    多出来的全是消息路由在排队。按 600ms 去配预算，等于假设路由不花钱。
+ * 2. **它必须小于内容脚本那侧的查询节流（2 秒）**：否则连按两下就会
+ *    叠出两轮长等待，而节流本来就是用来防止这件事的。
+ *
+ * ⚠️ 这不是「调大超时把红测变绿」。用户这一侧看到的差别只有一种：
+ * 有视频在别处时**说不说那句话**。预算不够 = 不说 = 用户以为扩展坏了。
+ * 多等一秒多的代价，是 background 多发几次广播（每条 ≤ 1 次往返）。
+ */
+const VIDEO_OWNER_QUERY_BUDGET_MS = 1_800;
+
+/**
  * 一次正在等待回答的广播。
  */
 interface PendingAsk {
@@ -736,6 +776,7 @@ const pendingAsks = new Map<number, Set<PendingAsk>>();
 const askFramesOnce = (
   tabId: number,
   options: { preferredFrameId?: number; excludeFrameId?: number },
+  timeoutMs = VIDEO_OWNER_TIMEOUT_MS,
 ): Promise<VideoOwnerReport[]> =>
   new Promise((resolve) => {
     const reports = new Map<number, VideoOwnerReport>();
@@ -772,20 +813,13 @@ const askFramesOnce = (
     waiting.add(pending);
     pendingAsks.set(tabId, waiting);
 
-    timer = setTimeout(() => pending.finish(), VIDEO_OWNER_TIMEOUT_MS);
+    timer = setTimeout(() => pending.finish(), timeoutMs);
 
     chrome.tabs.sendMessage(tabId, { type: VIDEO_OWNER_ASK_MESSAGE }, () => {
       // 页面没有内容脚本（chrome://、扩展页等）时连接会失败，静默忽略即可。
       void chrome.runtime.lastError;
     });
   });
-
-/**
- * 没人回答时重试一遍的等待（毫秒）。
- *
- * 多等这一会儿的理由见 askFramesForVideo。
- */
-const VIDEO_OWNER_RETRY_DELAY_MS = 80;
 
 /**
  * 问一圈「这个标签页的视频在哪儿」。
@@ -801,8 +835,18 @@ const VIDEO_OWNER_RETRY_DELAY_MS = 80;
  * 两者从外面看**一模一样**（零份回答），但对用户是天壤之别：
  * 前者该沉默，后者该说「视频在嵌入框里」。
  *
- * 所以：**没人回答就再问一次**。多一次广播的代价只是一次跨进程往返，
+ * 所以：**没收到可用回答就再问**。多一次广播的代价只是一次跨进程往返，
  * 换来的是「页面刚打开时按快捷键也有反馈」。
+ *
+ * ⚠️ 重试的终止条件有两个，缺一不可（见 VIDEO_OWNER_QUERY_BUDGET_MS）：
+ * - **有可用回答** —— 问题已经答了，不用再问；
+ * - **总预算用完** —— 兜底，避免一个永远答不上来的 frame 把请求吊死。
+ *
+ * ⚠️ 判据是「有没有**能接管**的回答」，不是「有没有人回话」：
+ * 一个 frame 回答「我没有视频」（explicit/watched 都是 false）只证明它活着，
+ * 不证明别处的视频不存在。旧实现用 `reports.length > 0` 当作「有人答了」，
+ * 于是「旁观 frame 秒回、真正有视频的 frame 慢」时，第二个 frame 的回答
+ * 还没到就已经收工了。
  *
  * ⚠️ 只有「快捷键问一圈」那条路径才重试：点工具栏图标时用户正等着
  * 画面全屏，多等 200ms 是能被感觉到的；而快捷键那侧等的是一句提示，
@@ -813,13 +857,40 @@ const askFramesForVideo = async (
   options: { preferredFrameId?: number; excludeFrameId?: number } = {},
   retryWhenSilent = false,
 ): Promise<VideoOwnerReport[]> => {
-  const reports = await askFramesOnce(tabId, options);
-  if (reports.length > 0 || !retryWhenSilent) {
-    return reports;
+  if (!retryWhenSilent) {
+    return askFramesOnce(tabId, options);
   }
 
-  await new Promise((resolve) => setTimeout(resolve, VIDEO_OWNER_RETRY_DELAY_MS));
-  return askFramesOnce(tabId, options);
+  // ⚠️ 几轮问询必须**首尾相接**，中间不能留空档（实测踩过）。
+  //
+  // 第一版写成「一轮 250ms + 休息 80ms 再问下一轮」，于是每轮之间有一条
+  // 80ms 的**死区**：正好落在死区里到达的回答没有任何一轮在听，会被丢掉。
+  // 实测（真实 Chromium，嵌入框主线程占住 600ms，3 轮）：
+  // 提示只出现了 **1/3** —— 另外两轮的回答就落在死区里。
+  //
+  // 现在：上一轮一结束就立刻广播下一轮，覆盖区间是连续的
+  // [0,250) [250,500) [500,750) … 直到总预算用完。
+  const deadline = Date.now() + VIDEO_OWNER_QUERY_BUDGET_MS;
+  let reports: VideoOwnerReport[] = [];
+
+  for (;;) {
+    const left = deadline - Date.now();
+    if (left <= 0) {
+      break;
+    }
+
+    reports = await askFramesOnce(
+      tabId,
+      options,
+      Math.min(VIDEO_OWNER_QUERY_TIMEOUT_MS, left),
+    );
+
+    if (pickVideoOwner(reports, null) !== null) {
+      break;
+    }
+  }
+
+  return reports;
 };
 
 /**
@@ -930,11 +1001,20 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
 
       pending.reports.set(frameId, report);
 
-      // 首选 frame 自己回答「我有视频」→ 立刻收工，不等预算耗完。
-      if (
-        pending.options.preferredFrameId === frameId
-        && (report.explicit || report.watched)
-      ) {
+      // 已有一个**能接管**的回答 → 立刻收工，不等预算耗完。
+      //
+      // 分两种问法（见 askFramesForVideo 的 options）：
+      // - 有首选 frame（点图标）：必须等到首选 frame 自己回答，
+      //   否则「焦点在哪儿就动哪儿的视频」这条规则会被一个先答的旁观 frame 抢掉；
+      // - 没有首选 frame（快捷键问一圈）：**谁先答都算数** —— 问的就是
+      //   「别的 frame 有没有视频」，第一个说有的人就是答案。
+      //
+      // ⚠️ 这条不是优化，是**让放宽单次预算不变成延迟**：
+      // 单次预算给到了 250ms，若仍要等满预算，那么每次成功的问询
+      // 都会白白慢 250ms（提示本来就只要一声「视频在别处」）。
+      const usable = report.explicit || report.watched;
+      const isPreferred = pending.options.preferredFrameId === frameId;
+      if (usable && (isPreferred || pending.options.preferredFrameId === undefined)) {
         pending.finish();
       }
     }
