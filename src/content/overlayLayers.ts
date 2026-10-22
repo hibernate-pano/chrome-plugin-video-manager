@@ -383,31 +383,38 @@ const isOverlayCandidate = (
 };
 
 /**
- * 找出覆盖在 `video` 之上的浮层。
+ * 在 `container` 里找出覆盖在 `referenceRect` 之上的浮层。
  *
- * 只看视频的**直接兄弟节点**与同父容器下的元素：字幕与弹幕几乎总是播放器
- * 容器的直接子元素。递归整棵子树会在大页面上付出 O(N) 代价（videoRegistry
- * 已经为选视频付过一次），而收益为零——没有任何字幕插件会把字幕挂在
- * `<html>` 或 `<body>` 下的深层位置来相对视频定位。
+ * ⚠️ 为什么要有这个「指定容器 + 指定参照框」的版本：
+ *
+ * 进全屏之后视频已经被搬进我们自己的 stage，而站点的字幕仍然留在它原来的
+ * 播放器容器里。要把**后来才出现**的字幕搬进 stage，就得对着「进全屏前
+ * 那个视频框」去判 —— 字幕是相对播放器容器定位的，拿满屏的视频框当参照，
+ * 覆盖率（≥ 视频面积的 2%）与重心（落在下半部）那几条判据全都不成立，
+ * 晚到的字幕于是永远搬不进来。
+ *
+ * 判据本身只有这一份（isOverlayCandidate）：两套判据迟早会漂移，
+ * 而漂移过的判据已经出过事故（见本文件开头）。
  */
-export const findOverlayLayers = (video: HTMLVideoElement): OverlayLayer[] => {
-  const videoRect = video.getBoundingClientRect();
-  if (!isVisibleBox(videoRect)) {
+export const findOverlayLayersIn = (
+  container: ParentNode | null,
+  video: HTMLVideoElement,
+  referenceRect: DOMRect,
+): OverlayLayer[] => {
+  if (!container) {
     return [];
   }
-
-  const parent = video.parentElement;
-  if (!parent) {
+  if (!isVisibleBox(referenceRect)) {
     return [];
   }
 
   const layers: OverlayLayer[] = [];
-  for (const child of parent.children) {
+  for (const child of container.children) {
     if (child === video) {
       continue;
     }
 
-    const layer = isOverlayCandidate(child, video, videoRect);
+    const layer = isOverlayCandidate(child, video, referenceRect);
     if (layer) {
       layers.push(layer);
     }
@@ -415,3 +422,14 @@ export const findOverlayLayers = (video: HTMLVideoElement): OverlayLayer[] => {
 
   return layers;
 };
+
+/**
+ * 找出覆盖在 `video` 之上的浮层。
+ *
+ * 只看视频的**直接兄弟节点**与同父容器下的元素：字幕与弹幕几乎总是播放器
+ * 容器的直接子元素。递归整棵子树会在大页面上付出 O(N) 代价（videoRegistry
+ * 已经为选视频付过一次），而收益为零——没有任何字幕插件会把字幕挂在
+ * `<html>` 或 `<body>` 下的深层位置来相对视频定位。
+ */
+export const findOverlayLayers = (video: HTMLVideoElement): OverlayLayer[] =>
+  findOverlayLayersIn(video.parentElement, video, video.getBoundingClientRect());

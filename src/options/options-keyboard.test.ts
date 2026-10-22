@@ -54,9 +54,10 @@ describe('快捷键输入框的键盘行为', () => {
     const input = inputOf(root, 'fullscreen');
     const original = input.dataset.shortcut;
 
-    // 聚焦时输入框会被清空、显示「按下按键」占位符。
+    // ⚠️ 聚焦时**不再**清空框里的字：清空之后读屏用户聚焦过去时
+    // 那个 textbox 的 AX value 直接没了 —— 他完全不知道现在绑的是哪个键。
     input.focus();
-    expect(input.value).toBe('');
+    expect(input.value, '聚焦时框里必须还看得到当前绑定的键').toBe('f');
 
     const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     input.dispatchEvent(event);

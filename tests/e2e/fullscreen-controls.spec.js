@@ -917,6 +917,118 @@ test.describe('全屏控制条', () => {
       await ext.close();
     }
   });
+
+  /**
+   * 键盘进全屏之后，**控制条必须自己收得起来**，而且键盘用户必须能走到退出入口。
+   *
+   * ⚠️ 为什么这两件事要绑在一条用例里：它们是**同一个缺陷的两层**。
+   *
+   * 旧实现：键盘进全屏时焦点被送进**控制条**（播放键）。
+   * 于是「焦点在控制条里就别藏」那条守卫**恒真** → 控制条**永远**霸占屏幕
+   * （挡住画面与字幕）→ 收起态那枚「永远在的退出入口」**从不出现** →
+   * 键盘用户既出不来、也看不见画面。
+   *
+   * 现在：焦点落在**播放器表面**（`#vsc-page-fullscreen-stage`），
+   * 控制条照常按承诺自动隐藏；闲置到期时先把焦点交出去再藏。
+   *
+   * ⚠️ 这里**不能**手动 `blurControlBar()` —— 那会把缺陷盖住：
+   * 手动 blur 之后「焦点在控制条里就别藏」那条守卫不再恒真，
+   * 控制条就收得起来了，**变异的代码照样绿**。
+   * 键盘用户的真实路径是「按 `f` 进全屏然后什么都不做」，
+   * 守卫必须走那条路。
+   *
+   * ⚠️ 第二层：Tab 导航。浏览器计算「下一个 Tab 停靠点」发生在 keydown 的
+   * **默认动作**阶段，而我们的「唤醒控制条」处理器跑在 **window 的捕获阶段**
+   * （更早）—— 它若顺手把收起态退出钮踢出焦点序列，
+   * 浏览器算停靠点时就看不到它 → **永远 Tab 不到**。
+   * 所以 Tab **不**唤醒控制条（Tab 是导航键，不是操作键）。
+   *
+   * ⚠️ 判据是「**能走到一个退出入口**」，不是「能走到收起态那一枚」：
+   * 按 Tab 会唤醒控制条，而控制条里也有退出按钮 —— 走它同样能退出全屏，
+   * 用户不会觉得被卡住。真正要守的是：**焦点必须落在某个能退出全屏的按钮上**，
+   * 而不是落在 body 上（那就等于键盘用户彻底出不来）。
+   *
+   * ⚠️ 这些判据**只能在真实浏览器里验** —— jsdom 没有焦点导航算法，
+   * 单测守不了「浏览器真的会停在那里」。所以它必须是 e2e。
+   */
+  test('键盘进全屏后控制条会自己收起，且 Tab 能走到一个退出入口', async () => {
+    const ext = await launchExtension();
+    try {
+      const page = await ext.context.newPage();
+      await page.setViewportSize({ width: 1280, height: 720 });
+      const setBody = serveBody(page);
+      setBody(pageHtml());
+      await page.goto('https://vsc-collapsed-exit-tab.example/');
+      await enterFullscreen(page);
+
+      // ⚠️ 故意**不**手动 blur：这就是键盘用户的路径。
+      // 焦点若被关在控制条里，控制条永远不会收起来。
+      await page.waitForTimeout(4500);
+      expect(
+        await barVisible(page),
+        '键盘进全屏后控制条必须自己收起（焦点被关在控制条里的话它永远不会藏）',
+      ).toBe(false);
+
+      // 焦点必须落在**看得见**的地方（收起态那枚退出钮，或播放器表面）。
+      const focusIsVisible = await page.evaluate(() => {
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement)) {
+          return false;
+        }
+        // 焦点在控制条宿主之外（舞台）→ 看得见；
+        // 在控制条的 shadow 里 → 必须是收起态那枚（控制条已藏，它也看得见）。
+        if (active.id === 'vsc-page-fullscreen-stage') {
+          return true;
+        }
+        const shadow = document.getElementById('vsc-controls')?.shadowRoot;
+        const role = shadow?.activeElement?.getAttribute('data-role') ?? null;
+        if (role === 'exit-collapsed') {
+          return true;
+        }
+        if (role !== null) {
+          // 焦点在控制条里，而控制条已经藏了 → 焦点落在看不见的元素上。
+          return false;
+        }
+        // 焦点在 body 上 → 键盘用户既没有落点，也看不到自己在哪。
+        return active !== document.body;
+      });
+      expect(focusIsVisible, '焦点必须落在看得见的地方（播放器表面或收起态退出钮）').toBe(true);
+
+      // 真实按 Tab：焦点必须**真的落到**某个退出按钮上。
+      // ⚠️ 用真实的键盘事件（page.keyboard.press('Tab')），
+      //    不能用 element.focus() —— 后者绕过了浏览器的停靠点计算，
+      //    正是这个缺陷藏身的地方。
+      const landedOnExit = await (async () => {
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          await page.keyboard.press('Tab');
+          const role = await page.evaluate(() => {
+            const shadow = document.getElementById('vsc-controls')?.shadowRoot;
+            return shadow?.activeElement?.getAttribute('data-role') ?? null;
+          });
+          // 两枚退出入口都算：收起态那一枚，或控制条里的退出按钮。
+          if (role === 'exit-collapsed' || role === 'exit') {
+            return true;
+          }
+        }
+        return false;
+      })();
+      expect(
+        landedOnExit,
+        '键盘按 Tab 必须能走到某个退出入口（焦点落在 body 上就等于键盘用户出不来）',
+      ).toBe(true);
+
+      // 走到之后按 Enter 必须真的能退出全屏 ——
+      // 「能 Tab 到」和「按下去有用」是两回事。
+      await page.keyboard.press('Enter');
+      await expect
+        .poll(() =>
+          page.evaluate(() => Boolean(document.getElementById('vsc-page-fullscreen-overlay'))),
+        )
+        .toBe(false);
+    } finally {
+      await ext.close();
+    }
+  });
   /**
    * 站点给 <body> 加 transform 时，网页全屏必须**照常可用**。
    *

@@ -75,7 +75,13 @@ Video Speed Controller — Fullscreen & Keys
   （各 48 个键、键集合完全一致，且**不含 name/description 键**）」——
   那句话对 6.0.8 是对的，对 6.2.0 **已经不对了**：
 
-  - `_locales/en` 与 `_locales/zh_CN` 现在各 **75 个键**（不是 48）；
+  - `_locales/en` 与 `_locales/zh_CN` 的键**早就不是 48 个了**；
+    ⚠️ 这里**不写具体数字** —— 键数每轮都在涨，写死一个数就会变成一句假话
+    （第一次写「75 个键」，两轮之后实际已经是 82 个）。
+    要核实时跑这条命令，别读文档里的数字：
+    `node -e "for (const l of ['en','zh_CN']) console.log(l, Object.keys(require('./_locales/'+l+'/messages.json')).length)"`
+    以及核对两边**键集合是否一致**（不一致 = 一边缺键 = 用户看到空白）：
+    `node -e "const a=Object.keys(require('./_locales/en/messages.json'));const b=Object.keys(require('./_locales/zh_CN/messages.json'));console.log('仅en:',a.filter(k=>!b.includes(k)),'仅zh:',b.filter(k=>!a.includes(k)))"`
   - 而且 6.2.0 **第一次**把 `manifest.json` 的 `description` 本地化了
     （`__MSG_extensionDescription__`）—— 也就是说，扩展包里**现在有**
     一个 description 键，且它会被商店读到。
@@ -179,6 +185,23 @@ English
 
 <!-- Status options: ⬜ Not created | 🟡 Needs update | ✅ Ready -->
 
+> ✅ 2026-10-22：5 张截图与 promo tile 全部按 6.2.0 的真实 UI **重新生成**并逐张看过
+> （设置页这一轮改动最大：吸底操作条真的贴住视口底了、「使用引导」不再套白卡片）。
+>
+> ⚠️ **这些截图是「摆拍」的，不是现场录的** —— 这一点要写清楚，别让下一个人以为
+> 它们是产品自己跑出来的：
+> - 演示页 `store-assets/demo.html` 把 `dist/content.js` 当**普通页面脚本**加载，
+>   并把 `<video>` 的 `duration`/`currentTime`/`paused`/`readyState` 用
+>   `Object.defineProperty` mock 成一段「正在播放的课程视频」；
+> - 设置页那一张则注入了 mock 的 `chrome` API。
+> 所以图里的**时间读数**（`18:24 / 43:50`）是摆拍出来的 ——
+> 真扩展对**没有媒体源**的视频只会显示 `0:00 / --:--`。
+>
+> ⚠️ 但**视觉是可信的**：2026-10-22 用**真实扩展**（真 Chromium + 真装扩展）
+> 在同一个演示页上跑了一遍网页全屏，截图与上面那张**逐像素同构** ——
+> 同样的浮层、同样的控制条、同样的排版。差别只在时间读数与倍速值。
+> （重复的 `vsc-runtime-styles` 也是这么来的：页面脚本与内容脚本各注入了一份，
+> 那是**摆拍装置**的产物，不是产品缺陷。）
 > ✅ 2026-10-20：5 张截图与 promo tile 全部按 6.0.9 的真实 UI 重新生成并逐张看过。
 > 之前是 🟡 的两个原因都已消除：
 > 1. **图是旧的** —— 6.0.9 重做了控制条（搬进 shadow root、换配色排版、倍速变成
@@ -444,6 +467,16 @@ https://github.com/hibernate-pano/chrome-plugin-video-manager
 没有画面、没有控制条、连退出按钮都看不见；现在正常了。
 窄屏手机上，那枚常驻的退出按钮与控制条里的退出按钮也对齐了（此前是两个位置，
 你不知道该点哪个）。系统的「减少动效」现在同样管到「扩展已更新，请刷新本页」。
+首次引导现在会教你怎么回到 1x —— 在此之前它只教了加快和减慢，
+而全屏之外没有别的办法回到原速。用键盘关掉引导也终于可行：Tab 不再把引导关掉，
+聚焦到关闭按钮上时也能看见焦点在哪。
+首次引导现在真的会出现：如果页面在扩展刚装上、还没准备好时就让视频播了起来，
+此前那条提示会永远错过（你于是完全不知道这个扩展会做什么）。
+用快捷键暂停了视频之后，再按空格现在会继续播放 —— 此前页面会直接滚走。
+有些站点会在你进全屏之后重新渲染播放器、把视频挪进它自己的新容器；
+这时页面不再卡在一个坏掉的「假全屏」里（视频不见了、页面也滚不动）。
+站点在接管之后才挂上的字幕层，全屏里也看得见了。
+退出全屏时，站点自己在这期间改过的样式不再被还原成十分钟前的样子。
 ```
 
 English（**商店的默认语言，英文这段是必须的**）：
@@ -465,7 +498,20 @@ exit button; it works now. On narrow phones the always-on exit button also
 lines up with the one in the control bar (they used to sit in two different
 places, so you never knew which one to click). Your system's "reduce motion"
 setting now applies to the "extension has been updated, please refresh" notice
-as well.
+as well. The first-run guide now teaches you how to get back to 1x — before, it
+only taught faster and slower, and outside fullscreen there was no other way
+back to normal speed. Dismissing the guide with a keyboard works too: Tab no
+longer closes the guide, and you can see where the focus is on the close button.
+The first-run guide now actually shows up: if the page started the video before
+the freshly installed extension was ready, that guide used to be missed forever
+(so you never learned what the extension does).
+After you pause a video with a shortcut, pressing space now resumes it — before,
+the page just scrolled away. On some sites the player re-renders after you enter
+fullscreen and moves the video into a new container of its own; the page no
+longer gets stuck in a broken "fake fullscreen" (video gone, page cannot
+scroll). Subtitle layers a site attaches after we take over are now visible in
+fullscreen too. And exiting fullscreen no longer reverts the styles the site
+changed while you were in it.
 ```
 
 > ⚠️ **只贴 6.2.0 这一条。** 6.0.9 与 6.1.0 **从未单独发布过** ——
@@ -481,7 +527,7 @@ as well.
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 6.2.0 | 2026-10-21 | 审计驱动的第六轮：**某些站点上网页全屏曾是一片黑**（站点给 `<body>` 加 `transform` 做加速时，`position: fixed` 相对 body 的盒子定位，画面与控制条、退出按钮全部飘到视口之外 —— 浮层现在挂在 `<html>` 上，免疫）；窄屏档（≤430px）第一次有了回归守卫（收起态退出钮必须与控制条退出钮同位）；「减少动效」现在管到「扩展已更新」提示；页面级提示有了第三套 token（系统消息）；「站点有没有点名这条视频」收成**一份**判据；页面改坏 `matches`/`closest` 时统一退化而不崩；审计驱动的第四轮：**嵌入框里的网页全屏现在铺满整个页面**（此前只铺满嵌入框自己那一小块 —— 名不副实）；**「视频在嵌入框里」不再是一片沉默**（焦点在顶层而视频在嵌入框里时，扩展会告诉你视频在哪儿，而不是让你白按一场）；**空格不再抢「文章里嵌的小播放器」**（只在你此刻真的在跟这个视频互动时才接管，否则空格照常翻页）；首次引导会量一量嵌入框的大小，放不下就退到精简版；全屏里用键盘调速，控制条会醒过来；暂停后恢复播放，倍速角标自己回来；改键后已打开的页面立刻生效；读屏用户能听见快进快退与进/出全屏；**每次按键不再重扫整页**（长按某个键时尤其明显）；**（6.1.0 那一轮）**审计驱动的第三轮：**iframe 里的视频终于能调速、也能进网页全屏**（此前按 `=` 完全没反应、iframe 里的视频也搬不进网页全屏 —— 键盘事件只到得了焦点所在的那个文档，而内容脚本只注入顶层文档）；注意此时网页全屏铺满的是 **iframe 自己的区域**，不是整个页面（6.2.0 改掉了这一条）；缩放过的 iframe 里提示位置不再偏掉一半；点扩展图标只发给用户此刻聚焦的那一个 frame（此前会同时进好几次全屏、弹好几个提示）；service worker 被回收后图标依然认得该去哪个 frame；读屏用户能听见播放/暂停与快进快退（此前这些动作**完全静默**）；读屏播报节流；页面级提示的样式不再被站点的 `!important` 打穿 | 待发布 |
+| 6.2.0 | 2026-10-21 | 审计驱动的第六轮：**某些站点上网页全屏曾是一片黑**（站点给 `<body>` 加 `transform` 做加速时，`position: fixed` 相对 body 的盒子定位，画面与控制条、退出按钮全部飘到视口之外 —— 浮层现在挂在 `<html>` 上，免疫）；窄屏档（≤430px）第一次有了回归守卫（收起态退出钮必须与控制条退出钮同位）；「减少动效」现在管到「扩展已更新」提示；页面级提示有了第三套 token（系统消息）；「站点有没有点名这条视频」收成**一份**判据；页面改坏 `matches`/`closest` 时统一退化而不崩；审计驱动的第四轮：**嵌入框里的网页全屏现在铺满整个页面**（此前只铺满嵌入框自己那一小块 —— 名不副实）；**「视频在嵌入框里」不再是一片沉默**（焦点在顶层而视频在嵌入框里时，扩展会告诉你视频在哪儿，而不是让你白按一场）；**空格不再抢「文章里嵌的小播放器」**（只在你此刻真的在跟这个视频互动时才接管，否则空格照常翻页）；首次引导会量一量嵌入框的大小，放不下就退到精简版；全屏里用键盘调速，控制条会醒过来；暂停后恢复播放，倍速角标自己回来；改键后已打开的页面立刻生效；读屏用户能听见快进快退与进/出全屏；**每次按键不再重扫整页**（长按某个键时尤其明显）；**（6.1.0 那一轮）**审计驱动的第三轮：**iframe 里的视频终于能调速、也能进网页全屏**（此前按 `=` 完全没反应、iframe 里的视频也搬不进网页全屏 —— 键盘事件只到得了焦点所在的那个文档，而内容脚本只注入顶层文档）；注意此时网页全屏铺满的是 **iframe 自己的区域**，不是整个页面（6.2.0 改掉了这一条）；缩放过的 iframe 里提示位置不再偏掉一半；点扩展图标只发给用户此刻聚焦的那一个 frame（此前会同时进好几次全屏、弹好几个提示）；service worker 被回收后图标依然认得该去哪个 frame；读屏用户能听见播放/暂停与快进快退（此前这些动作**完全静默**）；读屏播报节流；页面级提示的样式不再被站点的 `!important` 打穿；**审计驱动的第七至十轮**：站点把我们网页全屏的背板从文档里摘掉时用户的视频不再**永久消失**（此前只清理不搬运 —— 视频被站点拿回去时一个字都不碰）；网页全屏里键盘用户终于走得到退出入口（此前控制条永远霸占屏幕、收起态的退出钮从不出现）；装饰性预览视频上按快捷键不再一声不吭（会说清「这是页面预览，点一下它就能控制」）；扩展被禁用时不再说「已更新」（实测更新/重载/禁用 18 项信号完全一样，分不清就别分）；补上「装完了」机制（版本不一致就提醒刷新）；**设置页 14 条**：读设置失败不再拿默认值覆盖用户真实的绑定（此前 7 条自定义绑定里的 6 条被静默抹掉）；「保存」按钮真的贴在视口底（上一轮的吸底条其实没吸住 —— 离底 159px）；保存失败的提示不再被下一次改键抹掉；「恢复默认」写盘失败时界面会回滚；改完键不保存不再静默丢失（有 beforeunload 拦阻）；冲突时焦点落在用户刚改的那一行、且那行的框不再被清空；读屏用户能听到「现在绑的是哪个键」（`aria-label` 之前被 `aria-labelledby` 顶成死代码）；「恢复默认」可以撤销；页面补上「Esc 撤销」与「这些键只在页面里正在播放的视频上生效」；焦点环全站同一套；**审计驱动的第十一至十三轮**：**用快捷键暂停视频后再按空格会继续播放**（此前页面直接滚走 —— 修复方式是「只有我们的快捷键暂停的才算数」，不碰 `'no-space'` 判据）；站点在接管之后重新渲染播放器、把视频挪进新容器时，页面不再卡在坏掉的「假全屏」里（此前 180ms 探测与健康探测都只是「降级」，没有一条判据看「视频还在不在我们的浮层里」）；站点在接管之后才挂上的字幕层，全屏里也看得见；退出全屏时不再整块覆盖样式（只还原**我们**写过、且站点**没有**改过的那些属性）；扩展刚装好/刚更新时，之前就开着的标签页会提示刷新；**首次引导现在真的会出现**（此前：页面在扩展刚装上、还没准备好时就把视频播起来 → 那次 play 事件我们根本没听见 → 引导永远不出现；**越是新用户越看不到这条引导**） | 待发布 |
 | 6.0.9 | 2026-10-20 | 审计驱动的修复轮：网页全屏的字幕**真的**可见了（6.0.8 号称修好、实测从未生效 —— 字幕判据量错了对象、DOM 顺序不足以决定可见、字幕容器塌成 0 宽，三个独立原因）；控制条搬进 shadow root（站点 CSS 打不穿）；不再全站劫持按键（只有用户正在看的视频才被接管，多视频页面认怂）；页面伪造的键盘事件不再能驱动扩展；设置页 Tab 不再被吞（此前纯键盘用户被困在输入框里）；控制条滑块键盘可用；设置有了入口（`Ctrl+Shift+,`）；工具栏图标显示当前倍速；控制条倍速可点击（档位菜单）；调速胶囊淡出后留下一枚很淡的小角标（视频暂停 / 滚出视口 / 进全屏时消失）；读屏播报通道；控制条视觉重做与对比度修复；设置页深色模式与产品名；补上隐私政策 | 待发布 |
 | 6.0.8 | 2026-10-08 | **不再记忆站点速度**（任何视频都从 1.0x 开始，速度是用户当场的选择而非隐形默认规则）；**网页全屏不再弄丢沉浸式翻译等插件的字幕**（字幕层跟着视频一起进出全屏，弹幕不搬）；同时清掉老用户机器上残留的站点访问记录 | **Published**（2026-10-22 经 v2 API `fetchStatus` 核实：`deployPercentage=100`，已是**当前线上版本**） |
 | 6.0.6 | 2026-10-06 | **商店改名**为 `Video Speed Controller — Fullscreen & Keys`（原名有 3 个逐字同名扩展，几乎必然导致装错）。功能与 6.0.5 完全一致，无代码变更 | **Published**（改名已上线，100% 部署） |

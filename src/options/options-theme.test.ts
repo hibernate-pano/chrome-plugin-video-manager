@@ -172,6 +172,105 @@ describe('设置页配色对比度', () => {
     expect(functionalColors, `布局 CSS 里还有硬编码颜色函数：${functionalColors.join(', ')}`).toEqual([]);
   });
 
+  /**
+   * 操作条必须**吸底**。
+   *
+   * ⚠️ 为什么这条在单测里守（而不是只靠 e2e）：
+   * 「保存按钮永远看得见」这条产品承诺的**根因**就是
+   * position: sticky; bottom: 0 —— 它与文案长度无关，是结构性保证。
+   * e2e 那条守的是「在当前这版文案下看得见」，那是**结果**；
+   * 这条守的是**原因**。
+   *
+   * 少了这一行，页面一长（英文文案、窄屏、翻译改长），
+   * 保存按钮就会重新沉到折叠线以下 —— 而「整页装得下 800px」
+   * 那条 e2e 守卫**测不到**这件事（它只测当前文案）。
+   */
+  it('操作条是吸底的（position: sticky; bottom: 0）', () => {
+    const css = layoutCss();
+
+    // 取出 .vsc__actions 这一条规则。
+    const rule = css.match(/\.vsc__actions\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule, '布局 CSS 里找不到 .vsc__actions 规则').not.toBe('');
+
+    expect(
+      rule,
+      '.vsc__actions 不是 sticky —— 保存按钮会跟着内容沉到折叠线以下',
+    ).toMatch(/position:\s*sticky/);
+    expect(
+      rule,
+      '.vsc__actions 没有 bottom: 0 —— 它不会贴在视口底边',
+    ).toMatch(/bottom:\s*0/);
+
+    // ⚠️ 吸底条必须**不透明**：半透明的话它盖住的卡片会从底下透出来，
+    // 看着像渲染坏了。
+    expect(
+      rule,
+      '.vsc__actions 没有不透明背景 —— 吸底条会透出底下的卡片',
+    ).toMatch(/background:\s*var\(--vsc-bg\)/);
+  });
+
+  /**
+   * 焦点环：**输入框、按钮、链接**用同一套。
+   *
+   * 之前只有输入框有 :focus-visible，按钮与链接走浏览器默认焦点环 ——
+   * 同一页两种颜色（品牌墨绿 / Chrome 默认蓝）、两种粗细（2px / 1px）。
+   *
+   * ⚠️ 这里守的是「**规则本身**」（哪几个选择器、什么颜色、粗细），
+   * 真实渲染出来的 computed style 由 e2e 守
+   * （tests/e2e/options-layout.spec.js）—— jsdom 没有布局引擎，
+   * :focus-visible 在 jsdom 里也永远不会匹配。
+   */
+  it('焦点环规则同时覆盖输入框、按钮与链接', () => {
+    const css = layoutCss();
+
+    // 找出所有带 :focus-visible 的规则块。
+    const focusRules = [...css.matchAll(/([^{}]+:focus-visible[^{}]*)\{([^}]*)\}/g)];
+    expect(
+      focusRules.length,
+      '布局 CSS 里没有任何 :focus-visible 规则 —— 焦点环全靠浏览器默认',
+    ).toBeGreaterThan(0);
+
+    // 所有这些选择器合起来，必须同时点到三个类。
+    const selectors = focusRules.map((match) => match[1]).join(',');
+    ['.vsc__key', '.vsc__button', '.vsc__link'].forEach((selector) => {
+      expect(
+        selectors,
+        `焦点环规则没有覆盖 ${selector} —— 它会走浏览器默认焦点环（蓝 1px）`,
+      ).toContain(selector);
+    });
+
+    // 每一处焦点环都必须用调色板里的 focus 变量，不硬编码颜色。
+    focusRules.forEach((match) => {
+      expect(
+        match[2],
+        `焦点环规则「${match[1].trim()}」没有用 var(--vsc-focus)`,
+      ).toMatch(/outline:\s*2px solid var\(--vsc-focus\)/);
+    });
+  });
+
+  /**
+   * lead 段**不限宽**（与下面那张 640px 的卡片对齐）。
+   *
+   * 原来是 max-width: 46ch —— 中文里只装得下 23 个汉字，
+   * 实测宽度 405.6px 而卡片是 640px：那段说明只占满卡片宽度的 63%，
+   * 右边空一大块，看着像「这块的排版没做完」。
+   *
+   * ⚠️ 这里守「规则里没有 ch 限宽」；真实宽度由 e2e 量
+   * （getBoundingClientRect）—— jsdom 算不出 ch 换算成多少像素。
+   */
+  it('lead 段不限宽（与卡片对齐）', () => {
+    const css = layoutCss();
+
+    const rule = css.match(/\.vsc__lead\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule, '布局 CSS 里找不到 .vsc__lead 规则').not.toBe('');
+
+    // ⚠️ ch / em 限宽在不同字体下换算不同，而且会跟卡片对不齐。
+    expect(
+      rule,
+      '.vsc__lead 还在用 ch 限宽 —— 它与卡片右边缘对不齐',
+    ).not.toMatch(/max-width:\s*\d+(?:\.\d+)?ch/);
+  });
+
   it('所有颜色都来自调色板声明的变量，没有「声明了但没用上」的多余变量', () => {
     const css = `${paletteCss()}\n${layoutCss()}`;
 

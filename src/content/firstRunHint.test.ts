@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildGuideText, createFirstRunHint, createStorageClaimBroker, FirstRunHint, type HintClaimBroker, CLAIM_SETTLE_MS } from './firstRunHint';
+import { buildGuideText, createFirstRunHint, createStorageClaimBroker, FirstRunHint, readWindowMs, type HintClaimBroker, CLAIM_SETTLE_MS } from './firstRunHint';
 import { NOTICE_CARD_TOKENS } from './runtimeStyles';
 import { VideoRegistry } from './videoRegistry';
 import { DEFAULT_SHORTCUTS, FIRST_RUN_HINT_KEY, type ShortcutSettings } from '../shared/types';
@@ -36,21 +36,34 @@ const WATCH_DELAY = 2500;
 /**
  * 「用户读过了」的判据时长：提示出现后还要再等这么久。
  *
- * ⚠️ 它**按行数**算：完整版引导是 4 行（两行动作 + 工具栏 + 去哪儿改绑），
- * 每行 1000ms → 4000ms。精简版只有 2 行 → 2000ms。
+ * ⚠️ 它**按行数**算，而行数由**真实文案**决定 —— 所以这里**不能写死数字**。
  *
- * 原来这里是个常量 2000ms（够读完两行短句），而完整版有 4 行 ——
- * 计时器一满就落盘「已展示」，此后再也不出现，于是「读过」的判据
- * 与用户实际要读的字数完全对不上。
+ * 原来这里写死着 4000ms（= 4 行 × 1000ms）。后来引导多了一行（教复位），
+ * 真实窗口变成 5000ms，而测试还按 4000ms 走 —— 于是「读够了」的判据
+ * 比用户实际要读的字数**短了一行**，那条用例当场变红。
+ *
+ * 更糟的是它**红得莫名其妙**：失败信息说的是「spy 没被调用」，
+ * 而根因是「文案多了一行」。写死的数字把「文案长度」这个真实变量
+ * 藏了起来。
+ *
+ * 现在从**生产代码自己**推：readWindowMs 是唯一说了算的地方，
+ * 测试直接用它算，于是文案怎么变，测试都跟着变。
  */
-const READ_DELAY = 4000;
-/** flag 落盘的时间点：出现 + 读完。 */
-const SHOWN_AT = WATCH_DELAY + READ_DELAY;
-
 const createShortcuts = (overrides: Partial<ShortcutSettings> = {}): ShortcutSettings => ({
   ...DEFAULT_SHORTCUTS,
   ...overrides,
 });
+
+/**
+ * 完整版引导的真实文案，以及由它推出的阅读窗口。
+ *
+ * ⚠️ 必须放在 createShortcuts **之后**：const 不会 hoist，
+ * 声明在前会撞 TDZ（ReferenceError），而不是「拿到 undefined」。
+ */
+const FULL_GUIDE_TEXT = buildGuideText(createShortcuts()) ?? '';
+const READ_DELAY = readWindowMs(FULL_GUIDE_TEXT);
+/** flag 落盘的时间点：出现 + 读完。 */
+const SHOWN_AT = WATCH_DELAY + READ_DELAY;
 
 const createVideo = () => document.createElement('video');
 
@@ -272,10 +285,87 @@ describe('buildGuideText', () => {
   it('tells the user the two things only README and the store listing knew', () => {
     const text = buildGuideText(createShortcuts()) ?? '';
 
-    // 「点扩展图标 = 全屏」此前只写在 README 与商店文案里，产品内一处都没有。
-    expect(text).toContain('点扩展图标');
+    // 「全屏控制条里能用鼠标点倍速档位」此前只写在 README 与商店文案里，
+    // 产品内一处都没有。
+    //
+    // ⚠️ 原来这一行守的是「点扩展图标可切换网页全屏」，2026-10-22 换掉了：
+    // 那一行与同一张卡片里的「按 f 切换网页全屏」是**同一个动作**
+    // （同一个 TOGGLE_FULLSCREEN_MESSAGE，见 background/index.ts:22），
+    // 两行讲同一件事就是浪费一行版面。
+    // 而「鼠标点倍速档位」是**别处没有**的事实：它是这个产品**唯一**
+    // 能用鼠标**精确**选倍速的地方（按 = 只能一档一档按，要 1.5x 得按 5 次），
+    // 而且倍速菜单只存在于全屏控制条里（FullscreenControls 只在 enter() 里创建）。
+    expect(text).toContain('鼠标点选倍速档位');
     // 「改绑的入口」同理。
     expect(text).toContain('改绑');
+  });
+
+  /**
+   * 引导**必须**教「怎么回到 1x」。
+   *
+   * ⚠️ 这不是「多教一条更好」，而是**只有这一条路**：
+   * - 调速胶囊与角标都是 pointer-events: none（故意不挡用户点视频）→ 点不动；
+   * - 倍速档位菜单只存在于全屏控制条里（FullscreenControls 在 enter() 时
+   *   创建、退出时 unmount）→ 不进全屏就够不着；
+   * - manifest 里没有 contextMenus 权限 → 没有右键菜单。
+   *
+   * 于是「按几下 = 觉得太快」的用户，唯一能回到 1x 的办法是**自己猜**
+   * 「大概有个键能复位」。而引导是这个产品**全部**的可见入口、
+   * 唯一一次教学机会 —— 不教复位，用户就永远卡在 2x 上。
+   */
+  it('教用户怎么回到 1x（全屏之外没有别的出口）', () => {
+    const text = buildGuideText(createShortcuts()) ?? '';
+
+    expect(text).toContain('回到 1x');
+    // ⚠️ 而且要教**真实的键** —— 默认绑定是 0。
+    expect(text).toContain('0');
+  });
+
+  /**
+   * 复位必须**并进调速那一行**，不能另起一行。
+   *
+   * ⚠️ 理由是「完整版 4 行 / 精简版 2 行」这个数字是**承重不变式**：
+   * 阅读窗口（readWindowMs）、小视口里的高度预算（240×135 的框放不下 4 行）、
+   * runtimeStyles 里「卡片 4 行」的注释、以及测试里 130px 的高度桩
+   * **全都锁在它上面**。多一行就要同时改掉这一串，而它们互相锁死：
+   * 少一行 → 阅读窗口算短；多一行 → 小视口里盖住播放器。
+   *
+   * ⚠️ 实测（真实 Chromium）：并进去之后完整版仍是 4 行、精简版仍是 2 行。
+   */
+  it('复位并进调速那一行，不占额外版面', () => {
+    const text = buildGuideText(createShortcuts()) ?? '';
+    const lines = text.split('\n');
+
+    // 调速与复位必须在**同一行**里。
+    const speedLine = lines.find((line) => line.includes('加快'));
+    expect(speedLine, '引导里应该有调速那一行').toBeTruthy();
+    expect(speedLine).toContain('回到 1x');
+
+    // ⚠️ 而且完整版就是 **4 行**：两行动作（调速+全屏）+ 工具栏 + 改绑入口。
+    // 这条断言守的是「别再随手加一行」—— 加之前先问：版面预算够吗？
+    expect(lines).toHaveLength(4);
+  });
+
+  /**
+   * 调速排在全屏**前面**。
+   *
+   * ⚠️ 两条理由：
+   * 1. 产品叫「Video Speed Controller」——名字里第一个词就是 Speed，
+   *    扩展图标画的也是加速符号。第一行必须是产品**最核心**的动作。
+   * 2. 设置页的快捷键表顺序是「调速 → 播放控制 → 全屏」（见 types.ts 的
+   *    ACTION_LIST）—— 引导与设置页对同一个产品说了两个不同的顺序。
+   */
+  it('调速排在全屏前面（与设置页的顺序一致）', () => {
+    const text = buildGuideText(createShortcuts()) ?? '';
+    const lines = text.split('\n');
+
+    const speedIndex = lines.findIndex((line) => line.includes('加快'));
+    const fullscreenIndex = lines.findIndex((line) => line.includes('全屏'));
+
+    expect(speedIndex).toBeGreaterThanOrEqual(0);
+    expect(fullscreenIndex).toBeGreaterThanOrEqual(0);
+    expect(speedIndex, '调速必须是第一行').toBe(0);
+    expect(speedIndex).toBeLessThan(fullscreenIndex);
   });
 
   it('macOS 上显示 ⌘ 而不是 Meta', () => {
@@ -484,6 +574,60 @@ describe('FirstRunHint', () => {
     video.dispatchEvent(new Event('play', { bubbles: true }));
     await vi.advanceTimersByTimeAsync(2600);
     expect(isVisible()).toBe(true);
+  });
+
+  it('补记：视频在我们挂上监听器之前就已经在播 → 引导照样出现', async () => {
+    // ⚠️ 这是**真实发生过的**竞态：扩展注入在 document_start，
+    // 但要等设置加载完才挂上 `play` 监听器；页面脚本在这中间调了
+    // `video.play()`，那次事件我们根本没听见 —— 引导于是**永远不出现**。
+    //
+    // 最深的地方在于它咬得最狠的时候正是引导最该出现的时候：
+    // 首次安装时扩展是**冷的**，而「打开课程页、视频自动开始播」
+    // 正是最典型的首见场景 —— 越是新用户越看不到这条引导。
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+
+    // 关键：此刻它**已经在播**，而且**不会**再有 play 事件。
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+
+    hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+      recordFailedAttempt,
+      isInCooldown,
+    });
+    hint.start();
+    await settle();
+
+    // 没有 play 事件可听 —— 唯一的入口是「补记」。
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(
+      isVisible(),
+      '视频在我们开始监听之前就已经在播 → 引导必须照样出现（否则用户永远不知道这个扩展会做什么）',
+    ).toBe(true);
+  });
+
+  it('补记：装饰性自动播放的视频不打扰（补记不是「见视频就弹」）', async () => {
+    const video = makeVisible(createDecorativePreview());
+    document.body.appendChild(video);
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+
+    hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+      recordFailedAttempt,
+      isInCooldown,
+    });
+    hint.start();
+    await settle();
+
+    await vi.advanceTimersByTimeAsync(2600);
+    expect(
+      isVisible(),
+      '文章里那种边滚动边播的小预览不该被引导打扰 —— 判据与 play 事件那条完全一致',
+    ).toBe(false);
   });
 
   it('stays silent when the video left the document during the wait', async () => {
@@ -992,11 +1136,26 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
 /**
  * P0 的另一半：flag 的落盘判据是「用户读过了」，不是「弹出来了」。
  */
-describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
+/**
+ * 「已展示」的落盘判据：**显示的当下**。
+ *
+ * ⚠️ 6.2.0 之前是「读完才落盘」（阅读窗口走完才写）。那个判据有两个洞：
+ * 1. 用户**没读完就关掉**引导 → 那个键**根本不存在** →
+ *    设置页的「重新显示使用引导」执行 removeValue 时，
+ *    **删一个不存在的键不触发 storage.onChanged**（实测：events 为空）→
+ *    已经打开的标签页里的引导**不会回来**，而按钮当场显示「已重置」。
+ * 2. 没读成的用户**每次都可能被重新提示**（键一直没落盘）：
+ *    引导是这个产品唯一的可见入口，反复弹同一条说明是在浪费他的屏幕。
+ *
+ * 现在「显示过」就是「展示过」；「读完」仍然有意义 ——
+ * 它管的是**失败计数**（读完了 = 他不是拒绝，计数清零）。
+ */
+describe('FirstRunHint：「已展示」在显示的当下就落盘', () => {
   let shortcuts: ShortcutSettings;
   let wasShown: Mock<[], Promise<boolean>>;
   let markShown: Mock<[], Promise<void>>;
   let recordFailedAttempt: Mock<[], Promise<void>>;
+  let resetFailedAttempts: Mock<[], Promise<void>>;
   let isInCooldown: Mock<[], Promise<boolean>>;
   let hint: FirstRunHint | undefined;
 
@@ -1006,6 +1165,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
       wasShown,
       markShown,
       recordFailedAttempt,
+      resetFailedAttempts,
       isInCooldown,
     });
     hint.start();
@@ -1021,6 +1181,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     wasShown = vi.fn(async (): Promise<boolean> => false);
     markShown = vi.fn(async (): Promise<void> => {});
     recordFailedAttempt = vi.fn(async (): Promise<void> => {});
+    resetFailedAttempts = vi.fn(async (): Promise<void> => {});
     isInCooldown = vi.fn(async (): Promise<boolean> => false);
   });
 
@@ -1030,7 +1191,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     vi.useRealTimers();
   });
 
-  it('提示刚弹出来时 flag 还没写', async () => {
+  it('提示一显示就写 flag（不再等「读完」）', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await create();
@@ -1039,8 +1200,11 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(true);
-    // ⚠️ 核心断言：弹出来 ≠ 用户读过了。
-    expect(markShown).not.toHaveBeenCalled();
+    // ⚠️ 核心断言：**显示即落盘**。
+    // 旧判据（读完才落盘）留了两个洞：设置页的「重新显示使用引导」
+    // 删一个不存在的键不触发 storage.onChanged（按钮在撒谎），
+    // 而没读成的用户每次都可能被重新提示。
+    expect(markShown).toHaveBeenCalledTimes(1);
   });
 
   it('阅读窗口按**行数**算：四行引导不能按两行的时间判「读过了」', async () => {
@@ -1052,19 +1216,48 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await vi.advanceTimersByTimeAsync(WATCH_DELAY);
     expect(isVisible()).toBe(true);
 
-    // ⚠️ 完整版引导是 4 行（两行动作 + 工具栏 + 去哪儿改绑）。
+    // ⚠️ 完整版引导是 4 行（调速 / 全屏 / 工具栏 / 去哪儿改绑）。
     // 原来的判据是**固定两秒**（注释写着「2 秒够读完两行短句」）——
-    // 于是四行字只显示了它一半的时长就落盘「已展示」，
+    // 于是四行字只显示了它一半的时长就被判成「读过了」，
     // 而用户还在读第三行。
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(markShown, '四行引导不能按两行的时间判「读过了」').not.toHaveBeenCalled();
+    //
+    // ⚠️ 现在「读过」管的是**失败计数**（读完了 = 他不是拒绝，计数清零），
+    // 所以这条用例盯的是 resetFailedAttempts，而不是 markShown。
+    //
+    // ⚠️ 时间**从真实文案推导**（READ_DELAY），不写死：
+    // 写死的数字在引导多一行/少一行时会悄悄过期 ——
+    // 那正是它一开始就该被发现的形状。
+    await vi.advanceTimersByTimeAsync(READ_DELAY - 1000);
+    expect(resetFailedAttempts, '四行引导不能按两行的时间判「读过了」').not.toHaveBeenCalled();
 
-    // 再等两秒 → 累计四行的时间 → 落盘。
-    await vi.advanceTimersByTimeAsync(2100);
-    expect(markShown).toHaveBeenCalledTimes(1);
+    // 再等一点 → 累计够四行的时间 → 算他读过了。
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(resetFailedAttempts).toHaveBeenCalledTimes(1);
   });
 
-  it('用户一直没打断：读够之后才写 flag', async () => {
+  /**
+   * 阅读窗口必须跟着**文案长度**走，不是一个固定数字。
+   *
+   * ⚠️ 这条守的是「换文案的人会记得改那个数字吗」——
+   * 不会。所以窗口由 readWindowMs 统一算，而这条用例拿**不同长度的两版文案**
+   * 去比：长的那版必须等更久。
+   *
+   * 原来这里是写死的 4000ms，于是引导多一行之后：
+   * - 真实窗口变成 5000ms，测试还按 4000ms 走 →
+   * - 「读够了」的判据比用户实际要读的字数**短了一行**，
+   *   用户还在读最后一行，失败计数就被清零了。
+   */
+  it('阅读窗口随文案变长而变长', () => {
+    const short = '一行';
+    const long = '一行\n二行\n三行';
+
+    expect(readWindowMs(long)).toBeGreaterThan(readWindowMs(short));
+    // 每行 1000ms（中文；英文另有 1.5 倍系数，见 readWindowMs）。
+    expect(readWindowMs(short)).toBe(1000);
+    expect(readWindowMs(long)).toBe(3000);
+  });
+
+  it('用户一直没打断：读够之后清掉「连续关闭」的计数', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
     await create();
@@ -1073,6 +1266,7 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     await vi.advanceTimersByTimeAsync(SHOWN_AT);
 
     expect(markShown).toHaveBeenCalledTimes(1);
+    expect(resetFailedAttempts).toHaveBeenCalledTimes(1);
   });
 
   it('阅读窗口之内的误点：不算失败，也不消耗那次机会', async () => {
@@ -1127,7 +1321,6 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
     await vi.advanceTimersByTimeAsync(READ_DELAY * 2);
 
-    expect(markShown).not.toHaveBeenCalled();
     // ⚠️ 核心断言：**不记失败**。旧契约是「任何一次 keydown 都记一次失败」，
     // 于是按三下 Shift 就能把引导永久毁掉 —— 而引导是这个产品唯一的可见入口。
     expect(recordFailedAttempt).not.toHaveBeenCalled();
@@ -1149,8 +1342,74 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
 
     expect(isVisible()).toBe(false);
     expect(recordFailedAttempt).not.toHaveBeenCalled();
-    // ⚠️ 提示正显示着时按下扩展的键 → 立刻写「已展示」（用户已经读过了）。
+    // ⚠️ 提示正显示着时按下扩展的键 → 「已展示」已经写过（显示时就写了），
+    // 这里不再重复写 —— 写两次会让「落盘次数」这个断言变得没有意义。
     expect(markShown).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 导航键（Tab / 方向键 …）**不能**关掉引导。
+   *
+   * ⚠️ 这是一条真缺陷（2026-10-22 修），实测形状：
+   * 键盘用户要把那个「×」关掉 → 必须先 **Tab 过去** →
+   * 那次 Tab 落在页面的别的元素上 → 引导把按键当成「用户碰了一下键盘」
+   * → 提示当场消失 → **那个按钮永远按不到**。
+   *
+   * 而那个「×」是「我故意关掉引导」的**唯一**正路
+   * （引导节点本身是 pointer-events: none 且 aria-hidden，
+   * 用户点不到它、也选不中它）。
+   * 于是一个**专门为键盘用户准备的产品**，唯一的退出入口走不通。
+   *
+   * ⚠️ 所以判据不是「焦点在不在按钮上」，而是「这个键是不是在导航」。
+   */
+  it.each([
+    ['Tab', 'Tab'],
+    ['Shift+Tab', 'Tab'],
+    ['ArrowDown', 'ArrowDown'],
+    ['ArrowUp', 'ArrowUp'],
+    ['ArrowLeft', 'ArrowLeft'],
+    ['ArrowRight', 'ArrowRight'],
+    ['Home', 'Home'],
+    ['End', 'End'],
+    ['PageUp', 'PageUp'],
+    ['PageDown', 'PageDown'],
+  ])('导航键 %s 不关掉引导', async (_label, key) => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(
+      isVisible(),
+      `${key} 是「在页面里移动焦点」，不是「我看完了要走」—— 引导不该消失`,
+    ).toBe(true);
+  });
+
+  /**
+   * 但 **Esc 仍然关掉**引导。
+   *
+   * ⚠️ 上一条不能变成「所有键都不关引导」：Esc 是用户表达
+   * 「这东西我不要了」的标准动作，它必须继续关掉引导。
+   */
+  it('Esc 仍然关掉引导（导航键豁免不能扩大到 Esc）', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(isVisible(), 'Esc 是「我不要了」的标准动作，必须照常关掉引导').toBe(false);
   });
 
   it('连续失败超过上限后不再提示，而且 flag 始终不写', async () => {
@@ -1174,8 +1433,17 @@ describe('FirstRunHint：flag 只在用户真的读过之后才落盘', () => {
  * P0 的第三重：连续失败之后不再打扰，但**机会还在**。
  *
  * 这一条走的是**生产接线**（createFirstRunHint）：失败计数真的写进
- * storage.local，超过上限就闭嘴 —— 而「一辈子只提示一次」那个 flag
- * 始终不写。用户清掉本地数据、换台设备，仍会有下一次机会。
+ * storage.local，超过上限就闭嘴。
+ *
+ * ⚠️ 6.2.0 变了落盘时机：「已展示」在**显示的当下**就写了
+ * （不再是「读完才写」），所以「用户拒绝之后」那个标记必须**改回 false**
+ * —— 否则引导**再也不会出现**（被「已展示」挡住），
+ * 而设置页正写着「已关闭 N 次（再关闭 N 次将暂时不再出现）」。那是界面在撒谎。
+ *
+ * ⚠️ 改回 false 而不是**删掉**这个键：删一个不存在的键不触发
+ * storage.onChanged → 设置页的「重新显示使用引导」会当场显示「已重置」，
+ * 而已打开的标签页里的引导**不会回来**。键存在（哪怕值是 false）时，
+ * 删除一定触发事件。
  *
  * ⚠️ 前面那些用例都把 recordFailedAttempt / isInCooldown 注入成 mock，
  * 守的是「类」的行为；这一条守的是「接线」：mock 注入的那条缝
@@ -1249,7 +1517,7 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
     return appeared;
   };
 
-  it('失败次数累加，且「一辈子只提示一次」的 flag 始终不写', async () => {
+  it('失败次数累加，且「已展示」被改回 false（拒绝之后还有一次机会）', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
 
@@ -1257,12 +1525,14 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
     expect(appeared).toBe(true);
 
     expect(storage['vsc-first-run-hint-failed-attempts']).toBe(1);
-    // ⚠️ 核心断言：用户没读成就被打断，**不能**因此消耗掉那唯一一次机会。
-    expect(storage['vsc-first-run-hint-shown']).toBeUndefined();
+    // ⚠️ 核心断言：用户拒绝之后，那个标记必须是 **false**（不是 true，
+    // 也不是 undefined —— undefined 会让设置页的「重新显示使用引导」
+    // 删一个不存在的键，不触发 storage.onChanged，引导叫不回来）。
+    expect(storage['vsc-first-run-hint-shown']).toBe(false);
     expect(STORAGE_LOCAL_KEYS).toContain('vsc-first-run-hint-failed-attempts');
   });
 
-  it('连续失败到上限之后不再提示，但 flag 仍然不写', async () => {
+  it('连续失败到上限之后不再提示，但冷却一过仍有机会', async () => {
     const video = makeVisible(createVideo());
     document.body.appendChild(video);
 
@@ -1272,13 +1542,14 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
     await interruptedRound(video);
     expect(storage['vsc-first-run-hint-failed-attempts']).toBe(3);
 
-    // 第四轮：不再打扰。
+    // 第四轮：不再打扰（冷却期里）。
     const appeared = await interruptedRound(video);
     expect(appeared).toBe(false);
 
-    // ⚠️ 关键：机会还在 —— flag 没写。
-    // 用户清掉本地数据、换台设备，下一次仍然会得到一次提示。
-    expect(storage['vsc-first-run-hint-shown']).toBeUndefined();
+    // ⚠️ 关键：机会还在 —— 「已展示」是 false（不是 true）。
+    // 冷却期一过，引导还会再出现一次。
+    expect(storage['vsc-first-run-hint-shown']).toBe(false);
+    expect(storage['vsc-first-run-hint-cooldown-until']).toBeGreaterThan(Date.now());
   });
 });
 
@@ -1399,6 +1670,115 @@ describe('FirstRunHint：shadow DOM 里的视频', () => {
     await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(true);
+  });
+});
+
+/**
+ * 关闭按钮的**焦点环**。
+ *
+ * ⚠️ 这是一条真缺陷（2026-10-22 修），形状是「看起来有、其实没有」：
+ * 焦点环原先写在样式表里（`#vsc-first-run-hint-close:focus-visible { outline: … }`），
+ * 而按钮上有一句**内联**的 `all: initial !important`（样式隔离机制）——
+ * 它把 outline / box-shadow 整个重置掉了。
+ *
+ * 而**内联的 important 赢过样式表里的任何声明**（连 `!important` 也一样）：
+ * 实测 `#b:focus { outline: 3px solid red !important }` 在
+ * `style="all: initial !important"` 面前依然输。
+ * 于是那条样式表规则**从来没生效过** —— 键盘用户 Tab 到那个「×」上，
+ * 屏幕上**一点焦点指示都没有**。
+ *
+ * 而那个「×」是「我故意关掉引导」的**唯一**正路（引导节点本身
+ * pointer-events: none 且 aria-hidden，用户点不到它）。
+ * 一个为键盘用户做的产品，唯一的退出入口走不通。
+ *
+ * 所以焦点环必须写成**内联 important**，跟着 focus/blur 状态走。
+ */
+describe('FirstRunHint：关闭按钮的焦点环', () => {
+  let shortcuts: ShortcutSettings;
+  let wasShown: Mock<[], Promise<boolean>>;
+  let markShown: Mock<[], Promise<void>>;
+  let recordFailedAttempt: Mock<[], Promise<void>>;
+  let isInCooldown: Mock<[], Promise<boolean>>;
+  let hint: FirstRunHint | undefined;
+
+  const create = async () => {
+    hint = new FirstRunHint({
+      getShortcuts: () => shortcuts,
+      wasShown,
+      markShown,
+      recordFailedAttempt,
+      isInCooldown,
+    });
+    hint.start();
+    await settle();
+    return hint;
+  };
+
+  const closeButton = () =>
+    document.getElementById('vsc-first-run-hint-close') as HTMLButtonElement | null;
+
+  /** 按钮当前的焦点环（读**内联样式** —— 那才是真正生效的那一份）。 */
+  const ring = () => {
+    const button = closeButton();
+    if (!button) return null;
+    return {
+      outline: button.style.getPropertyValue('outline'),
+      outlinePriority: button.style.getPropertyPriority('outline'),
+      offset: button.style.getPropertyValue('outline-offset'),
+    };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    adapterHost.hostname = 'localhost';
+    shortcuts = createShortcuts();
+    wasShown = vi.fn(async (): Promise<boolean> => false);
+    markShown = vi.fn(async (): Promise<void> => {});
+    recordFailedAttempt = vi.fn(async (): Promise<void> => {});
+    isInCooldown = vi.fn(async (): Promise<boolean> => false);
+  });
+
+  afterEach(() => {
+    hint?.destroy();
+    hint = undefined;
+    vi.useRealTimers();
+  });
+
+  it('聚焦时有焦点环，移开时收掉', async () => {
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await create();
+
+    video.dispatchEvent(new Event('play', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(WATCH_DELAY);
+    expect(isVisible()).toBe(true);
+
+    const button = closeButton();
+    expect(button, '引导必须有一个真正的关闭按钮').not.toBeNull();
+
+    // ⚠️ 未聚焦时**不能**有环 —— 否则一个常驻的圈会让人以为
+    // 「它一直是被选中的」，反而看不清状态。
+    expect(ring()?.outline).toBe('none');
+
+    button!.focus();
+    button!.dispatchEvent(new FocusEvent('focus'));
+
+    const focused = ring();
+    expect(
+      focused?.outline,
+      '聚焦时必须有可见的焦点环 —— 键盘用户 Tab 到它之后要知道自己在哪',
+    ).toBe('2px solid #f8fafc');
+    // ⚠️ 必须是 **important**：按钮上那句 `all: initial !important`
+    // 是内联的 important —— 普通的内联声明会被它整个重置掉。
+    expect(
+      focused?.outlinePriority,
+      '焦点环必须带 important —— 否则被 `all: initial !important` 重置掉',
+    ).toBe('important');
+
+    button!.blur();
+    button!.dispatchEvent(new FocusEvent('blur'));
+    expect(ring()?.outline, '移开焦点后环要收掉').toBe('none');
   });
 });
 
@@ -1533,7 +1913,19 @@ describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () =
     await start(video);
     await vi.advanceTimersByTimeAsync(2600);
 
-    expect(hintNode()?.textContent).toContain('点扩展图标可切换网页全屏');
+    const text = hintNode()?.textContent ?? '';
+
+    // ⚠️ 完整版的**两条补充信息**都必须在里面：
+    // 1. 鼠标点选倍速档位（全屏控制条里的菜单）
+    // 2. 去哪儿改绑
+    expect(text).toContain('鼠标点选倍速档位');
+    expect(text).toContain('改绑');
+
+    // ⚠️ 而「点扩展图标可切换网页全屏」必须**不在**里面：
+    // 它与第一行「按 f 切换网页全屏」是同一个动作
+    // （同一个 TOGGLE_FULLSCREEN_MESSAGE，见 background/index.ts:22），
+    // 两行讲同一件事就是浪费一行版面。
+    expect(text).not.toContain('点扩展图标');
     restore();
   });
 
@@ -1567,6 +1959,94 @@ describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () =
     // 退到精简版（64px）—— 135 - 64 = 71，装得下。
     expect(hintNode()?.textContent).not.toContain('点扩展图标可进入网页全屏');
     restore();
+  });
+
+  /**
+   * 降级链的**第三档**：极简版。
+   *
+   * ⚠️ 这是一条真回归（2026-10-22 修）。形状：
+   * 复位键并进调速行之后，精简版第 1 行在 240px 宽的框里折成 **2 行** ——
+   * 整张卡片 74.6px，而那个框的一半是 67.5px。
+   *
+   * 而当时 `pickFittingText` 里「精简版再量一次」那段是**假守卫**：
+   * 量了，但两个分支都 `return compactText` —— 结果被直接丢掉。
+   * 于是「放不下」这件事在代码里没有任何后果。
+   *
+   * ⚠️ 单测守不了「折行」（jsdom 不做布局），所以这里守的是**降级链本身**：
+   * 给精简版喂一个「放不下」的高度，它必须退到极简版；
+   * 而极简版必须**还认得出是干什么的**（不是一串光秃秃的符号）。
+   */
+  it('精简版也放不下 → 退到极简版，且仍然说得出「这是调速」', async () => {
+    stubViewport(240, 135);
+
+    // ⚠️ 高度必须**按文案内容**给，不能按「第几次量」给。
+    //
+    // 第一版按调用次数喂（第 3 次才给 56px），于是把降级链短路掉之后
+    // 测试**照样绿**（实测：变异 A 没被抓住）—— 因为短路时只量 2 次，
+    // 第 2 次（精简版）拿到的是「放不下」的那个高度……而它确实放不下，
+    // 于是断言恰好成立，而「第三档有没有生效」根本没被检查。
+    //
+    // 现在按**真实文案**判：完整版与精简版给 130px（真实 Chromium 实测：
+    // 240px 宽的框里折行后确实放不下），极简版给 56px（2 行 + 20px 内边距）。
+    // 这样「有没有走到第三档」由**文案**决定，而不是由调用次序决定。
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function patched(this: Element) {
+      if (this.id === HINT_ID) {
+        const content = this.textContent ?? '';
+        // ⚠️ 极简版的特征是「没有动作名」：完整版与精简版都以
+        // 「调速 · …」开头，极简版是「调速 · = / - / 0」——
+        // 它同样有「调速」这个词，所以判据不能是「有没有调速」，
+        // 而是「有没有方向说明」（加快 / 减慢 / faster / slower）。
+        //
+        // ⚠️ 更不能拿「第几次量」当判据：降级链短路时只量 2 次，
+        // 于是第 2 次（精简版）拿到了极简版的高度，「放不下」被读成「放得下」——
+        // 断言恰好成立，而第三档根本没走到（实测：变异 A 没被抓住）。
+        const isTiny = !/加快|减慢|faster|slower/i.test(content);
+        const height = isTiny ? 56 : 130;
+        return {
+          x: 0, y: 0, top: 0, left: 0, right: 288, bottom: height,
+          width: 288, height,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return original.call(this);
+    };
+
+    const video = makeVisible(createVideo());
+    document.body.appendChild(video);
+    await start(video);
+    await vi.advanceTimersByTimeAsync(2600);
+
+    const text = hintNode()?.textContent ?? '';
+
+    // ① 真的退到了极简版：完整版那两行补充说明不在。
+    expect(text).not.toContain('改绑');
+
+    // ② **动作名还在** —— 只剩 `= / - / 0` 的话，用户看到三个符号，
+    //    不知道那是在调速。省掉的必须是「加快 / 减慢」这类方向说明，
+    //    不是「这三个键是干什么的」。
+    expect(
+      text,
+      '极简版必须还说得出这是调速 —— 光秃秃的键名用户读不懂',
+    ).toMatch(/调速|speed/i);
+
+    // ③ **方向说明必须不在** —— 这一条是「真的退到了极简版」的判据。
+    //
+    // ⚠️ 少了它这条用例是**假守卫**（实测）：只断言「有调速、有 =」的话，
+    // 精简版**也满足** —— 于是把降级链短路掉（永远停在精简版），
+    // 测试照样绿，而「第三档到底有没有生效」根本没被检查。
+    //
+    // 极简版与精简版的**唯一区别**就是有没有「加快 / 减慢 / 回到 1x」
+    // 这些方向说明：完整版和精简版都有，极简版没有。
+    expect(
+      text,
+      '没退到极简版 —— 方向说明还在，说明显示的是精简版',
+    ).not.toMatch(/加快|减慢|faster|slower/i);
+
+    // ④ 键必须真的在（引导存在的理由）。
+    expect(text).toContain('=');
+
+    Element.prototype.getBoundingClientRect = original;
   });
 });
 
@@ -1623,7 +2103,9 @@ describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
     await vi.advanceTimersByTimeAsync(WATCH_DELAY);
 
     expect(isVisible()).toBe(true);
-    expect(markShown).not.toHaveBeenCalled();
+    // ⚠️ 「已展示」现在在**显示的当下**就落盘了（见 reveal）——
+    // 「读完了」管的是**失败计数**，不是落盘时机。
+    expect(markShown).toHaveBeenCalledTimes(1);
   });
 
   it('同一个标签页里同时只会弹一条引导', async () => {

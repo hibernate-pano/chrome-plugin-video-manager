@@ -3,6 +3,7 @@ import {
   isDecorativeAutoplay,
   isPageMainContent,
   isSiteMainPlayerVideo,
+  publishAmbientPreview,
   viewportAreaOf,
 } from './ambientPreview';
 import { matchesSelector } from '../shared/domMatches';
@@ -410,6 +411,25 @@ export interface VideoRegistryOptions {
 
 export class VideoRegistry {
   private readonly isTrustedEvent: (event: Event) => boolean;
+  /**
+   * 「我们接管着哪个视频」。
+   *
+   * ⚠️ 这个字段的**生灭必须与全屏会话同生共死** ——
+   * 它由**控制器**在会话真正结束时统一清掉（见 runtime.ts 里 onSessionEnd
+   * 的接线，以及 fullscreenController 的 release() → finishSession()）。
+   *
+   * ⚠️ 以前这份状态**只有 Esc 那条退出路径会去清** —— 于是从控制条的
+   * 退出钮退出之后，这个字段仍然指着那个已经退出全屏的视频：
+   * - 点工具栏图标 → 它以「全屏视频优先」的姿态胜出（错的视频）；
+   * - 按空格 → 它不再被当成「页面预览」，空格被它吃掉，页面翻不动。
+   *
+   * ⚠️ 为什么**不**在这里另抄一份「会话账本」（控制器写在视频身上的
+   * 那个 class，见 fullscreenSession.ts）：那等于给同一件事安**第二道闸**。
+   * 两道闸都放行同一个问题，就会出现「拆掉其中一道，另一道照样兜住」——
+   * 于是**哪一道在真正守着什么**再也说不清，守卫也做不出隔离的变异验证。
+   * 会话的账本归控制器（角标与引导在读它），注册表只保留「我们接管的是
+   * 哪条视频」这一个指针，而它的生死由控制器在唯一的出口处通知。
+   */
   private fullscreenVideo: HTMLVideoElement | null = null;
   /**
    * 最近一次**用户真的用指针/焦点碰过**的视频。
@@ -485,6 +505,34 @@ export class VideoRegistry {
    */
   private keyboardTargetVideo: HTMLVideoElement | null = null;
   private keyboardTargetAt = 0;
+  /**
+   * **扩展自己的快捷键**把哪些视频暂停了（还没被恢复的）。
+   *
+   * ⚠️ 为什么需要这条证据：`isRunning` 是「能不能吃空格」的条件之一
+   * （见 resolvePermission），而扩展自己按空格把视频暂停之后它就变成 false。
+   * 于是「按空格暂停 → 再按空格恢复」这条最普通的操作，第二下会把空格
+   * 还给页面：视频一动不动，页面却往下翻页 —— 用户看到的是「空格键坏了」，
+   * 而 `=` 仍然有效，所以这个结论特别牢固。
+   *
+   * ⚠️ 为什么**不能**直接拿 `wasTargetedByKeyboard` 当判据（最初的写法）：
+   * `getWatchedTarget()` 对**任何**解析出的目标都会调 `rememberKeyboardTarget`，
+   * 包括权限是 'no-space' 的那些。于是文章页里那个「暂停着、没人开过、
+   * 无 controls」的预览视频，只要用户按过一次 `=`（调速本来就允许作用在
+   * no-space 视频上），下一次按键它就会被升级成 'full' —— 空格从此被它吃掉，
+   * 翻不了页。那正是 P1-1 要守住的场景（判据 11）。
+   *
+   * 所以证据必须收窄到**「是我们按停的」**：只有我们自己的快捷键把它从
+   * 播放状态按停，才需要豁免。一个从头到尾没播过、也没被我们按停的视频
+   * 不满足这条 —— 它掉到 'no-space' 是对的（用户按空格是想翻页）。
+   *
+   * ⚠️ 为什么用 WeakSet 而不是一个字段：多视频页面上用户可能先后按停过
+   * 好几个（长按/连按），字段只记得住最后一个；WeakSet 随视频回收，不泄漏。
+   *
+   * ⚠️ 谁写谁清：只由 `noteShortcutPlaybackChange` 写（runtime 在快捷键
+   * 切换播放后回调），由「这个视频又开始播了」清（见 handleInteraction 的
+   * play 事件分支）—— 站点自己把它恢复之后，它就不再是「我们按停的」了。
+   */
+  private pausedByShortcut = new WeakSet<HTMLVideoElement>();
   /**
    * 用户**曾经**交互过的视频（**不随时间过期**）。
    *
@@ -709,6 +757,9 @@ export class VideoRegistry {
     this.lastInteractedAt = 0;
     this.lastChoiceVideo = null;
     this.keyboardTargetVideo = null;
+    // pausedByShortcut 是 WeakSet：没有 clear()，但注册表停止之后
+    // 它指向的视频已经没有意义了 —— 新建一个空集合即可。
+    this.pausedByShortcut = new WeakSet();
     this.snapshot = null;
     this.watchedCache = null;
     this.invalidate();
@@ -724,6 +775,52 @@ export class VideoRegistry {
     }
     // lastInteractedVideo 变了，缓存里的"当前视频"可能已过期。
     this.invalidate();
+  }
+
+  /**
+   * 快捷键刚刚切换了播放状态 —— 记下「暂停是我们干的」。
+   *
+   * 唯一的调用点：runtime.ts 的 `onPlaybackStateChange`（快捷键路径）。
+   * 控制条自己的播放按钮**不走这里** —— 那条路径不经过 `getWatchedTarget`，
+   * 也就不会因为 `isRunning` 变 false 而掉权限，没有这个问题。
+   *
+   * ⚠️ 操作对象取自 `keyboardTargetVideo`：键盘控制器在动手**之前**一定先调了
+   * `getWatchedTarget()`，而那条路径（无论是命中缓存还是重新解析）
+   * 都把「它此刻操作的是谁」记在这个字段里。这是本项目里
+   * 「快捷键此刻在操作谁」**唯一**的载体 —— 不另立第二个。
+   *
+   * ⚠️ 只在**暂停**时记：`playing === true` 表示我们把它恢复了，
+   * 此时它已经回到 `isRunning`，不需要豁免（顺手把旧证据清掉）。
+   */
+  noteShortcutPlaybackChange(playing: boolean) {
+    const video = this.keyboardTargetVideo;
+    if (!video) {
+      return;
+    }
+    if (playing) {
+      this.pausedByShortcut.delete(video);
+      return;
+    }
+    this.pausedByShortcut.add(video);
+    // 权限变了（no-space → full）→ 快捷键缓存里的那份 permission 已经过期。
+    this.invalidate();
+  }
+
+  /**
+   * 「我们**此刻**还在接管这个视频」吗？
+   *
+   * ⚠️ 判据是 `fullscreenVideo` 字段 —— 而那个字段由**控制器**在会话
+   * 真正结束时统一清掉（见 runtime.ts 里 onSessionEnd 的接线）。
+   *
+   * ⚠️ 为什么不是现场去读那个 class（FULLSCREEN_VIDEO_CLASS）：
+   * 那样做等于给同一件事安**第二道闸**。两道闸都放行同一个问题，
+   * 就会出现「拆掉其中一道，另一道照样兜住」—— 于是**哪一道在真正
+   * 守着什么**再也说不清，守卫也做不出隔离的变异验证。
+   *
+   * 这里要守的判据只有一条：**会话结束时，控制器必须通知到注册表**。
+   */
+  private isTakenOverByUs(video: HTMLVideoElement): boolean {
+    return video === this.fullscreenVideo;
   }
 
   /**
@@ -761,7 +858,19 @@ export class VideoRegistry {
     this.measurementGeneration += 1;
   }
 
-  private getAllVideos() {
+  /**
+   * 这一层文档里的所有视频（**不含**子 iframe 里的那些）。
+   *
+   * ⚠️ 这是「本 frame 拥有哪些视频」的**唯一**枚举口径 ——
+   * 引导的「补记」也要用它（见 firstRunHint.ts 的 catchUpAlreadyPlayingVideos），
+   * 所以它必须是**公开**的，而不是让那边自己抄一份
+   * （抄一份的后果是两边对「哪些视频算数」的判断慢慢漂移）。
+   *
+   * ⚠️ shadow root 会下钻，**子 iframe 不会**：
+   * shadow tree 与 document 是同一个 realm；而子 iframe 是另一个 realm，
+   * 那边的视频由**那个 frame 自己的**注册表负责。
+   */
+  getAllVideos(): HTMLVideoElement[] {
     const videos = new Set<HTMLVideoElement>();
     collectVideos(document, videos);
     return Array.from(videos);
@@ -769,6 +878,13 @@ export class VideoRegistry {
 
   getCurrentVideo() {
     // 全屏视频永远最高优先，必须留在快照判断之前。
+    //
+    // ⚠️ 这个分支的前提是「`fullscreenVideo` 字段与会话同生共死」——
+    // 而那个前提由**控制器在会话结束时统一通知**来保证
+    // （runtime.ts 里 onSessionEnd 的接线）。
+    // 以前只有 Esc 那条退出路径会去通知，于是从控制条的退出钮退出之后，
+    // 这个分支仍然把手伸向那个**已经退出全屏**的视频：
+    // 用户点工具栏图标，进的是那个早就滚出屏幕的视频，而不是眼前这个。
     if (this.fullscreenVideo && isConnected(this.fullscreenVideo)) {
       return this.fullscreenVideo;
     }
@@ -855,7 +971,7 @@ export class VideoRegistry {
     return this.computeAmbientPreview(
       video,
       rect,
-      video === this.fullscreenVideo,
+      this.isTakenOverByUs(video),
     );
   }
 
@@ -1080,7 +1196,7 @@ export class VideoRegistry {
     }
 
     // 3. 站点的装饰性预览：用户没要求过它，它自己播起来了。
-    if (this.computeAmbientPreview(video, rect, video === this.fullscreenVideo)) {
+    if (this.computeAmbientPreview(video, rect, this.isTakenOverByUs(video))) {
       return false;
     }
 
@@ -1262,8 +1378,25 @@ export class VideoRegistry {
       adapter.selectors,
     );
 
+    // 被判成「页面预览」的候选：**不是**目标，但它是「为什么接管不了」的答案。
+    //
+    // ⚠️ 这里单独判一次（而不是让 isWatchedVideo 报出原因）：isWatchedVideo
+    // 有五六个拒绝理由（看不见、滚出去了、太小、装饰物…），要把它们分开说
+    // 就得改它的返回形状 —— 而那条判据链是全仓库最敏感的一处（七条证据的拼装）。
+    // 装饰物这一条是**独立可判**的（computeAmbientPreview 就是它自己），
+    // 所以在这里重算一次，代价只是几条属性检查。
+    const ambientCandidates: { video: HTMLVideoElement; rect: VideoRect }[] = [];
+
     const scored = list
-      .filter(({ video, rect, style }) => this.isWatchedVideo(video, rect, style))
+      .filter(({ video, rect, style }) => {
+        if (this.isWatchedVideo(video, rect, style)) {
+          return true;
+        }
+        if (this.computeAmbientPreview(video, rect, this.isTakenOverByUs(video))) {
+          ambientCandidates.push({ video, rect });
+        }
+        return false;
+      })
       .map(({ video, rect, style }) => ({
         video,
         score: this.scoreCandidate(video, rect, style, preferred),
@@ -1271,6 +1404,14 @@ export class VideoRegistry {
       .sort((left, right) => right.score - left.score);
 
     const video = scored[0]?.video ?? null;
+
+    // 登记判定结果（见 ambientPreview.ts 的「判定的对外一格」）：
+    // 有目标 → 没有页面预览（登记 null）；没有目标但有页面预览 → 登记那一条。
+    //
+    // ⚠️ 登记 null 同样重要：否则上一轮的结论会留在那里，
+    // 而「这条视频是不是页面预览」会被用来说错原因。
+    publishAmbientPreview(video ? null : this.pickAmbientPreview(ambientCandidates));
+
     if (!video) {
       return null;
     }
@@ -1279,6 +1420,26 @@ export class VideoRegistry {
       video,
       permission: this.resolvePermission(video),
     };
+  }
+
+  /**
+   * 页面预览有好几条时，挑**最像「用户说的那条」**的那一条。
+   *
+   * 判据是面积：用户按快捷键时，心里想的多半是页面上**最大**的那块画面。
+   * 提示会贴在那条视频旁边，所以挑得对，用户一眼就能对上号。
+   */
+  private pickAmbientPreview(
+    candidates: { video: HTMLVideoElement; rect: VideoRect }[],
+  ): HTMLVideoElement | null {
+    let best: { video: HTMLVideoElement; rect: VideoRect } | null = null;
+    for (const candidate of candidates) {
+      const area = candidate.rect.width * candidate.rect.height;
+      const bestArea = best ? best.rect.width * best.rect.height : -1;
+      if (!best || area > bestArea) {
+        best = candidate;
+      }
+    }
+    return best?.video ?? null;
   }
 
   /**
@@ -1327,6 +1488,29 @@ export class VideoRegistry {
     }
 
     if (this.wasRecentlyChosen(video)) {
+      return 'full';
+    }
+
+    // ⚠️ **我们自己的快捷键**刚刚把它按停了 → 'full'。
+    //
+    // 根因（实测，真实 Chromium）：`isRunning`（`!paused && !ended && readyState > 2`）
+    // 是 'full' 的条件之一，而**扩展自己**按空格把视频暂停之后，
+    // `isRunning` 立刻变 false → 权限从 'full' 掉到 'no-space' →
+    // 键盘控制器把空格**还给页面**（`no-space` + `togglePlay` → 放行）→
+    // 页面往下翻页，而视频一动不动。
+    //
+    // 用户看到的是「按空格暂停了视频，再按空格视频不动，页面却往下翻页」——
+    // 看起来像「空格绑定坏了」。而 `=` 仍然生效（只有 togglePlay 这一条坏了），
+    // 于是「这个扩展的空格键是坏的」这个结论特别牢固。
+    //
+    // ⚠️ 判据必须是「**是我们按停的**」，不能放宽成「键盘刚命中过它」：
+    // 后者会把 no-space 的视频也一起升级（见 pausedByShortcut 的注释），
+    // 直接违反判据 11（文章页里的预览视频不许抢空格）。
+    //
+    // ⚠️ 为什么这条**不能**写进 userTouchedVideos：那个集合的语义是
+    // 「**用户真的用手碰过**它」，而键盘命中是我们自己打分的结果 ——
+    // 写进去等于用结论证明结论（见 rememberKeyboardTarget 的注释）。
+    if (this.pausedByShortcut.has(video)) {
       return 'full';
     }
 
@@ -1691,6 +1875,15 @@ export class VideoRegistry {
     const isGesture = event.type !== 'play'
       || (Date.now() - this.lastGestureAt < GESTURE_TO_PLAY_MS
         && this.lastGestureVideo === video);
+
+    if (event.type === 'play') {
+      // 它又开始播了 —— 不管是谁恢复的（我们自己的下一次空格、用户点了
+      // 播放按钮、站点自己），「我们把它按停了」这条证据都已经过期。
+      //
+      // ⚠️ 必须清：留着的话，用户按停过的那条视频会**永远**是 'full'
+      // （哪怕之后站点把它当预览反复播），空格在文章页里就再也翻不了页。
+      this.pausedByShortcut.delete(video);
+    }
 
     if (isGesture) {
       // 用户碰过它 → 它不再是「站点摆在那儿的装饰」（哪怕只是一次点击）。

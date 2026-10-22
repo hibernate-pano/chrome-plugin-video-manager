@@ -229,11 +229,18 @@ ${hostRule}
 }
 
 /*
- * 焦点在控制条里时强制保持可见。
+ * 焦点在控制条**本体**里时强制保持可见。
  * 与上面的 visibility 规则必须同时放开 visibility —— 只放开 opacity 的话，
  * 元素是「不透明但不可见」的，键盘用户还是看不见自己在哪。
+ *
+ * ⚠️ 为什么是 .bar:focus-within 而不是 :host(:focus-within) .bar：
+ * 宿主里除了控制条本体，还有**收起态的退出钮**（它刻意不在 .bar 子树里，
+ * 因为控制条一藏里面的东西就跟着不可见）。用宿主判的话，
+ * 焦点落在收起态退出钮上时控制条也会被强行按在屏幕上 ——
+ * 于是「控制条收起 → 退出钮顶上来」这个状态永远走不到，
+ * 屏幕上会同时留着两个退出钮。
  */
-:host(:focus-within) .bar {
+.bar:focus-within {
   opacity: 1;
   transform: none;
   pointer-events: auto;

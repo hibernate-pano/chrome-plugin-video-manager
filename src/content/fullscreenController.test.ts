@@ -63,6 +63,25 @@ const SUBTITLE_RECT = {
 
 const stage = () => document.getElementById('vsc-page-fullscreen-stage');
 
+/**
+ * 一个「正在网页全屏里」的视频（jsdom 没有布局引擎，矩形全是 0，
+ * 于是 180ms 的布局探测会把它降级成 css-cover —— 那不是这些用例要验的路径）。
+ */
+const createFullscreenableVideo = (parent: ParentNode) => {
+  const video = document.createElement('video');
+  parent.appendChild(video);
+  Object.defineProperty(video, 'paused', { value: false, configurable: true });
+  Object.defineProperty(video, 'play', {
+    value: vi.fn(() => Promise.resolve()),
+    configurable: true,
+  });
+  video.getBoundingClientRect = () => ({
+    top: 0, left: 0, right: 1000, bottom: 600, width: 1000, height: 600, x: 0, y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+  return video;
+};
+
 describe('FullscreenController', () => {
   beforeEach(() => {
     resetExtensionDom();
@@ -294,6 +313,160 @@ describe('FullscreenController', () => {
     expect(document.body.style.overflow).toBe('auto');
     expect(video.classList.contains('vsc-page-fullscreen-video')).toBe(false);
     expect(video.controls).toBe(false);
+  });
+
+  it('returns the video to the page when the health check finds our backdrop detached', () => {
+    vi.useFakeTimers();
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+    document.body.style.overflow = 'auto';
+
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    const play = vi.fn(() => Promise.resolve());
+    Object.defineProperty(video, 'play', { value: play, configurable: true });
+    // ⚠️ jsdom 不做布局：getBoundingClientRect 全是 0 → 180ms 的布局探测
+    // 会判「画面没了」并降级成 css-cover（视频已经回到站点自己的树里），
+    // 那不是本用例要验的路径。桩一个大矩形，让它留在 reparent 模式。
+    video.getBoundingClientRect = () => ({
+      top: 0, left: 0, right: 1000, bottom: 600, width: 1000, height: 600, x: 0, y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    expect(controller.enter(video)).toBe(true);
+    // 先让 180ms 的布局探测窗口过去（否则会走 css-cover 回退，不是本用例的路径）。
+    vi.advanceTimersByTime(200);
+    play.mockClear();
+    expect(video.classList.contains('vsc-page-fullscreen-video--reparent')).toBe(true);
+
+    // 站点把**我们的背板**从文档里摘掉 —— 视频跟着它一起脱了文档。
+    const overlay = document.getElementById('vsc-page-fullscreen-overlay');
+    expect(overlay).not.toBeNull();
+    overlay?.remove();
+    expect(video.isConnected).toBe(false);
+
+    // 健康检查（500ms 一次）发现「背板不在文档里了」。
+    vi.advanceTimersByTime(600);
+
+    // ⚠️ 关键回归：视频必须回到站点原来的父节点 ——
+    // 以前这里是 release()（只清理、不搬运）：用户的视频从此人间蒸发。
+    expect(parent.contains(video)).toBe(true);
+    expect(video.isConnected).toBe(true);
+    expect(controller.isActive()).toBe(false);
+    expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    expect(document.body.style.overflow).toBe('auto');
+  });
+
+  it('does not resurrect a video the site discarded while our backdrop is still mounted', () => {
+    vi.useFakeTimers();
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+    document.body.style.overflow = 'auto';
+
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    const play = vi.fn(() => Promise.resolve());
+    Object.defineProperty(video, 'play', { value: play, configurable: true });
+
+    expect(controller.enter(video)).toBe(true);
+    vi.advanceTimersByTime(200);
+    play.mockClear();
+
+    // 站点把**视频自己**丢掉了（背板还在）。
+    video.remove();
+    expect(video.isConnected).toBe(false);
+
+    vi.advanceTimersByTime(600);
+
+    // ⚠️ 那个节点不能被复活：站点不要它了，我们把它插回原父节点
+    // 只会让页面上多一个没人要的幽灵视频。
+    expect(parent.contains(video)).toBe(false);
+    expect(video.isConnected).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+    expect(controller.isActive()).toBe(false);
+    expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    expect(document.body.style.overflow).toBe('auto');
+  });
+
+  it('does not resurrect the video when the site discards both it and our backdrop', () => {
+    vi.useFakeTimers();
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+    document.body.style.overflow = 'auto';
+
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    const play = vi.fn(() => Promise.resolve());
+    Object.defineProperty(video, 'play', { value: play, configurable: true });
+    video.getBoundingClientRect = () => ({
+      top: 0, left: 0, right: 1000, bottom: 600, width: 1000, height: 600, x: 0, y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    expect(controller.enter(video)).toBe(true);
+    vi.advanceTimersByTime(200);
+    play.mockClear();
+
+    // 站点一口气把**视频**和**我们的背板**都摘掉。
+    video.remove();
+    document.getElementById('vsc-page-fullscreen-overlay')?.remove();
+    expect(video.isConnected).toBe(false);
+
+    vi.advanceTimersByTime(600);
+
+    // ⚠️ 那个节点确实没了 —— 但那是站点干的，不是我们。
+    // 我们只负责把界面收干净，绝不把站点丢弃的节点插回页面
+    // （插回去 = 页面上多一个没人要的幽灵视频 + 对游离节点调 play()）。
+    expect(parent.contains(video)).toBe(false);
+    expect(video.isConnected).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+    expect(controller.isActive()).toBe(false);
+    expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    expect(document.body.style.overflow).toBe('auto');
+  });
+
+  it('returns the video to the page when the site removes our backdrop and the user exits', () => {
+    const controller = new FullscreenController();
+    const parent = document.createElement('div');
+    const video = document.createElement('video');
+    parent.appendChild(video);
+    document.body.appendChild(parent);
+    document.body.style.overflow = 'auto';
+
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+    const play = vi.fn(() => Promise.resolve());
+    Object.defineProperty(video, 'play', { value: play, configurable: true });
+
+    expect(controller.enter(video)).toBe(true);
+    play.mockClear();
+
+    // 站点把**我们的背板**从文档里摘掉（视频跟着它一起脱了文档，
+    // 但它仍然是我们带走的那个节点 —— 站点并没有丢弃它）。
+    const overlay = document.getElementById('vsc-page-fullscreen-overlay');
+    expect(overlay).not.toBeNull();
+    overlay?.remove();
+    expect(video.isConnected).toBe(false);
+    expect(overlay?.contains(video)).toBe(true);
+
+    // 用户按 ESC 退出全屏。
+    controller.exit();
+
+    // ⚠️ 关键回归：视频必须回到站点原来的父节点 ——
+    // 否则用户的视频从此人间蒸发（release() 只做清理，不会把节点插回去）。
+    expect(parent.contains(video)).toBe(true);
+    expect(video.isConnected).toBe(true);
+    // 状态完全复位。
+    expect(controller.isActive()).toBe(false);
+    expect(controller.getActiveVideo()).toBeNull();
+    expect(document.getElementById('vsc-page-fullscreen-overlay')).toBeNull();
+    expect(document.body.style.overflow).toBe('auto');
+    expect(video.classList.contains('vsc-page-fullscreen-video')).toBe(false);
   });
 
   it('exits cleanly when both the video and its original next sibling were discarded', () => {
@@ -1008,6 +1181,431 @@ describe('FullscreenController', () => {
       expect(exitFullscreen, '绝不能把站点的原生全屏退掉').not.toHaveBeenCalled();
       // 视频还给站点，站点的新播放器因此不是空壳。
       expect(parent.contains(video)).toBe(true);
+    });
+  });
+
+  /**
+   * 「会话结束」只有一个出口。
+   *
+   * ⚠️ 这一整组守的是同一个根因：**全屏会话的结束路径不止一条**
+   * （控制条的退出钮、Esc、站点把视频拿回去、站点把背板摘了），
+   * 而「我们接管着哪个视频」在注册表那边**也有一份**。
+   *
+   * 以前只有 Esc 那条路径会去通知注册表 —— 于是从**控制条的退出钮**退出之后，
+   * 注册表仍然以为「我们接管着那个视频」：
+   * - 点工具栏图标 → 注册表把那个**已经退出全屏**的视频交回去（错的视频）；
+   * - 按空格 → 注册表认为那条视频是「我们自己接管的」，于是不再把它当成
+   *   页面预览，空格被它吃掉，页面翻不动了。
+   *
+   * 修法不是「在第二个调用点补一行通知」—— 那是打补丁，下一条退出路径还会漏。
+   * 修法是：会话结束的通知由控制器在**唯一**的收尾点发出，谁触发的都不重要。
+   */
+  describe('会话结束只有一个出口', () => {
+    it('从控制条的退出钮退出 → 通知发出一次', () => {
+      const onSessionEnd = vi.fn();
+      const controller = new FullscreenController({ onSessionEnd });
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      expect(onSessionEnd, '还没结束时不该通知').not.toHaveBeenCalled();
+
+      // 模拟控制条上的退出钮（它调的正是 controller.exit()）。
+      controller.exit();
+
+      expect(
+        onSessionEnd,
+        '会话结束了必须通知订阅方 —— 否则注册表仍以为「我们接管着那个视频」',
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('Esc 退出 → 通知发出一次（这条路径以前是唯一会通知的）', () => {
+      const onSessionEnd = vi.fn();
+      const controller = new FullscreenController({ onSessionEnd });
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      controller.exit();
+
+      expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it('反复退出不会重复通知（通知必须恰好一次）', () => {
+      const onSessionEnd = vi.fn();
+      const controller = new FullscreenController({ onSessionEnd });
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      controller.exit();
+      controller.exit();
+      controller.exit();
+
+      expect(
+        onSessionEnd,
+        '第二次 release() 会走「state.video 为空」的提前返回路径 —— 那条路径不能重复通知',
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('站点把视频拿回自己的容器 → 通知发出一次（会话确实结束了）', () => {
+      vi.useFakeTimers();
+      const onSessionEnd = vi.fn();
+      const controller = new FullscreenController({ onSessionEnd });
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      vi.advanceTimersByTime(200);
+
+      // 站点重渲染：把视频插回它的新容器（视频仍 connected，但不在我们手上了）。
+      const newParent = document.createElement('div');
+      document.body.appendChild(newParent);
+      newParent.appendChild(video);
+
+      // 健康检查（500ms 一次）发现「视频已经不在我们的 stage 里」。
+      vi.advanceTimersByTime(600);
+
+      expect(controller.isActive(), '会话必须结束').toBe(false);
+      expect(
+        onSessionEnd,
+        '会话结束必须通知 —— 否则注册表仍把那个视频当成「我们接管着的」',
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('没有订阅者时也不该崩（通知是可选的）', () => {
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      expect(() => controller.exit()).not.toThrow();
+    });
+  });
+
+  /**
+   * 站点在**全屏期间**重渲染时，它写在视频上的样式必须活下来。
+   *
+   * ⚠️ 以前两条退出路径对同一件事给出**相反**的结果：
+   * - 正常退出 → `video.setAttribute('style', originalStyle)`（整块写回），
+   *   站点在这期间写下的样式（滤镜、圆角、Video.js 的 width/height/left/top）
+   *   **全部被抹掉**；
+   * - 「站点把视频拿回自己容器」那条 → 逐属性还原，站点的样式**留着**。
+   *
+   * 同一个 style 属性、同一件事、两条路径两个结果 —— 那不是两种策略，
+   * 是同一个 bug 的两副面孔。修法：两条路径都走**逐属性还原**。
+   */
+  describe('退出全屏不能抹掉站点自己写的样式', () => {
+    it('正常退出：站点在全屏期间写的样式必须留下', () => {
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+
+      // 站点在全屏期间给视频写它自己的样式（Video.js / Plyr 的典型写法）。
+      video.style.setProperty('filter', 'brightness(0.8)');
+      video.style.setProperty('border-radius', '8px');
+      video.style.setProperty('width', '640px');
+      video.style.setProperty('left', '12px');
+
+      controller.exit();
+
+      expect(
+        video.style.getPropertyValue('filter'),
+        '站点自己写的滤镜不能被抹掉',
+      ).toBe('brightness(0.8)');
+      expect(
+        video.style.getPropertyValue('border-radius'),
+        '站点自己写的圆角不能被抹掉',
+      ).toBe('8px');
+      expect(
+        video.style.getPropertyValue('width'),
+        '站点自己写的宽度不能被抹掉',
+      ).toBe('640px');
+      expect(
+        video.style.getPropertyValue('left'),
+        '站点自己写的偏移不能被抹掉',
+      ).toBe('12px');
+    });
+
+    it('正常退出：我们写的那组全屏属性必须撤掉', () => {
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+
+      expect(video.style.getPropertyValue('position')).toBe('fixed');
+
+      controller.exit();
+
+      expect(
+        video.style.getPropertyValue('position'),
+        '我们写的全屏定位必须撤掉',
+      ).not.toBe('fixed');
+      expect(video.style.getPropertyValue('width')).not.toBe('100vw');
+      expect(video.style.getPropertyValue('height')).not.toBe('100vh');
+      expect(video.style.getPropertyValue('inset')).not.toBe('0px');
+    });
+
+    it('正常退出：进全屏前就有的样式必须原样留下', () => {
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      video.style.setProperty('border', '2px solid red');
+      video.style.setProperty('width', '640px');
+      document.body.appendChild(parent);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+      controller.exit();
+
+      expect(video.style.getPropertyValue('border')).toBe('2px solid red');
+      expect(video.style.getPropertyValue('width')).toBe('640px');
+    });
+  });
+
+  /**
+   * 站点在**全屏期间**把视频拿回自己的容器 → 扩展必须收摊。
+   *
+   * ⚠️ 以前健康检查只在「视频不连着文档」时才动手，而「站点把视频插回
+   * 它的新容器」时视频仍然 connected —— 于是扩展卡在一个**半脱离**状态：
+   * 视频已经不在 stage 里，却仍被钉成视口大小（站点 320×180 的容器里
+   * 浮着一个 1280×900 的 position:fixed 元素），不透明背板还盖着整页，
+   * body 的滚动锁死没解。页面在用户按 Esc 之前完全不可用。
+   */
+  describe('站点把视频拿回自己的容器时必须收摊', () => {
+    it('视频离开我们的 stage → 收摊：背板撤掉、滚动解锁', () => {
+      vi.useFakeTimers();
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+      document.body.style.overflow = 'auto';
+
+      controller.enter(video);
+      vi.advanceTimersByTime(200);
+      expect(controller.isActive()).toBe(true);
+      expect(document.getElementById('vsc-page-fullscreen-overlay')).not.toBeNull();
+
+      // 站点重渲染（切清晰度 / 换播放列表 / 插广告）：把视频插回新容器。
+      const newParent = document.createElement('div');
+      document.body.appendChild(newParent);
+      newParent.appendChild(video);
+
+      vi.advanceTimersByTime(600);
+
+      expect(
+        controller.isActive(),
+        '视频已经不在我们手上了，扩展不能还以为自己在全屏里',
+      ).toBe(false);
+      expect(
+        document.getElementById('vsc-page-fullscreen-overlay'),
+        '不透明背板必须撤掉 —— 否则整页被盖住',
+      ).toBeNull();
+      expect(
+        document.body.style.overflow,
+        'body 的滚动锁必须解除 —— 否则页面完全不可用',
+      ).toBe('auto');
+      expect(document.getElementById('vsc-controls')).toBeNull();
+    });
+
+    it('视频离开我们的 stage → 绝不能把它从站点的新容器里拔出来', () => {
+      vi.useFakeTimers();
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      vi.advanceTimersByTime(200);
+
+      const newParent = document.createElement('div');
+      document.body.appendChild(newParent);
+      newParent.appendChild(video);
+
+      vi.advanceTimersByTime(600);
+
+      expect(
+        newParent.contains(video),
+        '站点刚建好的播放器不能被我们掏空',
+      ).toBe(true);
+    });
+
+    it('视频还在我们的 stage 里 → 绝不能收摊（否则全屏会被莫名其妙地退掉）', () => {
+      vi.useFakeTimers();
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+
+      controller.enter(video);
+      vi.advanceTimersByTime(200);
+
+      vi.advanceTimersByTime(600);
+
+      expect(controller.isActive(), '视频还在我们手上了，全屏必须继续').toBe(true);
+      expect(document.getElementById('vsc-page-fullscreen-overlay')).not.toBeNull();
+    });
+
+    /**
+     * ⚠️ 同一个症状还有**第二扇门**：站点在进全屏后**那 180ms 的探测窗口之内**
+     * 就把视频拿回去。
+     *
+     * 以前这条被并进 `lostLayout`，走的是 fallbackToCssCover()：
+     *   - 视频被搬回**原位置**（把站点刚建好的播放器掏空）；
+     *   - 降级成 fixed 铺满视口，body 照样锁死；
+     *   - 而 css-cover 模式里**没有任何机制**会发现「站点已经把视频拿回去了」
+     *     （健康检查的判据只认 reparent 模式）——
+     *     于是页面就一直卡到用户按 Esc。
+     *
+     * 所以「站点把视频拿回去了」必须是**会话结束**，而不是「换个模式继续」。
+     */
+    it('站点在 180ms 探测窗口内就把视频拿回去 → 收摊，而不是降级成 css-cover', () => {
+      vi.useFakeTimers();
+      const controller = new FullscreenController();
+      const parent = document.createElement('div');
+      const video = createFullscreenableVideo(parent);
+      document.body.appendChild(parent);
+      document.body.style.overflow = 'auto';
+
+      controller.enter(video);
+      expect(controller.isActive()).toBe(true);
+
+      // 站点在 180ms 窗口内重渲染：把视频插回它的新容器。
+      const newParent = document.createElement('div');
+      document.body.appendChild(newParent);
+      newParent.appendChild(video);
+
+      vi.advanceTimersByTime(200);
+
+      expect(
+        controller.isActive(),
+        '站点把视频拿回去了 = 会话结束，不能降级成 css-cover 继续赖着',
+      ).toBe(false);
+      expect(
+        video.classList.contains('vsc-page-fullscreen-video--css-cover'),
+        '绝不能降级成 css-cover —— 那一档永远等不到收摊，页面会一直锁死',
+      ).toBe(false);
+      expect(
+        document.getElementById('vsc-page-fullscreen-overlay'),
+        '不透明背板必须撤掉 —— 否则整页被盖住',
+      ).toBeNull();
+      expect(
+        document.body.style.overflow,
+        'body 的滚动锁必须解除 —— 否则页面完全不可用',
+      ).toBe('auto');
+      expect(
+        newParent.contains(video),
+        '视频必须留在站点的新容器里（不能被搬回原位置把站点播放器掏空）',
+      ).toBe(true);
+    });
+  });
+
+  /**
+   * 字幕是**异步加载**的：进全屏那一刻它往往还不存在。
+   *
+   * ⚠️ 以前只在 enter() 里取一次浮层快照（collectLayersToAttach），
+   * 于是后来出现的字幕永远留在站点的播放器容器里，被我们的不透明背板
+   * 整个盖住 —— 用户看到的是「一按 f 字幕就没了」。
+   */
+  describe('进全屏之后才出现的字幕也要跟进来', () => {
+    /** 造一个「字幕层」，几何与 createPlayerWithSubtitle 的那个一致。 */
+    const createLateSubtitle = (player: HTMLElement) => {
+      const subtitle = document.createElement('div');
+      subtitle.id = 'late-caption';
+      subtitle.textContent = '这是后来才出现的字幕';
+      player.appendChild(subtitle);
+
+      subtitle.getBoundingClientRect = () => ({
+        ...SUBTITLE_RECT, x: SUBTITLE_RECT.left, y: SUBTITLE_RECT.top, toJSON: () => ({}),
+      } as DOMRect);
+
+      const originalGetComputedStyle = window.getComputedStyle;
+      vi.spyOn(window, 'getComputedStyle').mockImplementation((target) => {
+        const real = originalGetComputedStyle.call(window, target as Element);
+        return target === subtitle
+          ? ({ ...real, position: 'absolute', display: 'block', visibility: 'visible' } as CSSStyleDeclaration)
+          : real;
+      });
+
+      return subtitle;
+    };
+
+    it('进全屏之后出现的字幕被搬进 stage', async () => {
+      vi.useFakeTimers();
+      const player = document.createElement('div');
+      const video = createFullscreenableVideo(player);
+      document.body.appendChild(player);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+      await vi.advanceTimersByTimeAsync(200);
+
+      // 前置条件：进全屏那一刻还没有字幕。
+      expect(stage()?.querySelector('#late-caption')).toBeNull();
+
+      // 字幕插件这时才把字幕层放进来。
+      const subtitle = createLateSubtitle(player);
+
+      // ⚠️ 必须 await：MutationObserver 的回调是**微任务**，
+      // 而重扫还有 50ms 的合并窗口 —— 同步的 advanceTimersByTime
+      // 不会让微任务跑起来，断言会在观察器还没醒的时候执行。
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(
+        stage()?.contains(subtitle),
+        '后来出现的字幕必须跟进全屏 —— 留在原地会被不透明背板整个盖住',
+      ).toBe(true);
+      expect(
+        Number(subtitle.style.getPropertyValue('z-index')),
+        '搬进来的字幕必须比视频高，否则一个像素都看不见',
+      ).toBeGreaterThan(Number(video.style.zIndex));
+    });
+
+    it('退出时后来出现的字幕回到它原来的父节点', async () => {
+      vi.useFakeTimers();
+      const player = document.createElement('div');
+      const video = createFullscreenableVideo(player);
+      document.body.appendChild(player);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+      await vi.advanceTimersByTimeAsync(200);
+
+      const subtitle = createLateSubtitle(player);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(stage()?.contains(subtitle)).toBe(true);
+
+      controller.exit();
+
+      expect(
+        subtitle.parentElement,
+        '字幕是站点自己的节点，退出时必须回到站点播放器里（不能留在马上要删掉的 overlay 里）',
+      ).toBe(player);
+    });
+
+    it('站点把播放器容器整个换掉之后不再重扫（那个容器里的东西已经不是字幕了）', () => {
+      vi.useFakeTimers();
+      const player = document.createElement('div');
+      const video = createFullscreenableVideo(player);
+      document.body.appendChild(player);
+
+      const controller = new FullscreenController();
+      controller.enter(video);
+      vi.advanceTimersByTime(200);
+
+      // 站点重渲染：播放器容器被整个丢掉。
+      player.remove();
+
+      expect(() => vi.advanceTimersByTime(600)).not.toThrow();
     });
   });
 });

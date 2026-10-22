@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { KeyboardController } from './keyboardController';
+import { publishAmbientPreview } from './ambientPreview';
+import {
+  resetFirstRunHintState,
+  wasFirstRunHintShown,
+} from '../shared/settings';
 import { DEFAULT_SHORTCUTS, PersistedSettings, ShortcutSettings } from '../shared/types';
 
 /**
@@ -1390,6 +1395,108 @@ describe('KeyboardController', () => {
       controller.handleKeyDown(keyEvent(' ', { repeat: true }));
 
       expect(onPlaybackStateChange).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('「这是页面预览」的解释', () => {
+    // ⚠️ 这组用例守的是「接管不了 ≠ 什么都不说」：
+    // 文章页顶部的那个装饰性预览视频，扩展**故意**不接管它
+    // （接管了会偷走翻页用的空格键）—— 但「不接管」必须**说清楚**，
+    // 否则用户按了 = 什么都没发生，唯一能得出的结论是「扩展坏了」。
+    //
+    // 实测（真实 Chromium + 真实扩展）：640×360 的预览占视口 25% 时，
+    // 按 = 三次，倍速不动、胶囊不出现、live region 全空。
+
+    beforeEach(async () => {
+      await resetFirstRunHintState();
+      publishAmbientPreview(null);
+    });
+
+    it('没有目标、但这里有一条页面预览 → 说清楚为什么，并给出下一步', () => {
+      const preview = createVideo();
+      video = null; // 快捷键路径没有可接管的目标
+      publishAmbientPreview(preview);
+
+      // 键必须**放行**给页面（不接管是原则），可放行之后不能什么都不说。
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(false);
+      expect(
+        notifyTakeoverUnavailable,
+        '必须告诉用户「这是页面预览」—— 说明在哪、为什么、下一步做什么',
+      ).toHaveBeenCalledWith(preview);
+    });
+
+    it('真视频上按 = 不该弹这条', () => {
+      // ⚠️ 「不要在无关场景触发」：页面上有**能接管**的视频时，
+      // 这条解释一句都不该说（用户要的是调速，不是解释）。
+      publishAmbientPreview(null);
+
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(true);
+      expect(notifyTakeoverUnavailable).not.toHaveBeenCalled();
+    });
+
+    it('这一层压根没有视频 → 走「别的 frame 有没有」那条路', () => {
+      video = null;
+      publishAmbientPreview(null);
+
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(false);
+      expect(notifyTakeoverUnavailable).not.toHaveBeenCalled();
+    });
+
+    it('空格不打扰：空格在页面上首先是翻页', () => {
+      const preview = createVideo();
+      video = null;
+      publishAmbientPreview(preview);
+
+      // 用户在读长文、按空格翻页 —— 弹一条「这是页面预览」纯属噪音。
+      expect(controller.handleKeyDown(keyEvent(' '))).toBe(false);
+      expect(notifyTakeoverUnavailable).not.toHaveBeenCalled();
+
+      // 但「冲着视频来的键」仍然要说。
+      expect(controller.handleKeyDown(keyEvent('='))).toBe(false);
+      expect(notifyTakeoverUnavailable).toHaveBeenCalledWith(preview);
+    });
+
+    it('连按几下只解释一次（提示还挂在屏幕上，重复播报只是噪音）', () => {
+      const preview = createVideo();
+      video = null;
+      publishAmbientPreview(preview);
+
+      controller.handleKeyDown(keyEvent('='));
+      controller.handleKeyDown(keyEvent('='));
+      controller.handleKeyDown(keyEvent('='));
+
+      expect(notifyTakeoverUnavailable).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('首次引导的落盘判据：「会用」', () => {
+    beforeEach(async () => {
+      await resetFirstRunHintState();
+    });
+
+    it('按下扩展自己的键 → 立刻记下「他会用了」', async () => {
+      // ⚠️ 判据从「读过引导」改成「会用这个扩展」：
+      // 用户先按了 =（他改了倍速，他早就会用了），2.5 秒后引导才弹出 ——
+      // 那时候再教他就是在教一个已经会的人（实测：就是这样弹出来的）。
+      expect(await wasFirstRunHintShown()).toBe(false);
+
+      controller.handleKeyDown(keyEvent('='));
+      // 落盘是异步的：等它落地。
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        await wasFirstRunHintShown(),
+        '「会用」是比「读过」更强的信号：按下扩展的键就该落盘',
+      ).toBe(true);
+    });
+
+    it('按的不是扩展的键 → 不落盘', async () => {
+      controller.handleKeyDown(keyEvent('a'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(await wasFirstRunHintShown()).toBe(false);
     });
   });
 });

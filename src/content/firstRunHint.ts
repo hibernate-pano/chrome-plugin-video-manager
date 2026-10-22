@@ -18,8 +18,8 @@ import {
 import { FULLSCREEN_OVERLAY_ID, NOTICE_CARD_TOKENS } from './runtimeStyles';
 import { TransientPill } from './transientPill';
 import { closestSelector } from '../shared/domMatches';
-import { observeBody } from './bodyObserver';
-import type { BodyObserver } from './bodyObserver';
+import { watchFullscreenSession } from './fullscreenSession';
+import type { FullscreenSession } from './fullscreenSession';
 
 const HINT_ID = 'vsc-first-run-hint';
 /** 关闭按钮的 id（引导自己的节点，不是页面的）。 */
@@ -74,9 +74,13 @@ const isEnglishRender = (): boolean => {
 /**
  * 这一次展示的阅读窗口（毫秒）。
  *
+ * ⚠️ 导出是为了让**测试**用它算 —— 测试里原来写死着「4000ms」，
+ * 引导一变长（多一行）那个数字就悄悄过期，于是「读够了」的判据与
+ * 用户实际看到的字数对不上。测试从**真实文案**推窗口，两边就不会漂。
+ *
  * @param text 这一档**实际显示**的文案（行数由它决定）。
  */
-const readWindowMs = (text: string): number => {
+export const readWindowMs = (text: string): number => {
   const lines = Math.max(1, text.split('\n').length);
   const factor = isEnglishRender() ? READ_DELAY_LANGUAGE_FACTOR_EN : 1;
 
@@ -569,6 +573,18 @@ export interface FirstRunHintOptions {
    */
   isAmbientPreview?: (video: HTMLVideoElement) => boolean;
   /**
+   * 这一层文档里有哪些视频。
+   *
+   * ⚠️ 由 **VideoRegistry** 代答：「本 frame 拥有哪些视频」只有一份口径
+   * （shadow root 要下钻、子 iframe 不下钻）——
+   * 让这边自己抄一份 `querySelectorAll('video')` 的后果是
+   * 两边对「哪些视频算数」的判断慢慢漂移。
+   *
+   * 给不给这条缝只影响「补记」能不能找到 shadow root 里的视频；
+   * 不给时退回本模块自己的枚举（见 catchUpAlreadyPlayingVideos）。
+   */
+  listVideos?: () => HTMLVideoElement[];
+  /**
    * 认领器：保证同一时刻最多一条引导。
    *
    * ⚠️ 注入它只是为了**测试**：默认实现读的是扩展存储，而 jsdom 里既没有
@@ -588,6 +604,98 @@ export interface FirstRunHintOptions {
 const buildGuideLabels = (shortcuts: ShortcutSettings): string[] => {
   const labels: string[] = [];
 
+  // ⚠️ **调速排在最前面**（2026-10-22 改）。
+  //
+  // 原来这里第一个是全屏。改的理由有三，每条都是「用户第一眼看到什么」：
+  // 1. 产品叫「Video Speed Controller」——名字里第一个词就是 Speed，
+  //    扩展图标画的也是加速符号。引导的第一行必须是产品**最核心**的动作。
+  // 2. 设置页的快捷键表顺序是「调速 → 播放控制 → 全屏」（见 types.ts 的
+  //    ACTION_LIST），引导却是「全屏 → 调速」—— 两处对同一个产品说了
+  //    两个不同的顺序，用户在两处看到的东西对不上。
+  // 3. 全屏在**进全屏之前**是抽象的（用户还没进过全屏，不知道那是什么）；
+  //    而调速是**当场就能看到结果**的（按下去角落立刻冒出「1.1x」）。
+  //    引导要教的是「按了会发生什么」，调速这一条的效果用户当场看得到。
+  if (shortcuts.increaseSpeed && shortcuts.decreaseSpeed) {
+    // 显式传 replacements，而不是让调用方自己对返回串做 `.replace('{up}', x)`。
+    //
+    // 两种写法**渲染结果完全相同**（旧写法靠 t() 把 token 本身当替换值传给
+    // Chrome，Chrome 把 "$1" 填成 "{up}"，调用方后面对返回串做的 replace 恰好
+    // 能接上）。改成显式不是为了修 bug，是为了让**意图**直白：
+    // locale 里的 $1/$2 就是这两个键，不必让人推断「谁把 token 换成了什么」。
+    //
+    // 顺带解掉一处脆弱：旧写法要求调用方的 replace 与 t() 内部的 token
+    // 提取顺序一致，两边各写一遍 '{up}' / '{down}'，改一处忘一处就会
+    // 露出字面量。
+    //
+    // ⚠️ 这一行与下面那行**结构必须一致**：「动作名 · 键」。
+    // 原来这里是「$1 / $2 调速」—— 半句话，中文读着像把键名甩在前面，
+    // 英文更糟（"= / - to change speed" 根本不成句）。
+    //
+    // ⚠️ 键后面必须带**方向**：原来只写「调速 · = / -」，
+    // 用户分不清哪个是加速、哪个是减速 —— 两个键长得一模一样，
+    // 而按错了的代价是「速度反了」。
+    //
+    // ⚠️ **恢复 1x 的键必须教**（2026-10-22 补）。
+    //
+    // 原来引导只教「怎么调快、怎么调慢」，**没教怎么调回去** ——
+    // 而全屏之外根本没有别的出口能回到 1x（已逐条核实）：
+    // - 调速胶囊与角标都是 pointer-events: none（故意不挡用户点视频），
+    //   点不动；
+    // - 全屏控制条里的倍速菜单要**先进全屏**才够得着
+    //   （FullscreenControls 只在 fullscreenController.enter() 里创建、
+    //   退出时 unmount() —— 见 fullscreenController.ts:1208）；
+    // - manifest 里没有 contextMenus 权限，右键菜单这条路根本不存在。
+    // 于是用户按了几下 `=` 觉得太快，唯一能回到 1x 的办法是**自己猜**
+    // 「大概有个键能复位」—— 而引导是这个产品**全部**的可见入口，
+    // 唯一一次教学机会。
+    //
+    // ⚠️ 复位**并进调速那一行**，不另起一行（2026-10-22 改）。
+    //
+    // 理由是它说的是**同一个动作的第三档**（快 / 慢 / 复位），
+    // 拆成两行反而会让用户以为那是另一件事。
+    //
+    // 而「不另起一行」还有一条**硬**理由：行数是这套代码的承重不变式。
+    // 完整版 4 行 / 精简版 2 行这个数字渗在很多地方 ——
+    // readWindowMs 的阅读窗口、pickFittingText 的高度预算
+    // （240×135 的框里放不下 4 行）、runtimeStyles 里「卡片 4 行」的注释、
+    // 以及测试里那根 130px 的高度桩。多一行就要同时改掉这一串，
+    // 而它们**互相锁死**：少一行会让阅读窗口算短，多一行会让小视口
+    // 里的引导盖住播放器。
+    //
+    // ⚠️ 实测（真实 Chromium）：并进调速行之后，完整版仍是 4 行、
+    // 精简版仍是 2 行；中文那一行在 320px 的窄视口下**仍是 1 行**
+    // （卡片的 max-width 是 min(560px, 100vw - 32px)）。
+    //
+    // ⚠️ 只在用户**绑定了**这个动作时才教：用户主动把它禁用了，
+    // 引导还在教一个按了没反应的键。没绑定时这一行只剩快/慢两档。
+    //
+    // ⚠️ 有绑定时走的是**另一个 key**（hintSpeedReset），不是给 hintSpeed
+    // 多传一个替换值。原因是 chrome.i18n.getMessage 按**位置**替换：
+    // locale 里的 hintSpeed 只声明了 $1/$2，传三个替换值时 $3 会渲染成
+    // **空串** —— 界面上留下「调速 · = 加快 / - 减慢 / 」这样的尾巴。
+    // 两个 key 各自声明各自的位置占位符，才不会出现半截文案。
+    if (shortcuts.resetSpeed) {
+      labels.push(
+        t(
+          'hintSpeedReset',
+          '调速 · $1 加快 / $2 减慢 / $3 回到 1x',
+          [
+            formatShortcutForUser(shortcuts.increaseSpeed),
+            formatShortcutForUser(shortcuts.decreaseSpeed),
+            formatShortcutForUser(shortcuts.resetSpeed),
+          ],
+        ),
+      );
+    } else {
+      labels.push(
+        t('hintSpeed', '调速 · $1 加快 / $2 减慢', [
+          formatShortcutForUser(shortcuts.increaseSpeed),
+          formatShortcutForUser(shortcuts.decreaseSpeed),
+        ]),
+      );
+    }
+  }
+
   // i18n 键是 camelCase（hintFullscreen），动作 id 是小写（fullscreen），
   // 拼接时必须显式映射并给出中文回落：写错键名会静默地把**键名本身**渲染给用户
   // （曾经就这样把 "fullscreen" 当成动作名显示了出来）。
@@ -599,33 +707,6 @@ const buildGuideLabels = (shortcuts: ShortcutSettings): string[] => {
   if (shortcuts.fullscreen) {
     labels.push(
       t('hintFullscreen', '按 $1 切换网页全屏', [formatShortcutForUser(shortcuts.fullscreen)]),
-    );
-  }
-
-  if (shortcuts.increaseSpeed && shortcuts.decreaseSpeed) {
-    // 显式传 replacements，而不是让调用方自己对返回串做 `.replace('{up}', x)`。
-    //
-    // 两种写法**渲染结果完全相同**（旧写法靠 t() 把 token 本身当替换值传给
-    // Chrome，Chrome 把 "$1" 填成 "{up}"，调用方后面对返回串做的 replace 恰好
-    // 能接上）。改成显式不是为了修 bug，是为了让**意图**直白：
-    // locale 里的 $1/$2 就是这两个键，不必让人推断「谁把 token 换成了什么」。
-    //
-    // 顺带解掉一处脆弱：旧写法要求调用方的 replace 与 t() 内部的 token
-    // 提取顺序一致，两边各写一遍 '{up}' / '{down}'，改一处忘另一处就会
-    // 露出字面量。
-    //
-    // ⚠️ 这一行与上面那行**结构必须一致**：「动作名 · 键」。
-    // 原来这里是「$1 / $2 调速」—— 半句话，中文读着像把键名甩在前面，
-    // 英文更糟（"= / - to change speed" 根本不成句）。
-    //
-    // ⚠️ 键后面必须带**方向**：原来只写「调速 · = / -」，
-    // 用户分不清哪个是加速、哪个是减速 —— 两个键长得一模一样，
-    // 而按错了的代价是「速度反了」。
-    labels.push(
-      t('hintSpeed', '调速 · $1 加快 / $2 减慢', [
-        formatShortcutForUser(shortcuts.increaseSpeed),
-        formatShortcutForUser(shortcuts.decreaseSpeed),
-      ]),
     );
   }
 
@@ -651,13 +732,31 @@ export const buildGuideText = (shortcuts: ShortcutSettings): string | null => {
   // "Fullscreen f  ·  = / - speed" —— 根本不成句。
   //
   // 最后两行是**新用户必须知道、但产品里别处没写**的事：
-  // 1. 点扩展图标 = 全屏（此前只有 README 与商店文案里有）
-  // 2. 改键的入口（此前只有 README 与商店文案里有）
-  return [
-    labels.join('\n'),
-    t('hintToolbar', '点扩展图标可切换网页全屏'),
-    t('hintMore', '全部快捷键可在扩展设置里改绑（右键扩展图标 → 选项）'),
-  ].join('\n');
+  // 1. 倍速也能用鼠标点（全屏控制条里的档位菜单）
+  // 2. 改键的入口
+  //
+  // ⚠️ 第 1 行**不再复述「点扩展图标 = 全屏」**（2026-10-22 改）。
+  // 原来那行写的是「点扩展图标可切换网页全屏」，而同一张卡片的第一行
+  // 写的是「按 f 切换网页全屏」—— **两行是同一件事**。
+  // 用户读到第三行时的反应是「这不是刚说过了吗」，那一行就白占了。
+  // 而「倍速能用鼠标点」是**别处没写**的事实，且与产品名直接相关。
+  const lines = [labels.join('\n')];
+
+  // ⚠️ 「鼠标也能调速」这行**只在用户绑定了全屏键时才出现**（2026-10-22 改）。
+  //
+  // 它说的是「进全屏之后，控制条上的倍速可以点开选档位」——
+  // 用户没绑定全屏键的话，他根本进不去那个控制条，这行就是**空头支票**。
+  //
+  // 原来的「点扩展图标可切换网页全屏」是无条件显示的，可它与第一行
+  // （按 f 切换网页全屏）**说的是同一件事** —— 一张卡片里两行讲同一个动作，
+  // 浪费了一行版面，还让用户以为漏看了什么。
+  if (shortcuts.fullscreen) {
+    lines.push(t('hintToolbar', '全屏后可用鼠标点选倍速档位（0.5x–4x）'));
+  }
+
+  lines.push(t('hintMore', '全部快捷键可在扩展设置里改绑（右键扩展图标 → 选项）'));
+
+  return lines.join('\n');
 }
 
 /**
@@ -682,6 +781,53 @@ export const buildGuideTextCompact = (shortcuts: ShortcutSettings): string | nul
 };
 
 /**
+ * 引导的**极简版**：动作名压到一个词，键只列出来。
+ *
+ * ⚠️ 为什么还需要第三档（2026-10-22 加）：
+ * 精简版在**极小的嵌入框**里仍会折行。实测（真实 Chromium）：
+ * 240×135 的 iframe 里，卡片内容宽只有 166px，而
+ * 「调速 · = 加快 / - 减慢 / 0 回到 1x」在这一宽下折成 **2 行** ——
+ * 整张卡片 74.6px，而那个框的一半是 67.5px。
+ *
+ * ⚠️ 不是简单地把字删短就完事 —— 省掉的必须是**冗余**，不是**信息**。
+ * 试过 `= / - / 0`（只剩键），它确实放得下，但用户看到的是三个光秃秃的符号，
+ * 不知道那是在调速。所以保留**一个词**的动作名（「调速」/「切换全屏」），
+ * 砍掉的是「加快 / 减慢 / 回到 1x」这些**方向说明** ——
+ * 那一层在极小的框里可以靠试出来，而「这三个键是干什么的」不能。
+ *
+ * ⚠️ 实测（166px 内容宽）：`调速 · = / - / 0` 与 `切换全屏 · f` 都是 1 行。
+ *
+ * ⚠️ 舍弃的仍然只是**视觉**文字，不是信息：
+ * 读屏播报走的仍是完整版（live region 不占版面）。
+ *
+ * ⚠️ 与精简版一样，键必须用**用户当前真实的绑定**渲染。
+ */
+export const buildGuideTextTiny = (shortcuts: ShortcutSettings): string | null => {
+  const labels: string[] = [];
+
+  if (shortcuts.increaseSpeed && shortcuts.decreaseSpeed) {
+    const keys = [shortcuts.increaseSpeed, shortcuts.decreaseSpeed];
+    if (shortcuts.resetSpeed) {
+      keys.push(shortcuts.resetSpeed);
+    }
+
+    labels.push(
+      t('hintSpeedTiny', '调速 · $1', [
+        keys.map((key) => formatShortcutForUser(key)).join(' / '),
+      ]),
+    );
+  }
+
+  if (shortcuts.fullscreen) {
+    labels.push(
+      t('hintFullscreenTiny', '切换全屏 · $1', [formatShortcutForUser(shortcuts.fullscreen)]),
+    );
+  }
+
+  return labels.length === 0 ? null : labels.join('\n');
+};
+
+/**
  * 首次使用引导：一次性、不打扰。
  *
  * 装完扩展后页面上什么都没有是这个产品最大的缺口——整个界面只有键盘，
@@ -691,7 +837,9 @@ export const buildGuideTextCompact = (shortcuts: ShortcutSettings): string | nul
  * 三条自我约束：
  * - 只在播放持续到 WATCH_DELAY 之后才考虑出现（自动播放的广告位不该触发引导）
  * - **看得见**的视频才算（不可见的自动播放视频不算，见 isVisibleToUser）
- * - 落盘「已展示」的判据是「用户读过了」，不是「弹出来了」（见 readWindowMs）
+ * - 「已展示」在**显示的当下**就落盘（见 reveal）：
+ *   「显示过」就是「显示过」—— 反复弹同一条说明是在浪费用户的屏幕；
+ *   而「读完」仍然有意义，它管的是**失败计数**（见 completeRead）
  *
  * ⚠️ 第一条自我约束原先是**错的**：它以为「播够 2.5 秒」就能排除自动播放。
  * 装饰性预览视频同样会播超过 2.5 秒，于是引导会在长文的顶部凭空弹出，
@@ -712,17 +860,28 @@ export class FirstRunHint {
    * 「用户读过了」的计时器。
    *
    * 提示显示之后开始计时：这段时间里没被打断、页面又在前台，
-   * 才算「用户真的看到了这条引导」，这时候才允许写「已展示」。
+   * 才算「用户真的看到了这条引导」——
+   * 于是「连续关闭」的计数清零（他不是拒绝，只是读了）。
    */
   private readTimer: number | null = null;
   /** 提示此刻是不是还挂在屏幕上。 */
   private hintVisible = false;
+  /**
+   * 「已展示」这一条**落过盘没有**。
+   *
+   * ⚠️ 落盘有两个触发点（显示的当下、按扩展的键），而它们可能在同一轮里
+   * 都发生（提示正显示着，用户按了 `=`）。写两次内容一样、后果一样，
+   * 但「落盘次数」这个断言就没有意义了 —— 所以这里记住「写过了」。
+   */
+  private shownPersisted = false;
   /**
    * 用户按下过扩展自己的快捷键 = 他接受了这个功能。
    *
    * ⚠️ 这是「不记失败」的判据，而不是「读过」的判据：
    * 接受 ≠ 读过（他可能先按了键才读到那行字）。
    * 「读过」由阅读窗口（readWindowMs）判定。
+   * ⚠️ 但「接受」**是**落盘「已展示」的判据之一（见 dismiss 的 accepted 分支）：
+   * 他已经会用了，教他第二遍是浪费他的屏幕。
    */
   private accepted = false;
   /**
@@ -765,20 +924,18 @@ export class FirstRunHint {
    */
   private unsubscribeHintState: (() => void) | null = null;
   /**
-   * 订阅全屏背板增删的观察者。
+   * 「网页全屏会话」的观察者（共享判据，见 fullscreenSession.ts）。
    *
    * 引导与控制条**都在视口右下角**：实测引导的矩形 (901,676)-(1264,784)
    * 把控制条的退出、倍速、音量三个按钮整个包在里面 —— 引导在视觉上
    * 压住了控制条。所以引导必须知道「此刻是不是在网页全屏里」。
-   */
-  private fullscreenWatcher: BodyObserver | null = null;
-  /**
-   * 上一次观察到的全屏状态。
    *
-   * 只对「进出全屏」这个**变化**做反应：页面自己往 body 里塞东西也会
-   * 触发观察者回调，那些与全屏无关。
+   * ⚠️ 判据是**控制器的账本**（写在目标视频身上的那个 class），
+   * 不是「全屏背板在不在 DOM 里」—— 后者是**形状代理**：
+   * css-cover 回退、或 release() 在 state.video 为空时提前返回，
+   * 都会让背板赖在 DOM 里，于是判据与事实对不上。
    */
-  private fullscreenActive = false;
+  private fullscreenSession: FullscreenSession | null = null;
   /**
    * 引导因为「此刻在网页全屏里」而没能弹出的那条视频。
    *
@@ -983,6 +1140,11 @@ export class FirstRunHint {
       .catch(() => {
         this.eligible = false;
       });
+
+    // ⚠️ 补记必须在**监听器挂上之后**做：否则「补记期间刚好来了 play 事件」
+    // 会与补记各算一次（两次都无害，scheduleReveal 一次只认一条，
+    // 但顺序会变得不可预测 —— 补记要**后**做，让 play 事件先占位）。
+    this.catchUpAlreadyPlayingVideos();
   }
 
   private handlePlay(event: Event) {
@@ -1017,6 +1179,9 @@ export class FirstRunHint {
     }
 
     this.watchedVideo = video;
+    // ⚠️ 目标视频换了 → 全屏会话的观察器要跟着挪过去
+    // （class 观察器盯的是**那一条**视频身上的标记）。
+    this.fullscreenSession?.refresh();
     this.delayTimer = window.setTimeout(() => {
       this.delayTimer = null;
       void this.reveal(this.watchedVideo);
@@ -1034,6 +1199,62 @@ export class FirstRunHint {
    * 兜底路径（接缝没接上时）必须**保守**：宁可多提示一次，
    * 也不能「永远不出现」—— 引导是这个产品**全部**的可见入口。
    */
+  /**
+   * **补记**：把「我们开始监听之前就已经在播」的视频算进来。
+   *
+   * ⚠️ 为什么必须有这一步：扩展注入在 `document_start`，
+   * 但它要**等设置加载完**才挂上 `play` 监听器（引导得照着真实绑定渲染）。
+   * 页面脚本在这中间调 `video.play()`，那次事件我们**根本没听见** ——
+   * 于是引导**永远不出现**。
+   *
+   * 实测（真实 Chromium，扩展冷启动）：页面在解析期就 `play()` →
+   * 视频播到第 4 秒，引导**始终没有出现**（等了 15 秒）。
+   *
+   * ⚠️ 这个洞最深的地方在于**它咬得最狠的时候正是引导最该出现的时候**：
+   * 首次安装时扩展是**冷的**（要装包、读设置、初始化模块），
+   * 而「用户刚打开一个课程页、视频自动开始播」正是最典型的首见场景。
+   * 也就是说：**越是新用户，越看不到这条引导**。
+   *
+   * ⚠️ 注册表对同一个竞态**早就有**解法（`catchUpSiteStartedVideos`：
+   * 「此刻正在播的视频一定是站点自己开的」）——
+   * 引导当时没跟上，于是同一个洞在两个模块里各开一次。
+   *
+   * ⚠️ 判据与 `handlePlay` **完全一致**：装饰性自动播的跳过（不打扰），
+   * 其余的照常排 2.5 秒的计时器。
+   */
+  private catchUpAlreadyPlayingVideos(): void {
+    const videos = this.options.listVideos?.() ??
+      Array.from(document.querySelectorAll('video'));
+
+    const playing = videos.filter((video) => video.isConnected && !video.paused);
+    if (playing.length === 0) {
+      return;
+    }
+
+    // ⚠️ 挑「用户最可能在看的那一个」：在视口里占地最大的。
+    // 一个页面上同时有几个视频在播时，随便挑一个会把引导对着
+    // 用户没在看的那个视频说。
+    const area = (video: HTMLVideoElement) => {
+      const rect = this.measureRect(video);
+      return rect.width * rect.height;
+    };
+    const ordered = [...playing].sort((a, b) => area(b) - area(a));
+
+    for (const video of ordered) {
+      // 与 handlePlay 同序：先记「它在播」，再判要不要打扰。
+      this.playingVideos.add(video);
+
+      if (this.isDecorativeAutoplay(video)) {
+        continue;
+      }
+
+      // ⚠️ scheduleReveal 一次只认一条（已有计时器就直接返回），
+      // 所以这里找到第一个合适的就够了。
+      this.scheduleReveal(video);
+      return;
+    }
+  }
+
   private isDecorativeAutoplay(video: HTMLVideoElement): boolean {
     // ⚠️ 判定规则在 `src/content/ambientPreview.ts` —— **只有一份**。
     //
@@ -1254,12 +1475,41 @@ export class FirstRunHint {
       return fullText;
     }
 
-    // 换成精简版后**再量一次**：精简版也未必放得下（极小的框）。
+    // ⚠️ 精简版也要**真的再量一次**，而且量不过就继续降级（2026-10-22 改）。
+    //
+    // 这里原来是一段**假守卫**：量了，但两个分支都 `return compactText` ——
+    // 量出来的结果被直接丢掉。注释写着「精简版也未必放得下（极小的框）」，
+    // 而代码对「放不下」什么也没做。于是「量了也没用」这件事
+    // 在读代码时**完全看不出来**（两行都是同一个 return）。
+    //
+    // 它是个真缺陷：复位键并进调速行之后，精简版第 1 行在 240px 宽的框里
+    // 折成 2 行，整张卡片 74.6px —— 而那个框的一半是 67.5px。
+    // 实测（真实 Chromium，240×135 的 iframe）：引导占了 55% 的高度，
+    // 已经不是「贴片」了。
+    //
+    // 降级链（每一档都要**量**，不靠估算）：
+    //   完整版 → 精简版 → 极简版（只有键，没有动作名）→ 精简版（认了）
+    // 最后一档是「都放不下」的兜底：宁可盖住一点，也不能什么都不显示 ——
+    // 引导是这个产品**全部**的可见入口。
     const compactPrepared = this.pill.prepare(compactText);
-    if (compactPrepared && !this.fitsInViewport(compactPrepared)) {
+    if (!compactPrepared || this.fitsInViewport(compactPrepared)) {
       return compactText;
     }
 
+    // 极简版：去掉「调速 ·」这类动作名，只留键本身。
+    // ⚠️ 它不是「更短的文案」，是**另一份文案**（buildGuideTextTiny）——
+    // 在 166px 的内容宽里，动作名正好把一行挤成两行。
+    const tinyText = buildGuideTextTiny(shortcuts);
+    if (tinyText) {
+      const tinyPrepared = this.pill.prepare(tinyText);
+      if (tinyPrepared && this.fitsInViewport(tinyPrepared)) {
+        return tinyText;
+      }
+    }
+
+    // 连极简版都放不下 → 认了，显示精简版。
+    // 这时用户面对的是一个真的小到放不下任何文案的框，
+    // 而「显示一句被裁掉的话」远好过「什么都不显示」。
     return compactText;
   }
 
@@ -1448,6 +1698,24 @@ export class FirstRunHint {
     this.eligible = false;
     this.hintVisible = true;
     this.pendingRevealVideo = null;
+
+    // ⚠️ 「已展示」在**显示的当下**就落盘 —— 不是等「读完」。
+    //
+    // 为什么不是「读完」：旧判据是「读完才落盘」（阅读窗口走完才写），
+    // 于是有两个洞：
+    // 1. 用户**没读完就关掉**引导 → 那个键**根本不存在** →
+    //    设置页的「重新显示使用引导」执行 removeValue 时，**删一个不存在的键
+    //    不触发 storage.onChanged**（实测：events 为空）→
+    //    已经打开的标签页里的引导**不会回来**，而按钮当场显示「已重置」。
+    //    承诺兑现不了。
+    // 2. 没读成的用户**每次都可能被重新提示**（键一直没落盘）：
+    //    引导是这个产品唯一的可见入口，反复弹同一条说明是在浪费他的屏幕。
+    //
+    // 现在「显示过」就是「展示过」：显示出来的那一秒就落盘。
+    // 「读完」仍然有意义 —— 它管的是**失败计数**（见 completeRead）：
+    // 读完了 = 他不是拒绝，计数清零；没读完就关掉 = 记一次失败。
+    this.persistShown();
+
     // ⚠️ 阅读窗口按**这一档实际显示的行数**算（精简版 2 行 / 完整版 4 行）：
     // 「读过」的判据必须与用户看到的字数对得上。
     this.readWindow = readWindowMs(displayText);
@@ -1643,7 +1911,36 @@ export class FirstRunHint {
   }
 
   /**
-   * 用户真的读过了：这才允许写「已展示」。
+   * 落盘「已展示」——**只落一次**。
+   *
+   * ⚠️ 为什么要有「只落一次」这道闸：
+   * 落盘有两个触发点（显示的当下、按扩展的键），而它们可能在同一轮里
+   * 都发生（提示正显示着，用户按了 `=`）。写两次内容一样、后果一样，
+   * 但「落盘次数」这个断言就没有意义了 —— 而它是守「显示即落盘」这条
+   * 契约的那条守卫。重复写还会白白多一次存储往返。
+   *
+   * ⚠️ 落盘失败**不**清这个标记：失败了就该重试（下一轮还会再写），
+   * 而「写过了」这个记忆只在**这一轮**里有效。
+   */
+  private persistShown() {
+    if (this.shownPersisted) {
+      return;
+    }
+
+    this.shownPersisted = true;
+    void this.options.markShown().catch(() => {
+      // 落盘失败只会导致引导多出现一次，不值得打断用户。
+      this.shownPersisted = false;
+    });
+  }
+
+  /**
+   * 用户真的**读完了**。
+   *
+   * ⚠️ 「已展示」**不在这里**落盘了 —— 它在**显示的当下**就写了
+   * （见 reveal()）。这里负责的是「读完」那部分语义：
+   * 他读完了 = 他**不是拒绝**这个引导 → 「连续关闭」的计数清零、
+   * 冷却撤掉（设置页上那句「已关闭 N 次」不该留着一个读过的人的账）。
    *
    * ⚠️ 这里**不**把 hintVisible 清掉：提示读完之后仍然挂在屏幕上，
    * 用户随后点一下页面仍然是「他看过之后主动关掉」——
@@ -1655,15 +1952,9 @@ export class FirstRunHint {
     this.releaseClaim();
 
     try {
-      await this.options.markShown();
-    } catch {
-      // 落盘失败只会导致下次再提示一次，不值得打断用户。
-    }
-
-    try {
       await this.options.resetFailedAttempts?.();
     } catch {
-      // 同上。
+      // 落盘失败只会导致下次再提示一次，不值得打断用户。
     }
   }
 
@@ -1672,7 +1963,14 @@ export class FirstRunHint {
    *
    * ⚠️ 判据是「他**接受**了这个功能吗」，不是「他读过了吗」：
    * 按下扩展自己的键 = 他要用这个扩展了，那不是拒绝。
-   * 「读过」只决定「已展示」什么时候落盘。
+   * 「读过」只决定「失败计数」什么时候清零。
+   *
+   * ⚠️ 失败时「已展示」会被**改回 false**（由 settings.ts 的
+   * recordFirstRunHintFailedAttempt 负责）：用户拒绝之后，引导**可以**
+   * 再出现一次（冷却一过还有一次机会）。
+   * 键**存在**（哪怕值是 false）时，设置页的「重新显示使用引导」
+   * 删它一定触发 storage.onChanged —— 删一个不存在的键不触发（实测：
+   * events 为空），那会让按钮当场显示「已重置」而引导不回来。
    */
   private async recordFailedAttempt() {
     if (this.accepted) {
@@ -1716,13 +2014,16 @@ export class FirstRunHint {
     this.releaseClaim();
 
     if (reason === 'accepted') {
-      // 「用户读过了并接受」：按下扩展自己的键 = 他会用这个扩展了。
-      // 这时候才允许写「已展示」—— 落盘的判据是「用户读过了」，
-      // 用户还没看到引导就按了键，那唯一一次机会不该在这里被烧掉。
+      // 「用户接受了这个扩展」：按下扩展自己的键 = 他**会用**它了。
+      //
+      // ⚠️ 这时候落盘「已展示」是**对的**：判据是「他会用了」，
+      // 而不是「他读过了引导」—— 他既然按对了键、倍速真的变了，
+      // 就说明他知道这个扩展是干什么的；再冒一条教学说明是在浪费他的屏幕。
       //
       // ⚠️ `shownThisSession` 是补充条件：提示显示过、随后因为进了全屏
       // 而退场，用户这时才按下 `f` —— 那依然是「他接受了这个扩展」。
       this.accepted = true;
+      this.persistShown();
       if (wasVisible || this.shownThisSession) {
         this.pendingRevealVideo = null;
         void this.completeRead();
@@ -1734,10 +2035,16 @@ export class FirstRunHint {
       return;
     }
 
-    // 用户把提示关掉了，但没读：这次机会还在（没写「已展示」），
+    // 用户把提示关掉了，但没读：「已展示」在**显示的当下**就已经落盘了
+    // （见 reveal），所以这一次机会**用掉了**；
     // 「连续失败」的计数只在**主动关掉**时 +1 ——
     // 键盘上随手一按是碰键盘，不是拒绝；
     // 页面上误点一下也不算（见上面的判据）。
+    //
+    // ⚠️ 连续关掉三次会进入冷却，冷却一过还有一次机会
+    // （见 settings.ts 的 recordFirstRunHintFailedAttempt：
+    // 它把「已展示」改回 false —— 否则冷却期一过，引导也不会再出现，
+    // 而设置页正写着「冷却中，X 之后会再次出现」）。
     this.pendingRevealVideo = null;
     if (reason === 'dismissed' || reason === 'refused') {
       void this.recordFailedAttempt();
@@ -1765,6 +2072,47 @@ export class FirstRunHint {
   }
 
   /**
+   * 这个按键是不是「在页面里移动焦点」。
+   *
+   * ⚠️ 这类键**不能**被当成「用户碰了一下键盘」（2026-10-22 修）。
+   *
+   * 实测（真实 Chromium + 真实扩展）的故障形状：
+   * 键盘用户想把那个「×」关掉 → 他得先 **Tab 过去** →
+   * 那次 Tab 落在页面里的视频上 → 引导把这次按键当成「用户碰了一下键盘」
+   * → 提示当场消失 → **那个按钮永远按不到**。
+   *
+   * 而那个「×」是「我故意关掉引导」的**唯一**正路
+   * （引导节点本身是 pointer-events: none 且 aria-hidden，
+   * 用户点不到它、也选不中它）。
+   *
+   * 于是这条唯一的路对键盘用户等于不存在 ——
+   * 一个**专门为键盘用户准备的产品**，唯一的退出入口走不通。
+   *
+   * ⚠️ 为什么范围是这些键：它们表达的是「我要在页面里找别的东西」，
+   * 不是「我看完了要走」。而 Enter / Space / Esc 表达的是「我要操作当前焦点的东西」
+   * —— 那些该照常处理。
+   *
+   * ⚠️ 也**不能**把所有键都放过：`Escape` 是用户表达「这东西我不要了」的
+   * 标准动作，它必须继续关掉引导。
+   */
+  private isNavigationKey(event: KeyboardEvent): boolean {
+    switch (event.key) {
+      case 'Tab':
+      case 'ArrowUp':
+      case 'ArrowDown':
+      case 'ArrowLeft':
+      case 'ArrowRight':
+      case 'Home':
+      case 'End':
+      case 'PageUp':
+      case 'PageDown':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
    * 键盘事件：分清「按了扩展的键」与「只是碰了一下键盘」。
    *
    * ⚠️ 这两件事在产品上是**不同的事件**，原来没区分：
@@ -1777,6 +2125,17 @@ export class FirstRunHint {
     // 不挡住的话，用户 Tab 到「×」上还没按下去，引导就自己消失了 ——
     // 那按钮就永远按不到。
     if (this.isCloseButtonEvent(event)) {
+      return;
+    }
+
+    // ⚠️ 导航键（Tab / 方向键 …）**不打断**引导（2026-10-22 修）。
+    //
+    // 键盘用户要够到那个「×」，必须先 Tab 过去 —— 而那次 Tab
+    // 会让引导当场消失，那个按钮就永远按不到（见 isNavigationKey）。
+    //
+    // ⚠️ 注意这里**只放行导航键**，不放行「碰键盘」：其余按键
+    // 仍然照常 dismiss（那是「用户碰了一下键盘」的语义）。
+    if (this.isNavigationKey(event)) {
       return;
     }
 
@@ -1837,23 +2196,80 @@ export class FirstRunHint {
     button.style.setProperty('display', 'inline-flex', 'important');
     button.style.setProperty('align-items', 'center', 'important');
     button.style.setProperty('justify-content', 'center', 'important');
-    button.style.setProperty('width', '20px', 'important');
-    button.style.setProperty('height', '20px', 'important');
+    // ⚠️ 尺寸 20 → 24px（2026-10-22 改）。
+    //
+    // 20px 是个 15px 的 × 挤在 20px 的盒子里 —— 实测截图里它就是一个
+    // 几乎看不见的灰色小点。而这个按钮是「我故意关掉引导」的**唯一**正路
+    // （引导节点本身 pointer-events: none 且 aria-hidden，用户点不到它）。
+    //
+    // 24px 是 WCAG 2.5.8（Target Size Minimum，AA）那条 24×24 的下限 ——
+    // 它本来就在那个量级上，不必为了「看起来更精致」压到 20。
+    button.style.setProperty('width', '24px', 'important');
+    button.style.setProperty('height', '24px', 'important');
     button.style.setProperty('padding', '0', 'important');
     button.style.setProperty('border', 'none', 'important');
     button.style.setProperty('border-radius', '50%', 'important');
     button.style.setProperty('background-color', 'transparent', 'important');
     button.style.setProperty('color', 'inherit', 'important');
     button.style.setProperty('font-family', 'inherit', 'important');
-    button.style.setProperty('font-size', '15px', 'important');
+    // ⚠️ 字号 15 → 16px：15px 的 × 在深色卡片上笔画太细，
+    // 实测那张截图里它几乎是糊的。
+    button.style.setProperty('font-size', '16px', 'important');
     button.style.setProperty('line-height', '1', 'important');
     button.style.setProperty('font-weight', '600', 'important');
     button.style.setProperty('cursor', 'pointer', 'important');
-    button.style.setProperty('opacity', '0.7', 'important');
+    // ⚠️ 默认态的 opacity 0.7 → 0.85（2026-10-22 改）。
+    //
+    // 0.7 叠在 #f8fafc 上、与卡片底色 rgba(15,23,42,.88) 合成之后，
+    // 实测截图里那个 × 是**灰**的 —— 与正文的对比度明显不够，
+    // 而它恰恰是唯一可点的东西。
+    // 悬停与聚焦时会升到 1（见 runtimeStyles.ts 的 #vsc-first-run-hint-close）。
+    button.style.setProperty('opacity', '0.85', 'important');
     // ⚠️ 外壳是 pointer-events: none，按钮必须自己打开 ——
     // 否则它看得见、摸不着。
     button.style.setProperty('pointer-events', 'auto', 'important');
     button.style.setProperty('visibility', 'visible', 'important');
+
+    // ⚠️ 焦点环必须写成**内联 important**，不能靠样式表里的
+    // `#vsc-first-run-hint-close:focus-visible { outline: ... }`。
+    //
+    // 根因：上面那句 `all: initial !important`（隔离机制，见 runtimeStyles.ts
+    // 「页面级提示的样式隔离」）把 outline / box-shadow **整个重置**了，
+    // 而它是**内联**的 important —— 样式表里任何规则都赢不了它
+    // （实测：`#b:focus { outline: 3px solid red !important }` 在
+    // `style="all: initial !important"` 面前依然输）。
+    //
+    // 所以焦点环只能**跟着焦点状态**写成内联 important。
+    //
+    // ⚠️ 为什么用 `:focus` 而不是 `:focus-visible`：
+    // 这个按钮是「点它就关掉引导」的，鼠标点下去时**同时**会聚焦它 ——
+    // 如果用 :focus-visible，鼠标点下去的瞬间会出现一圈焦点环，
+    // 而提示紧接着就消失了，那圈环根本来不及被看见，纯属闪烁。
+    // 用 :focus 则：键盘 Tab 过去 → 有环；鼠标点下去 → 提示随即消失，
+    // 不会有「点完了还留一圈环」的鬼影。
+    const setFocusRing = (on: boolean) => {
+      button.style.setProperty(
+        'outline',
+        on ? '2px solid #f8fafc' : 'none',
+        'important',
+      );
+      button.style.setProperty('outline-offset', '1px', 'important');
+    };
+
+    button.addEventListener('focus', () => setFocusRing(true));
+    button.addEventListener('blur', () => setFocusRing(false));
+    // ⚠️ 未聚焦时的状态要**显式写出来**，不能靠上面那句 `all: initial`
+    // 顺带重置掉 outline。
+    //
+    // 「没聚焦 = 没有环」是一条**契约**（常驻的圈会让人以为它一直被选中），
+    // 而契约应该写在代码里，而不是寄望于某个简写重置的副作用 ——
+    // 哪天有人把 `all: initial` 改成逐条声明，环就常驻了。
+    setFocusRing(false);
+    // ⚠️ 挂上时它可能**已经是**焦点（比如站点脚本抢焦点）——
+    // 那时候 focus 事件不会再触发，焦点环就漏了。
+    if (document.activeElement === button) {
+      setFocusRing(true);
+    }
 
     button.addEventListener('click', (event) => {
       event.preventDefault();
@@ -1940,6 +2356,11 @@ export class FirstRunHint {
     this.shownThisSession = false;
     this.accepted = false;
     this.readWindowElapsed = false;
+    // ⚠️ 「已展示」这一轮**落过盘**的记号也要清：
+    // 否则下一次显示时 persistShown() 会以为「写过了」而跳过 ——
+    // 于是这一轮重来的引导**不会**把标记写回去，
+    // 下一个标签页/下一次刷新又会被重新提示一遍。
+    this.shownPersisted = false;
     // 资格重新算一次（下次 reveal() 会去查「展示过没有」「在不在冷却期」）。
     this.eligible = null;
 
@@ -1969,66 +2390,44 @@ export class FirstRunHint {
   /**
    * 此刻是不是在网页全屏里。
    *
-   * ⚠️ 判据是**全屏背板在不在 DOM 里**，不是「控制条在不在」：
-   * 控制条只是全屏 UI 的一个零件，它缺席不等于功能缺席（见 speedToast.ts
-   * 里同一个判据的说明）。背板才是事实 —— enter 时创建、exit 时被摘掉。
+   * ⚠️ 判据是**共享的会话账本**（fullscreenSession.ts），不是「全屏背板在不在
+   * DOM 里」：那是**形状代理** —— css-cover 回退、或 release() 在 state.video
+   * 为空时提前返回，都会让背板赖在 DOM 里，于是判据与事实对不上
+   * （会话已经结束，判据却说「还在全屏里」）。
    */
   private isFullscreenActive(): boolean {
-    return document.getElementById(FULLSCREEN_OVERLAY_ID) !== null;
+    return this.fullscreenSession?.isActive() ?? false;
   }
 
   /**
-   * 订阅全屏背板的增删。
+   * 订阅「网页全屏会话」的开始与结束。
    *
    * ⚠️ 必须自己观察：退出全屏有三条路径（键盘 Esc、控制条上的退出按钮、
    * 工具栏图标），只有键盘那条会经过运行时 —— 控制条那条走的是
    * FullscreenController.exit()，运行时根本不知道「全屏结束了」。
+   *
+   * ⚠️ 观察器挂在 reveal() 里而不是 start() 里：document_start 时 body
+   * 可能还不存在（挂不上就等于没挂），而 reveal 一定发生在有 body 之后。
    */
   private observeFullscreenSurface() {
-    if (this.fullscreenWatcher || !document.body || !document.documentElement) {
+    if (this.fullscreenSession || !document.body || !document.documentElement) {
       return;
     }
 
-    this.fullscreenWatcher = observeBody({
-      // 只看 body 的**直接子节点**：body 上的其它增删（站点自己塞个广告位）
-      // 与全屏无关。
-      bodyInit: { childList: true },
-      onBodyMutation: () => this.reconcileFullscreen(),
-      // ⚠️ <html> 这一层才是「背板增删」真正会发生的地方 ——
-      // 网页全屏背板挂在 <html> 上（fullscreenController.ensureOverlay →
-      // mountViewportRoot，见 viewportRoot.ts），它不在 body 的子树里。
-      // 顺带：body 被换掉也是这一层的事，bodyObserver 会自动把 body 级
-      // 观察器重新挂到新 body 上。
-      onHostMutation: () => this.reconcileFullscreen(),
+    this.fullscreenSession = watchFullscreenSession({
+      // 判据要回答的是「**这个**视频是不是正在全屏里」——
+      // 而引导关心的是它正在讲的那条视频。
+      getVideo: () => this.watchedVideo,
+      // ⚠️ 只在**变化**时回调（幂等）：页面自己改 DOM 不会把引导叫醒。
+      onChange: (active) => {
+        if (active) {
+          this.onEnterFullscreen();
+          return;
+        }
+
+        this.onExitFullscreen();
+      },
     });
-
-    // 起点必须与事实对齐：观察者可能是在用户**已经**进了全屏之后才挂上的，
-    // 此时真实状态已经是「在全屏里」。若这里留成 false，等到退出全屏时
-    // 「false → false」不算变化，补弹的那次信号就永远等不到。
-    this.fullscreenActive = this.isFullscreenActive();
-  }
-
-  /**
-   * 把「此刻该不该有引导」对齐到「此刻在不在全屏里」这个事实。
-   *
-   * 它是**幂等**的：同一个状态反复调用不会来回抖。
-   */
-  private reconcileFullscreen() {
-    const fullscreen = this.isFullscreenActive();
-
-    if (fullscreen === this.fullscreenActive) {
-      // 全屏状态没变 —— 这次变化与全屏无关（页面自己改了 body 的子节点）。
-      return;
-    }
-
-    this.fullscreenActive = fullscreen;
-
-    if (fullscreen) {
-      this.onEnterFullscreen();
-      return;
-    }
-
-    this.onExitFullscreen();
   }
 
   /**
@@ -2095,8 +2494,8 @@ export class FirstRunHint {
     this.visibilityObserver?.disconnect();
     this.visibilityObserver = null;
     this.pendingVisibilityVideo = null;
-    this.fullscreenWatcher?.disconnect();
-    this.fullscreenWatcher = null;
+    this.fullscreenSession?.dispose();
+    this.fullscreenSession = null;
     this.closeButtonWatcher?.disconnect();
     this.closeButtonWatcher = null;
     this.closeButton = null;
@@ -2134,10 +2533,22 @@ export const createFirstRunHint = (
    * 对同一条视频给出相反的结论。
    */
   isAmbientPreview?: (video: HTMLVideoElement) => boolean,
+  /**
+   * 「这一层文档里有哪些视频」的枚举入口。
+   *
+   * ⚠️ 由 **VideoRegistry** 提供：「本 frame 拥有哪些视频」只有一份口径
+   * （shadow root 下钻、子 iframe 不下钻）。
+   *
+   * 它的用处是**补记**：扩展挂上 `play` 监听器之前站点就把视频播起来时，
+   * 那次 play 事件我们没听见，引导会永远不出现（见
+   * catchUpAlreadyPlayingVideos）。
+   */
+  listVideos?: () => HTMLVideoElement[],
 ) =>
   new FirstRunHint({
     getShortcuts,
     isAmbientPreview,
+    listVideos,
     wasShown: wasFirstRunHintShown,
     markShown: markFirstRunHintShown,
     // 失败计数与冷却时间戳都放在 shared/settings 里 —— 设置页的

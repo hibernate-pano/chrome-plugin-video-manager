@@ -220,12 +220,36 @@ export const saveSettings = async (settings: PersistedSettings): Promise<void> =
  * 存在 storage.local 而不是 sync：这是「这台设备上打扰过没有」的设备级状态。
  * 放 sync 会让它在用户所有设备间同步，等于在新设备上少提示一次；
  * 而且它是纯内容脚本状态，没必要占用 sync 配额。
+ *
+ * ⚠️ 只有**严格等于 true** 才算「展示过」——
+ * 这个键有第三个取值：**false**（「展示过，但用户拒绝了，冷却到期后还有一次机会」，
+ * 见 recordFirstRunHintFailedAttempt）。读成 false 时，
+ * 引导**可以**再出现一次。
  */
 export const wasFirstRunHintShown = async (): Promise<boolean> =>
   (await getValue<unknown>('local', FIRST_RUN_HINT_KEY)) === true;
 
+/**
+ * 记下「引导已经展示过了」。
+ *
+ * ⚠️ 落盘的**时机**是「显示的当下」，不是「读完」——
+ * 见 firstRunHint.ts 里 reveal() 的落盘那一段。
+ */
 export const markFirstRunHintShown = async (): Promise<void> => {
   await setValue('local', FIRST_RUN_HINT_KEY, true);
+};
+
+/**
+ * 「展示过，但用户拒绝了」—— 冷却到期之后还有一次机会。
+ *
+ * ⚠️ 为什么写 **false** 而不是**删掉**这个键：
+ * 设置页的「重新显示使用引导」靠的是 `removeValue` 触发 storage.onChanged ——
+ * 而**删一个不存在的键不会触发事件**（实测：events 为空），
+ * 于是「已打开的标签页里的引导不会回来」，按钮却当场显示「已重置」。
+ * 键**存在**（哪怕值是 false）时，删除一定会触发事件。
+ */
+export const markFirstRunHintDismissed = async (): Promise<void> => {
+  await setValue('local', FIRST_RUN_HINT_KEY, false);
 };
 
 /**
@@ -275,10 +299,23 @@ export const readFirstRunHintFailedAttempts = async (): Promise<number> => {
  *
  * ⚠️ 计数与冷却必须一起做：只记计数而不记冷却时间，冷却就无从判断到期没有；
  * 只记冷却而不清计数，冷却结束后又会立刻被旧计数顶回冷却里。
+ *
+ * ⚠️ 「已展示」标记要**改回 false**（不是删掉）：
+ * 「已展示」现在是在**显示的当下**落盘的（见 firstRunHint.ts 的 reveal），
+ * 于是用户主动关掉引导之后那个标记仍然是 true ——
+ * 引导**再也不会出现**（被「已展示」挡住），
+ * 而设置页正写着「已关闭 1 次（再关闭 2 次将暂时不再出现）」。那是界面在撒谎。
+ * 改回 false 之后，「关掉 N 次 → 冷却 → 冷却过了还有一次机会」这条链才是真的。
+ *
+ * ⚠️ 为什么**不能删掉**这个键：删一个不存在的键不触发 storage.onChanged
+ * （实测：events 为空）→ 设置页的「重新显示使用引导」会当场显示「已重置」，
+ * 而已打开的标签页里的引导**不会回来**。键存在（哪怕值是 false）时，
+ * 删除一定触发事件。
  */
 export const recordFirstRunHintFailedAttempt = async (): Promise<void> => {
   const next = (await readFirstRunHintFailedAttempts()) + 1;
   await setValue('local', FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY, next);
+  await markFirstRunHintDismissed();
 
   if (next >= FIRST_RUN_HINT_MAX_FAILED_ATTEMPTS) {
     await setValue('local', FIRST_RUN_HINT_COOLDOWN_KEY, Date.now() + FIRST_RUN_HINT_COOLDOWN_MS);
@@ -289,6 +326,24 @@ export const recordFirstRunHintFailedAttempt = async (): Promise<void> => {
 export const clearFirstRunHintFailures = async (): Promise<void> => {
   await setValue('local', FIRST_RUN_HINT_FAILED_ATTEMPTS_KEY, 0);
   await removeValue('local', FIRST_RUN_HINT_COOLDOWN_KEY);
+};
+
+/**
+ * 记下「用户已经**会用了**这个扩展」—— 首次引导的落盘判据。
+ *
+ * ⚠️ 判据为什么从「用户**读过**引导」改成「用户**会用**这个扩展」：
+ * 按下扩展自己的键 = 他知道这个扩展存在、也知道它能干什么。
+ * 这时候再弹一份教学说明，是在教一个已经会的人 ——
+ * 而那唯一一次教学机会占掉的是这个产品**唯一**的可见入口。
+ *
+ * ⚠️ 为什么连冷却一起清掉：「已展示」与「连续失败」是两件事，
+ * 但它们对设置页说的是同一件事（「引导还会不会再出现」）。
+ * 只写「已展示」却留着冷却，设置页就会写「冷却中，X 之后会再次出现」——
+ * 而冷却到期之后它**不会**再出现（已被「已展示」挡住）。那是界面在撒谎。
+ */
+export const markFirstRunHintAccepted = async (): Promise<void> => {
+  await markFirstRunHintShown();
+  await clearFirstRunHintFailures();
 };
 
 /**
@@ -436,9 +491,10 @@ export const subscribeToFirstRunHintState = (
     }
 
     // ⚠️ 只有**删除**才算「重置」：
-    // markFirstRunHintShown 把标记写成 true（那是「用户读过了」），
-    // clearFirstRunHintFailures 把失败计数写成 0（那是「用户读过了」的清理）——
-    // 这两个都不是「请再来一次」，不能当成重置信号。
+    // markFirstRunHintShown 把标记写成 true（那是「展示过了」），
+    // markFirstRunHintDismissed 把它写成 false（那是「用户拒绝了，冷却后还有机会」），
+    // clearFirstRunHintFailures 把失败计数写成 0（那是「读过」的清理）——
+    // 这三个都不是「请再来一次」，不能当成重置信号。
     listener({
       shownCleared: shown !== undefined && shown.newValue === undefined,
       cooldownCleared: cooldown !== undefined && cooldown.newValue === undefined,

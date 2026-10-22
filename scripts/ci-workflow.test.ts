@@ -20,6 +20,73 @@ import { resolve } from 'node:path';
 
 // vitest 的 cwd 就是仓库根（本文件由 vitest.config.ts 收集，配置里没改 root）。
 const repoRoot = process.cwd();
+
+/**
+ * 把 JS 源码里的**注释与字符串**替换成空格，只留下真正的代码。
+ *
+ * ⚠️ 为什么需要它：守卫要量的是**代码**，不是**关于代码的散文**。
+ * 实测踩过两次同一个坑 ——
+ * 一次是「样式表里不许有这条规则」那条守卫，匹配上了规则**上面那行注释**；
+ * 一次是「不许有裸的 `chromium.launch()`」那条，匹配上了脚本**自己**那句
+ * 「`chromium.launch()` 不带参数时走的是全局缓存」。
+ *
+ * ⚠️ 用**状态机**而不是正则：正则分不清「注释里的引号」与「字符串里的引号」，
+ * 于是很容易把代码本身也一起吃掉（那样守卫就永远绿了 —— 更糟）。
+ */
+const stripJsCommentsAndStrings = (source: string): string => {
+  const out = source.split('');
+  let i = 0;
+  const n = source.length;
+
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to && k < n; k += 1) {
+      // 保留换行，免得行号信息全丢。
+      if (out[k] !== '\n') out[k] = ' ';
+    }
+  };
+
+  while (i < n) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    // 注释
+    if (ch === '/' && next === '/') {
+      let end = source.indexOf('\n', i);
+      if (end === -1) end = n;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      let end = source.indexOf('*/', i + 2);
+      end = end === -1 ? n : end + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+
+    // 字符串（模板串也照剥 —— 里面同样不会有我们要匹配的代码）
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      let j = i + 1;
+      while (j < n) {
+        if (source[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (source[j] === quote) break;
+        j += 1;
+      }
+      blank(i, Math.min(j + 1, n));
+      i = j + 1;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  return out.join('');
+};
 const workflow = readFileSync(resolve(repoRoot, '.github/workflows/ci.yml'), 'utf8');
 const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;
@@ -259,6 +326,102 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
     expect(script, 'package.json 缺少 test:e2e:ext').toBeTruthy();
     expect(script).toMatch(/build/);
     expect(script).toMatch(/real-extension\.spec\.js/);
+  });
+
+  /**
+   * 浏览器必须装在**项目内的私有缓存**里。
+   *
+   * ⚠️ 为什么这条不能只是「文档里提一句」：
+   * Playwright 的浏览器缓存是**全局共享**的
+   * （`~/Library/Caches/ms-playwright`），而它的 `_deleteStaleBrowsers`
+   * 会把「注册表里没有标记文件」的浏览器目录**删掉** ——
+   * 于是这台机器上**另一个项目**跑一次 `playwright install`，
+   * 就能把本项目的浏览器**连同正在下载的那一份**一起清掉。
+   *
+   * 实测（2026-10-22）：另一个项目的 agent 反复装 chromium，
+   * 本项目的缓存被清空了 4 次，e2e 全部以
+   * 「Executable doesn't exist at …/chromium-1217/…」失败。
+   * 那**不是**产品坏了，但失败信息长得几乎一样 ——
+   * 于是分诊的人会先去查产品，白查半天。
+   *
+   * 私有缓存（`PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright`）
+   * 别人的 install 碰不到它：GC 只扫全局注册表那一份。
+   *
+   * ⚠️ 还要**版本对得上**：全局缓存里可能躺着**别的项目**的另一个版本
+   * （实测：一个项目用 playwright 1.61 / chromium 1228，
+   * 本项目是 1.59 / chromium 1217）。所以 CI 里也必须装到私有路径。
+   */
+  it('浏览器装在项目内的私有缓存里（全局缓存会被别的项目清空）', () => {
+    expect(
+      pkg.scripts['setup:browsers'],
+      'package.json 缺少 setup:browsers',
+    ).toBeTruthy();
+    expect(
+      pkg.scripts['setup:browsers'],
+      'setup:browsers 必须把浏览器装进项目内的私有缓存',
+    ).toMatch(/PLAYWRIGHT_BROWSERS_PATH=\.cache\/ms-playwright/);
+
+    // CI 里那一步也必须用同一套路径 —— 否则本地过了、CI 还是会踩全局缓存。
+    expect(
+      jobs['e2e'],
+      'CI 的 e2e job 必须把浏览器装进私有缓存',
+    ).toMatch(/PLAYWRIGHT_BROWSERS_PATH=\.cache\/ms-playwright[^\n]*playwright install[^\n]*chromium/);
+  });
+
+  /**
+   * `launch.js` 必须**先**找私有缓存。
+   *
+   * ⚠️ 顺序不能反：全局缓存里可能躺着别的项目的**另一个版本**，
+   * 用它跑出来的行为与本仓库锁定的 playwright 版本不一致 ——
+   * 缺 feature、行为不同，失败时更难往根因上想。
+   */
+  it('launch.js 优先找项目内的私有缓存', () => {
+    // ⚠️ 找浏览器的实现住在 `scripts/find-chromium.mjs`（2026-10-22 挪过去的）：
+    // **商店素材的生成脚本**也需要同一份答案 ——
+    // 它以前自己 `chromium.launch()`，于是去全局缓存里找，
+    // 在本项目的私有缓存里明明有浏览器却报「Executable doesn't exist」。
+    // 抄一份的后果是两边慢慢漂移，而两边的失败信息长得**一模一样**。
+    const source = readFileSync(resolve(repoRoot, 'scripts/find-chromium.mjs'), 'utf8');
+    const privateAt = source.indexOf("'.cache', 'ms-playwright'");
+    const globalAt = source.indexOf("'Library/Caches/ms-playwright'");
+
+    expect(privateAt, 'find-chromium.mjs 没有找项目内的私有缓存').toBeGreaterThan(-1);
+    expect(globalAt, 'find-chromium.mjs 没有找全局缓存（Linux 那条仍然需要）').toBeGreaterThan(-1);
+    expect(
+      privateAt,
+      '私有缓存必须排在全局缓存**前面** —— 全局那份可能是别的项目的另一个版本',
+    ).toBeLessThan(globalAt);
+
+    // ⚠️ launch.js 必须**用**那一份，而不是自己再抄一遍。
+    const launcher = readFileSync(resolve(repoRoot, 'tests/e2e/helpers/launch.js'), 'utf8');
+    expect(
+      launcher,
+      'launch.js 必须从 scripts/find-chromium.mjs 取浏览器 —— 抄一份会漂',
+    ).toContain('find-chromium.mjs');
+    expect(
+      launcher,
+      'launch.js 里不许自己写浏览器路径 —— 那正是漂移的来源',
+    ).not.toMatch(/Library\/Caches\/ms-playwright/);
+  });
+
+  it('商店素材的生成脚本也用私有缓存里的浏览器', () => {
+    const source = readFileSync(resolve(repoRoot, 'scripts/generate-store-assets.mjs'), 'utf8');
+
+    expect(
+      source,
+      '素材生成脚本必须从 find-chromium.mjs 取浏览器 —— ' +
+        '裸的 chromium.launch() 会走**全局**缓存，而那个缓存是这台机器上' +
+        '所有项目共享的，别的项目跑一次 install 就能把它清空',
+    ).toContain('find-chromium.mjs');
+
+    // ⚠️ 裸的 launch() 仍然可能藏在别处 —— 直接找那一句。
+    // ⚠️ **必须先剥掉注释**：这段脚本自己的注释里就写着
+    // 「`chromium.launch()` 不带参数时走的是全局缓存」——
+    // 拿注释去匹配，守卫会红在自己的说明文字上（实测踩过）。
+    expect(
+      stripJsCommentsAndStrings(source),
+      '素材生成脚本里不许有裸的 chromium.launch()（没有 executablePath 的那种）',
+    ).not.toMatch(/chromium\.launch\(\s*\)/);
   });
 
   /**

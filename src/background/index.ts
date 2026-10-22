@@ -1,6 +1,8 @@
 import { t } from '../shared/i18n';
 import { formatRate } from '../shared/rate';
 import {
+  EXTENSION_INSTALLED_MESSAGE,
+  ExtensionInstalledMessage,
   FRAME_FOCUS_MESSAGE,
   FRAME_GONE_MESSAGE,
   FRAME_PROBE_MESSAGE,
@@ -155,10 +157,23 @@ const readTabRate = async (tabId: number): Promise<StoredRate | null> => {
     if (value && typeof value === 'object') {
       const { rate, frameId } = value as Partial<StoredRate>;
       if (typeof rate === 'number' && typeof frameId === 'number') {
-        if (cachedRate === undefined) {
+        // ⚠️ 回填时不能拿**旧**的那份盖掉内存里更新的那份。
+        //
+        // 等待存储期间可能来了一份**新**读数（applySpeed 已经写进内存了）——
+        // 那份比存储里这份**新**。原来这里拿「await 之前记下的 cachedRate」
+        // 去判断要不要回填，而那是在 await **之前**取的 ——
+        // 于是 await 期间到来的新读数会被**旧快照覆盖**：
+        // 内存里的读数错了（「这个倍速是哪个 frame 报的」也错了），
+        // 之后的每一次判据都在错的基础上算 —— 标题开始说谎。
+        //
+        // ⚠️ 返回值**仍然是调用那一刻的快照**：这份读数是「我据以做判断的那份」，
+        // 「等待期间有没有更新的读数到过」由版本号那道闸门回答（见 tabRateRevisions）。
+        const currentRate = tabRates.get(tabId);
+        const currentFrameId = tabRateFrames.get(tabId);
+        if (currentRate === undefined) {
           tabRates.set(tabId, rate);
         }
-        if (cachedFrameId === undefined) {
+        if (currentFrameId === undefined) {
           tabRateFrames.set(tabId, frameId);
         }
         return { rate: cachedRate ?? rate, frameId: cachedFrameId ?? frameId };
@@ -180,14 +195,83 @@ const forgetRate = (tabId: number) => {
   void chrome.storage?.session?.remove?.(rateStorageKey(tabId))?.catch?.(() => {});
 };
 
+/**
+ * 「这个标签页是在扩展装好之前就开着的」—— tabId 集合。
+ *
+ * ⚠️ 为什么需要它：扩展装好/更新**之前**就打开的标签页，跑的不是当前版本
+ * （刚装：那个标签页压根没有内容脚本；刚更新：只剩一个上下文已死的僵尸），
+ * 而用户在里面按什么键都不会有反应 —— 他能得出的唯一结论是「扩展坏了」。
+ *
+ * 那个标签页里的内容脚本救不了自己（它要么不存在，要么已经死了），
+ * 所以这句话只能从**外面**说 —— 也就是工具栏图标的标题。
+ *
+ * ⚠️ 为什么不用图标 badge：badge 是这个产品**明确不做的**东西
+ * （见 docs/LAUNCH.md「What I deliberately left out」），
+ * 而标题本来就是这个产品唯一的「每个标签页各自一份」的信息位
+ * （平时显示倍速，见 applyTitle）。
+ */
+const staleTabs = new Set<number>();
+
 const applyTitle = (tabId: number, rate: number) => {
+  // ⚠️ 提示「刷新」时**不报倍速**：那个标签页里的倍速读数本来就是旧的
+  // （它跑的是旧副本），报出来就是在说谎。
+  const title = staleTabs.has(tabId)
+    ? `${defaultTitle()} — ${t('refreshThisPage', '请刷新本页')}`
+    : isDefaultRate(rate)
+      ? defaultTitle()
+      : speedTitle(rate);
+
   chrome.action?.setTitle?.(
-    { tabId, title: isDefaultRate(rate) ? defaultTitle() : speedTitle(rate) },
+    { tabId, title },
     // 回调的唯一作用：标签页可能已经关了，这里吞掉 lastError。
     () => {
       void chrome.runtime?.lastError;
     },
   );
+};
+
+/**
+ * 这个标签页不再「过期」了 —— 标题回到倍速读数。
+ *
+ * 什么时候算不再过期：那个标签页里的内容脚本**又活过来了**
+ * （刷新过 / 导航过 / 重新装上了扩展）。
+ */
+const clearStaleMark = (tabId: number) => {
+  if (!staleTabs.has(tabId)) {
+    return;
+  }
+
+  staleTabs.delete(tabId);
+
+  // 标题回到「这个标签页此刻的读数」：读数还在就还读数，没了才回默认。
+  // ⚠️ 先看内存（热路径），再看 storage.session（worker 被回收过的情况）。
+  const rate = tabRates.get(tabId);
+  if (rate !== undefined) {
+    applyTitle(tabId, rate);
+    return;
+  }
+
+  // ⚠️ 版本号必须在**进异步之前**采样（见 captureRateRevision）。
+  //
+  // 这条路径与「复位读数」是同一个病根：**拿着一个快照，跨过一次 await，
+  // 然后按那个快照写标题**。等待期间来了一份新读数（焦点消息里带着倍速时
+  // 走的就是 applySpeed），那一份已经把标题写对了 ——
+  // 这里再把**旧快照**写回去，就等于把刚写对的读数擦掉。
+  //
+  // ⚠️ 实测（已复现）：扩展刚装好 → 那个标签页被标成「过期」→
+  // 用户刷新它 → 新内容脚本发焦点上报（带 1.5x）→ 标题正确地显示「— 1.5x」
+  // → 这一行的异步续段随后把它改回「Video Speed Controller」——
+  // 扩展开始说一个**假的**倍速。
+  const revision = captureRateRevision(tabId);
+
+  void readTabRate(tabId).then((stored) => {
+    // 等待期间来了新读数 → 那份读数已经自己写好标题了，这里不许再写。
+    if (!rateRevisionUnchanged(tabId, revision)) {
+      return;
+    }
+
+    applyTitle(tabId, stored?.rate ?? 1);
+  });
 };
 
 /**
@@ -229,6 +313,113 @@ const applySpeed = (tabId: number, rate: number, frameId: number) => {
   }
 };
 
+/* ------------------------------------------------------------------ *
+ * 「装完了」—— chrome.runtime.onInstalled
+ *
+ * ⚠️ 为什么这条机制**只能**在 background 里：
+ * `chrome.runtime.onInstalled` 在内容脚本里是 **undefined**
+ * （实测：内容脚本里取不到它）—— 它只存在于扩展页面与 service worker。
+ * 而「装完了」这件事本身，只有 background 知道。
+ *
+ * ⚠️ 它与「已经失效了」是**两件事**，别混成一条：
+ * - 「已经失效了」= 内容脚本发现自己的上下文死了（被更新/重载/被禁用）
+ *   → 它在**页面里**说一句话；
+ * - 「装完了」= 扩展刚装好/刚更新，**当时已经开着**的那些标签页跑的是旧副本
+ *   → 它们要么没有内容脚本，要么只剩一个死掉的僵尸，**自己说不出话**，
+ *   只能由 background 从外面说。
+ */
+
+/**
+ * 当前版本号。读不到就当空字符串 ——
+ * 于是「版本相同」这条判据退化成「答不上来就是过期」，宁可多提醒一次。
+ */
+const currentVersion = (): string => {
+  try {
+    return chrome.runtime?.getManifest?.()?.version ?? '';
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * 问一个标签页：「你这一层跑的是哪一版？」
+ *
+ * ⚠️ 答不上来（回调带 lastError）有三种可能，**这里不区分**：
+ * 那个标签页压根没有内容脚本（刚装）、它的内容脚本已经死了（刚更新）、
+ * 或者它正在启动还没注册监听器 —— 三种都意味着「它现在不能替你干活」。
+ *
+ * ⚠️ 实测：`chrome.tabs.sendMessage` **送不到**僵尸内容脚本
+ * （它的 chrome.runtime 上下文已经死了），也送不到没有内容脚本的标签页
+ * （"Could not establish connection. Receiving end does not exist."）。
+ * 唯一能往那些标签页里塞东西的办法是 `chrome.scripting.executeScript`，
+ * 而它需要 "scripting" 权限 —— 那是一次 manifest 改动。
+ */
+const askTabVersion = (tabId: number): Promise<string | null> =>
+  new Promise((resolve) => {
+    try {
+      const message: ExtensionInstalledMessage = { type: EXTENSION_INSTALLED_MESSAGE };
+      chrome.tabs.sendMessage(
+        tabId,
+        message,
+        (response: unknown) => {
+          if (chrome.runtime?.lastError) {
+            resolve(null);
+            return;
+          }
+
+          const payload = response as { version?: unknown } | undefined;
+          resolve(typeof payload?.version === 'string' ? payload.version : null);
+        },
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+
+/**
+ * 扩展装好/更新完成 → 告诉**当时已经开着**的标签页刷新一下。
+ */
+const markStaleTabs = async (): Promise<void> => {
+  let tabs: chrome.tabs.Tab[] = [];
+  try {
+    tabs = (await chrome.tabs?.query?.({})) ?? [];
+  } catch {
+    return;
+  }
+
+  const version = currentVersion();
+
+  for (const tab of tabs) {
+    if (tab.id == null) {
+      continue;
+    }
+
+    // 扩展自己的页面（设置页）不参与：那里本来就该是最新版。
+    if (tab.url?.startsWith('chrome-extension://')) {
+      continue;
+    }
+
+    const answered = await askTabVersion(tab.id);
+    // 答得上、而且版本一样 → 那个标签页是在扩展装好**之后**才打开的
+    // → 它跑的就是当前版本 → 不用提醒。
+    if (answered !== null && answered === version) {
+      continue;
+    }
+
+    staleTabs.add(tab.id);
+    applyTitle(tab.id, 1);
+  }
+};
+
+chrome.runtime?.onInstalled?.addListener(() => {
+  // ⚠️ 这里**不落盘**：没有人读的东西就不该写。
+  // 「装于 …」这种信息要留在 storage.local 里的话，它得配一个**现在就有**的
+  // 读取端（设置页显示安装时间）—— 那是另一个功能，不该藏在这条机制里。
+  // 多写一份没人读的东西 = 多一份隐私披露义务（见 PRIVACY.md 的存储表），
+  // 而 Chrome Web Store 的审核会核对「声明的隐私实践 vs 实际行为」。
+  void markStaleTabs();
+});
+
 /**
  * tabId -> 这个标签页的读数「版本号」。
  *
@@ -245,6 +436,25 @@ const applySpeed = (tabId: number, rate: number, frameId: number) => {
  * 版本号只是用来防「同一次 worker 生命周期内」的竞争。
  */
 const tabRateRevisions = new Map<number, number>();
+
+/**
+ * 采一份「读数版本号」—— **必须在第一次 await 之前**。
+ *
+ * ⚠️ 取样点一旦落在 await **之后**，那道闸门就看不见「等待期间来了新读数」
+ * 这件事，于是它**永远不成立**（死代码）：从取样点到比较点之间一个 await 都没有，
+ * 版本号不可能变。
+ *
+ * 所以取样点钉在**消息处理函数的最开头**（同步，在 await 之前），
+ * 比较点钉在**动手的那一刻**（见 resetTabRate）——
+ * 两端各钉死一个，中间无论插几次 await，闸门都不会失效。
+ */
+const captureRateRevision = (tabId: number): number => tabRateRevisions.get(tabId) ?? 0;
+
+/**
+ * 这份判据还成立吗？（期间没有新的读数到过）
+ */
+const rateRevisionUnchanged = (tabId: number, revision: number): boolean =>
+  (tabRateRevisions.get(tabId) ?? 0) === revision;
 
 /**
  * 探针的结果：这个 frame 还在吗？它报出去的那个视频还在吗？
@@ -428,6 +638,13 @@ const forgetDeadFocusedFrame = async (tabId: number) => {
  * （6.2.0 修过一次的老毛病）。判据是「那个视频还在不在」，不是「换页了没」。
  */
 const revalidateTabRate = async (tabId: number) => {
+  // ⚠️ 版本号必须在**第一次 await 之前**采样（见 captureRateRevision）。
+  //
+  // 原来这个采样点在 `await readTabRate` **之后** —— 那样的话，
+  // 「读存储那一次 await 期间到达的新读数」它根本看不见
+  // （闸门只挡住了后半截窗口，前半截无人看守）。
+  const revision = captureRateRevision(tabId);
+
   const state = await readTabRate(tabId);
   if (!state) {
     // 这个标签页没有读数。但焦点记录可能还指着已经没了的 frame ——
@@ -436,19 +653,17 @@ const revalidateTabRate = async (tabId: number) => {
     return;
   }
 
-  // 记下这一刻的版本号：探针是异步的，等待期间来了一份新上报的话，
-  // 版本号会变 —— 那时「按旧判据清掉」就成了错棋（见 tabRateRevisions）。
-  const revision = tabRateRevisions.get(tabId) ?? 0;
-
   const probe = await probeFrame(tabId, state.frameId);
-
-  if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
-    // 等待期间有了新的读数 → 新读数赢，这一步旧判据作废。
-    return;
-  }
 
   const current = await readTabRate(tabId);
   if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
+    return;
+  }
+
+  // ⚠️ 闸门贴着**动手**的那一行：比较点与动手之间不能有 await ——
+  // 否则最后那一小段窗口没人看守（版本号变了就说明有新的读数到过）。
+  if (!rateRevisionUnchanged(tabId, revision)) {
+    // 等待期间有了新的读数 → 新读数赢，这一步旧判据作废。
     return;
   }
 
@@ -747,6 +962,10 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
 
     rememberFocusedFrame(tabId, frameId);
 
+    // 这个标签页里的内容脚本**又说话了** → 它不是「装好之前就开着」的那个了
+    // （要么刷新过，要么重新装上了扩展）→ 标题回到倍速读数。
+    clearStaleMark(tabId);
+
     // 焦点消息顺带带着这个 frame 此刻的倍速：焦点在 frame A 与 frame B
     // 之间移动时，标题该跟着换 —— 少了这一条，标题会停在上一个 frame 的
     // 倍速上（在说谎）。
@@ -770,6 +989,12 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
     //
     // ⚠️ 这条路径是**异步**的：service worker 被回收过之后，内存里没有
     // 这个标签页的倍速，判据得去 storage.session 里拿（readTabRate）。
+    //
+    // ⚠️ 版本号必须在**进异步之前**采样（见 captureRateRevision）。
+    // 原来这个采样点在 `await readTabRate` **之后** —— 于是「读存储那一次
+    // await 期间到达的新读数」它根本看不见（闸门只挡住后半截窗口）。
+    const revision = captureRateRevision(tabId);
+
     void (async () => {
       const state = await readTabRate(tabId);
       if (!state) {
@@ -779,6 +1004,16 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
       if (state.frameId === frameId) {
         // 报出这个倍速的就是这个 frame 自己，而它现在说「我这儿没有受控视频」
         // → 那个视频已经不在了 → 复位。
+        //
+        // ⚠️ 这条分支原来**压根没有版本号闸门**：读存储那一次 await 期间
+        // 来了新读数（整页导航后新页面的内容脚本启动就会报一次），
+        // 这里会拿旧判据把新读数抹掉 ——
+        // 标题从「— 2x」退回默认的「Video Speed Controller」，
+        // 扩展开始说一个**假的**倍速。
+        if (!rateRevisionUnchanged(tabId, revision)) {
+          return;
+        }
+
         resetTabRate(tabId);
         return;
       }
@@ -790,19 +1025,19 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
       // （SPA 把 iframe 换掉了）：这时标题会一直挂着早已不存在的倍速，
       // 而且**没有人**会来说这件事（它已经不会说话了）。
       // 所以问它一句：还在吗？还在就留着读数，不在就复位。
-      const revision = tabRateRevisions.get(tabId) ?? 0;
       const probe = await probeFrame(tabId, state.frameId);
       if (probe.alive && probe.video !== 'gone') {
         return;
       }
 
-      // 探针期间可能已经有新的上报到了 → 别拿旧判据覆盖它。
-      if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+      const current = await readTabRate(tabId);
+      if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
         return;
       }
 
-      const current = await readTabRate(tabId);
-      if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
+      // ⚠️ 闸门贴着**动手**的那一行：比较点与动手之间不能有 await ——
+      // 否则最后那一小段窗口没人看守。
+      if (!rateRevisionUnchanged(tabId, revision)) {
         return;
       }
 
@@ -824,7 +1059,7 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
     // 那时的读数不是这一层的 —— 这一层正在卸载，它报的那份已经作废，
     // 但**新**的那份是有效的。版本号变了就说明有新读数，
     // 不许拿「这一层走了」去清掉它。
-    const revision = tabRateRevisions.get(tabId) ?? 0;
+    const revision = captureRateRevision(tabId);
 
     // 这一层自己说它要走了（页面卸载 / iframe 被换掉）。
     // 读数是它报的就作废 —— 这是**唯一确定**的信号：
@@ -835,7 +1070,7 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+      if (!rateRevisionUnchanged(tabId, revision)) {
         return;
       }
 
@@ -866,6 +1101,19 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
       // ⚠️ 以前这里直接 `return`，把这句话整个丢掉了 ——
       // 于是「视频被站点换掉 → 那一层说它没有视频了」这条信号**永远到不了**，
       // 标题继续挂着早已不存在的倍速（这正是本次要修的那个故障）。
+      // ⚠️ 版本号要在**进异步之前**记下 —— 与上面 FRAME_GONE 分支同一写法。
+      //
+      // 读存储是异步的，这期间可能来了一份**新的**读数
+      // （新页面的内容脚本启动时就会报一次）。那时不能拿旧判据去覆盖它。
+      //
+      // ⚠️ 原来这个采样点在 `await readTabRate` **之后**，
+      // 而从采样点到下面那次比较之间**一个 await 都没有** ——
+      // 于是版本号不可能变，那道闸门**永远不成立**（死代码）。
+      // 可观测后果：等待期间到达的新读数（实测 2x）会被 `resetTabRate` 抹掉，
+      // 标题从「— 2x」退回默认的「Video Speed Controller」——
+      // 扩展开始说一个**假**的倍速。
+      const revision = captureRateRevision(tabId);
+
       void (async () => {
         const state = await readTabRate(tabId);
         if (!state) {
@@ -873,14 +1121,10 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        // 记下这一刻的版本号：读存储是异步的，等待期间可能来了一份新的读数
-        // （新页面的内容脚本启动时就会报一次）—— 那时不能拿旧判据去覆盖它。
-        const revision = tabRateRevisions.get(tabId) ?? 0;
-
         if (state.frameId === frameId) {
           // 报出这个倍速的就是这一层，而它现在说「我这儿没有受控视频」
           // → 那个视频已经不在了 → 复位。
-          if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
+          if (!rateRevisionUnchanged(tabId, revision)) {
             return;
           }
 
@@ -897,13 +1141,14 @@ chrome.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        if ((tabRateRevisions.get(tabId) ?? 0) !== revision) {
-          // 探针期间来了新的读数 → 新读数赢。
+        const current = await readTabRate(tabId);
+        if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
           return;
         }
 
-        const current = await readTabRate(tabId);
-        if (!current || current.rate !== state.rate || current.frameId !== state.frameId) {
+        // ⚠️ 闸门贴着**动手**的那一行：比较点与动手之间不能有 await ——
+        // 否则最后那一小段窗口没人看守。
+        if (!rateRevisionUnchanged(tabId, revision)) {
           return;
         }
 
@@ -954,6 +1199,14 @@ chrome.tabs?.onRemoved?.addListener((tabId) => {
  * 「什么时候该问一句」。
  */
 chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
+  // 一次导航开始 → 那个标签页会拿到**新的**内容脚本 → 它不再「过期」。
+  //
+  // ⚠️ 这条不看 URL：同页刷新（reload）不改 URL，但内容脚本确实换了 ——
+  // 而「装好之前就开着的那个标签页」正是靠刷新才能救回来的。
+  if (changeInfo.status === 'loading') {
+    clearStaleMark(tabId);
+  }
+
   const url = changeInfo.url;
   if (typeof url !== 'string') {
     return;

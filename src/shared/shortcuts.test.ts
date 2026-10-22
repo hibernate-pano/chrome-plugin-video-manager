@@ -7,6 +7,7 @@ import {
   normalizeShortcut,
   normalizeShortcutSettings,
   splitShortcut,
+  shortcutsOverlap,
 } from './shortcuts';
 import { DEFAULT_SHORTCUTS } from './types';
 
@@ -142,6 +143,63 @@ describe('normalizeShortcut 的边界', () => {
     // 按键却永远不触发。
     expect(normalizeShortcut('control+k')).not.toBe('');
     expect(normalizeShortcut('os+k')).not.toBe('');
+  });
+
+  /**
+   * 修饰键别名必须**折成规范名**（6.2.0 审计缺陷 3）。
+   *
+   * 根因：`MODIFIER_PREFIX` 曾经同时接受 `control` / `os`，
+   * 而 `matchesShortcut` 只认 `ctrl` / `meta` —— 两套集合**分裂**了。
+   * 于是 `control+j` 落进 storage 就是一条**永远不生效**的绑定：
+   * 归一后保留成 `control+j`，而事件匹配时找的是 `ctrl` → 永远匹配不上。
+   *
+   * 更糟的是它**抢走了裸键**：`control+j` 的主键也是 `j`，
+   * 但匹配时 `modifiers.has('ctrl')` 为假 → 连**裸按 j** 都不触发。
+   * 实测：写 `increaseSpeed: "control+j"` 之后，裸按 j 也没反应（rate 恒为 1）。
+   *
+   * 修法：归一时就把别名折成规范名 —— `control+j` → `ctrl+j`，
+   * 于是它立刻生效（Ctrl+J 就是 Ctrl+J），而且不再抢裸键。
+   */
+  it('修饰键别名归一到规范名（control → ctrl，os → meta）', () => {
+    // 变异打穿点：若归一时不折别名，这两条会原样返回 'control+k' / 'os+k'。
+    expect(normalizeShortcut('control+k')).toBe('ctrl+k');
+    expect(normalizeShortcut('os+k')).toBe('meta+k');
+    expect(normalizeShortcut('CTRL+K')).toBe('ctrl+k');
+    expect(normalizeShortcut('Control+Shift+K')).toBe('ctrl+shift+k');
+    expect(normalizeShortcut('option+k')).toBe('alt+k');
+    expect(normalizeShortcut('cmd+k')).toBe('meta+k');
+    expect(normalizeShortcut('command+k')).toBe('meta+k');
+  });
+
+  it('别名的绑定**真的能触发**（不是归一后仍然匹配不上）', () => {
+    // 变异打穿点：若 matchesShortcut 仍按别名找修饰键，
+    // 这两条就会是 false —— 归一与匹配又分裂了。
+    const ctrlJ = new KeyboardEvent('keydown', { key: 'j', ctrlKey: true });
+    const metaK = new KeyboardEvent('keydown', { key: 'k', metaKey: true });
+
+    expect(matchesShortcut(ctrlJ, 'control+j')).toBe(true);
+    expect(matchesShortcut(metaK, 'os+k')).toBe(true);
+  });
+
+  it('别名归一**不抢走裸键**（裸按 j 仍然是 j，不是 control+j）', () => {
+    // 6.2.0 审计缺陷 3 的最坏后果：脏数据 `control+j` 会让**裸 j** 也不触发，
+    // 因为匹配时 `modifiers.has('ctrl')` 为假而事件没有 Ctrl。
+    // 归一成 `ctrl+j` 之后，裸 j 的绑定不受影响。
+    const plainJ = new KeyboardEvent('keydown', { key: 'j' });
+
+    expect(matchesShortcut(plainJ, 'j')).toBe(true);
+    expect(matchesShortcut(plainJ, 'control+j')).toBe(false);
+  });
+
+  it('读盘路径也要归一（历史脏数据自愈成可用的绑定）', () => {
+    // 判据 11 第 1 条：读盘路径也要归一。
+    // `normalizeShortcutSettings` 是**读盘**时走的归一（settings.ts 用它）。
+    const settings = normalizeShortcutSettings({ increaseSpeed: 'control+j' });
+
+    expect(settings.increaseSpeed).toBe('ctrl+j');
+    expect(
+      matchesShortcut(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }), settings.increaseSpeed),
+    ).toBe(true);
   });
 
   it('单字符主键统一转小写', () => {
@@ -436,5 +494,171 @@ describe('macOS 上的快捷键显示', () => {
     });
     expect(splitShortcut('plus')).toEqual({ modifiers: [], mainKey: 'plus' });
     expect(splitShortcut('')).toEqual({ modifiers: [], mainKey: '' });
+  });
+});
+
+/**
+ * 「两条绑定会不会被同一个物理事件同时命中」。
+ *
+ * ## 为什么要有这个函数
+ *
+ * 6.2.0 审计缺陷 4：设置页把「加速」绑成小键盘 `+`（录成 `plus`）、
+ * 把「重置」绑成 `Shift+=`（录成 `shift+plus`）——
+ * **保存成功**，状态栏「已保存」，两行都没有错误提示。
+ *
+ * 但在视频页按 `Shift+=` → **rate 从 1.5 变成 1.6（加速赢了，重置没跑）**。
+ *
+ * 根因有两层，缺一不可：
+ * 1. **运行时**：`matchesShortcut` 对主键是 `plus` 的裸绑定**不比较 Shift**
+ *    （`shiftMatches = true`），所以 `shift+plus` 与 `plus` 匹配同一个物理键；
+ * 2. **设置页**：重复检测用的是**原始草稿字符串**（`plus` vs `shift+plus`
+ *    是两个不同的串），所以设置页完全看不见这个撞车。
+ *
+ * ## 这条判据必须**只有一份**
+ *
+ * 运行时与设置页必须用**同一个函数**。只在设置页单方面加一条特判的话，
+ * 就会变成「设置页说没事、运行时打架」——
+ * 那正是缺陷 4 本身的样子。
+ */
+describe('shortcutsOverlap：撞车检测与运行时共用同一份判据', () => {
+  it('裸 plus 与 shift+plus 是真撞车', () => {
+    // 变异打穿点：若这条判据退回「比原始字符串」，
+    // 这两条会判成不撞车 —— 而运行时它们**确实**同时命中。
+    expect(shortcutsOverlap('plus', 'shift+plus')).toBe(true);
+    expect(shortcutsOverlap('shift+plus', 'plus')).toBe(true);
+  });
+
+  it('完全相同的绑定当然撞车', () => {
+    expect(shortcutsOverlap('plus', 'plus')).toBe(true);
+    expect(shortcutsOverlap('ctrl+k', 'ctrl+k')).toBe(true);
+  });
+
+  it('不同的键不撞车', () => {
+    expect(shortcutsOverlap('=', '-')).toBe(false);
+    expect(shortcutsOverlap('ctrl+k', 'ctrl+j')).toBe(false);
+  });
+
+  it('Shift 不同、且主键不是加号时不撞车', () => {
+    // `ctrl+k` 与 `ctrl+shift+k` 是两个不同的键：
+    // 运行时 Shift 不同 → 一个都不命中另一个。
+    expect(shortcutsOverlap('ctrl+k', 'ctrl+shift+k')).toBe(false);
+    expect(shortcutsOverlap('k', 'shift+k')).toBe(false);
+  });
+
+  it('ctrl / alt / meta 不同就不撞车', () => {
+    expect(shortcutsOverlap('ctrl+k', 'alt+k')).toBe(false);
+    expect(shortcutsOverlap('ctrl+k', 'meta+k')).toBe(false);
+    expect(shortcutsOverlap('ctrl+k', 'k')).toBe(false);
+  });
+
+  it('空绑定不与任何东西撞车', () => {
+    expect(shortcutsOverlap('', 'plus')).toBe(false);
+    expect(shortcutsOverlap('plus', '')).toBe(false);
+  });
+
+  it('撞车判据与运行时匹配**逐字一致**（这是这条存在的全部理由）', () => {
+    // ⚠️ 这条把「判据」与「运行时」钉在一起：
+    // 「会撞车」的准确含义是「**存在**一个物理事件，两条绑定同时命中」。
+    // 所以这里枚举全部 16 种修饰键组合，逐个问运行时：
+    // 只要**有任何一个**事件同时命中两条，就说明它们真会打架。
+    //
+    // 若判据与运行时漂移了，就会重新出现「设置页说没事、运行时打架」。
+    const CASES: Array<[string, string]> = [
+      ['plus', 'shift+plus'],
+      ['plus', 'plus'],
+      ['ctrl+k', 'ctrl+k'],
+      ['ctrl+k', 'ctrl+shift+k'],
+      ['ctrl+k', 'ctrl+j'],
+      ['ctrl+k', 'k'],
+      ['k', 'shift+k'],
+      ['plus', 'shift+plus'],
+    ];
+
+    CASES.forEach(([a, b]) => {
+      const mainKey = splitShortcut(a).mainKey;
+      const key = mainKey === 'plus' ? '+' : mainKey;
+
+      let runtimeCanBothMatch = false;
+      for (let mask = 0; mask < 16 && !runtimeCanBothMatch; mask += 1) {
+        const event = new KeyboardEvent('keydown', {
+          key,
+          ctrlKey: (mask & 1) !== 0,
+          altKey: (mask & 2) !== 0,
+          metaKey: (mask & 4) !== 0,
+          shiftKey: (mask & 8) !== 0,
+        });
+
+        if (matchesShortcut(event, a) && matchesShortcut(event, b)) {
+          runtimeCanBothMatch = true;
+        }
+      }
+
+      expect(
+        runtimeCanBothMatch,
+        `${a} 与 ${b}：判据说撞车，运行时却说不会（或反过来）`,
+      ).toBe(shortcutsOverlap(a, b));
+    });
+  });
+});
+
+/**
+ * 物理键位（`event.code`）参与归一。
+ *
+ * 6.2.0 审计缺陷 6：同一个物理键（`code: "Comma"`）在不同键盘布局下
+ * 给出不同的 `event.key`：
+ *
+ * | 布局 | 模拟按键 | 录成 | 设置页判定 |
+ * | --- | --- | --- | --- |
+ * | 美式 | Ctrl+Shift+Comma（`event.key = '<'`） | `ctrl+shift+,` | ★「这个键是扩展自己的命令」✓ |
+ * | 德式 | Ctrl+Shift+Comma（`event.key = ';'`） | `ctrl+shift+;` | **没拦** ✗ |
+ *
+ * 后果：德语键盘上用户可以把动作绑到 Ctrl+Shift+Comma ——
+ * 那是扩展自己的「打开设置页」命令键。浏览器先调度命令，
+ * 用户按下去弹出的是设置页，他要的动作一次都不发生，
+ * 而且设置页**从没提示过**。
+ */
+describe('物理键位（event.code）参与归一', () => {
+  it('德式键盘上的 Ctrl+Shift+Comma 录成与美式一样的绑定', () => {
+    // 变异打穿点：若归一不读 event.code，
+    // 德式那条会录成 'ctrl+shift+;' —— 与 manifest 的 'Ctrl+Shift+Comma' 对不上。
+    const german = new KeyboardEvent('keydown', {
+      key: ';',
+      code: 'Comma',
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    const american = new KeyboardEvent('keydown', {
+      key: '<',
+      code: 'Comma',
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(keyboardEventToShortcut(german)).toBe('ctrl+shift+,');
+    expect(keyboardEventToShortcut(german)).toBe(keyboardEventToShortcut(american));
+  });
+
+  it('没有 code 时回落到字符（老浏览器 / 合成事件）', () => {
+    // ⚠️ 合成事件没有 code（code 是 ''），那必须能正常工作。
+    const event = new KeyboardEvent('keydown', { key: '<', ctrlKey: true, shiftKey: true });
+
+    expect(keyboardEventToShortcut(event)).toBe('ctrl+shift+,');
+  });
+
+  it('只有「跨布局必须指向同一个物理位」的键才按 code 归一', () => {
+    // ⚠️ 这条守的是「不要把 code 归一推广到所有键」：
+    // 德式键盘上 `code: "Slash"` 那个键印的是 `-`，
+    // 按物理键归一会把默认的「减速 = `-`」改成 `/` —— 用户的默认绑定被改掉。
+    const germanSlash = new KeyboardEvent('keydown', {
+      key: '-',
+      code: 'Slash',
+    });
+    const germanMinus = new KeyboardEvent('keydown', {
+      key: 'ß',
+      code: 'Minus',
+    });
+
+    expect(keyboardEventToShortcut(germanSlash)).toBe('-');
+    expect(keyboardEventToShortcut(germanMinus)).toBe('ß');
   });
 });

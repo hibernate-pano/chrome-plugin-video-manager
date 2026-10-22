@@ -1297,6 +1297,106 @@ describe('VideoRegistry：接管规则（证据分层）', () => {
     registry.stop();
   });
 
+  it('P0 边界：键盘碰过一次**不等于**空格归我们（判据 11 不许被修法放宽）', () => {
+    // 这条守的是 P0 修复的**边界**。
+    //
+    // P0 的修法是：扩展自己的快捷键把视频按停之后，权限不能掉到 'no-space'，
+    // 否则「空格暂停 → 空格恢复」的第二下会被还给页面。
+    //
+    // ⚠️ 修法**不能**放宽成「键盘刚命中过的视频都算 'full'」——
+    // `getWatchedTarget()` 对**任何**解析出的目标都会调
+    // `rememberKeyboardTarget`，包括权限本来就是 'no-space' 的那些。
+    // 于是文章页里那个「暂停着、没人开过、无 controls」的视频，
+    // 只要用户按过一次 `=`（调速本来就允许作用在 no-space 视频上），
+    // 下一次按键它就会被升级成能吃空格的 'full' —— 文章再也翻不了页。
+    //
+    // 这正是本轮要守住的判据 11。变异验证：把 resolvePermission 里那条
+    // `pausedByShortcut` 换成 `wasTargetedByKeyboard`，这条用例翻红。
+    const registry = createRegistry();
+    registry.start();
+    try {
+      const preview = withLayout(appendVideo('preview'));
+      mockRect(preview, 900, 506, 0, 0);
+
+      // 第一次解析：它是一个合法的目标，但空格不归我们。
+      expect(registry.getWatchedTarget()?.permission).toBe('no-space');
+
+      // 用户按了 `=`（键被我们接管了，但**播放状态没变**）。
+      // 跨过缓存有效期，逼它重新解析一次。
+      const base = Date.now();
+      const now = vi.spyOn(Date, 'now');
+      try {
+        now.mockReturnValue(base + 6_000);
+        expect(
+          registry.getWatchedTarget()?.permission,
+          '键盘碰过它，不代表它就能抢走文章页的空格',
+        ).toBe('no-space');
+      } finally {
+        vi.restoreAllMocks();
+      }
+    } finally {
+      registry.stop();
+    }
+  });
+
+  it('P0：我们自己的快捷键按停的视频，下一次解析仍然是 full（否则空格按不回来）', () => {
+    // 缺陷本体：`isRunning` 是 'full' 的条件之一，而**扩展自己**按空格
+    // 把视频暂停之后它立刻变 false → 权限掉到 'no-space' →
+    // 键盘控制器把空格还给页面 → 视频不动，页面往下翻页。
+    //
+    // 用户看到的是「空格把视频暂停了，再按空格什么都没发生，页面却滚动」。
+    const registry = createRegistry();
+    registry.start();
+    try {
+      const custom = withLayout(appendVideo('custom'));
+      mockRect(custom, 1024, 576, 0, 0);
+      mockPlaying(custom);
+
+      // 前置条件：正在播 → 空格归我们。
+      expect(registry.getWatchedTarget()?.permission).toBe('full');
+
+      // 用户按空格把它暂停了 —— 这一次是我们自己干的。
+      mockPaused(custom);
+      registry.noteShortcutPlaybackChange(false);
+
+      const base = Date.now();
+      const now = vi.spyOn(Date, 'now');
+      try {
+        now.mockReturnValue(base + 6_000);
+        expect(
+          registry.getWatchedTarget()?.permission,
+          '我们自己按停的视频必须还能吃下第二次空格',
+        ).toBe('full');
+      } finally {
+        vi.restoreAllMocks();
+      }
+
+      // 它又开始播了（站点恢复 / 用户点播放）→ 豁免的使命结束。
+      //
+      // ⚠️ 这一步不能只看权限：此刻 `isRunning` 成立，权限**本来就**是 'full'，
+      // 看不出证据有没有被清掉。所以要接着再暂停一次 —— 这一次**不是**我们干的
+      // （不调 noteShortcutPlaybackChange），权限必须掉回 'no-space'。
+      // 如果旧证据还留着，这里会错误地停在 'full'。
+      mockPlaying(custom);
+      custom.dispatchEvent(new Event('play', { bubbles: true }));
+      mockPaused(custom);
+
+      const base2 = Date.now();
+      const now2 = vi.spyOn(Date, 'now');
+      try {
+        now2.mockReturnValue(base2 + 12_000);
+        expect(
+          registry.getWatchedTarget()?.permission,
+          '它重新播过之后，「我们按停的」这条证据必须已经失效',
+        ).toBe('no-space');
+      } finally {
+        vi.restoreAllMocks();
+      }
+    } finally {
+      registry.stop();
+    }
+  });
+
   it('P1-1：空格许可 —— 站点主播放器 / 有 controls / 正在播 → 空格归我们', () => {
     const registry = createRegistry();
     registry.start();

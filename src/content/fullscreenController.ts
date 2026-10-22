@@ -1,6 +1,8 @@
+import { observeBody, type BodyObserver } from './bodyObserver';
 import { FullscreenControls } from './fullscreenControls';
+import { FULLSCREEN_VIDEO_CLASS } from './fullscreenSession';
 import { FrameExpander } from './iframeExpansion';
-import { findOverlayLayers, OverlayLayer } from './overlayLayers';
+import { findOverlayLayers, findOverlayLayersIn, OverlayLayer } from './overlayLayers';
 import { restoreSubtitleOffset } from './subtitleOffset';
 import {
   isolateFullscreenOverlay,
@@ -32,15 +34,16 @@ interface FullscreenSnapshot {
   mode: FullscreenMode | null;
   originalParent: ParentNode | null;
   originalNextSibling: Node | null;
-  originalStyle: string;
   /**
    * 全屏布局那组属性在**搬运前**的内联值与优先级。
    *
-   * 为什么单独记：正常退出时把整个 style 属性还原成 originalStyle 就够了。
-   * 但「站点在全屏期间把视频拿回去了」（重渲染时把节点插回新的播放器容器）
-   * 这时整个 style 属性已经是**站点自己的新样式**了，照原样还原会把站点刚写
-   * 的样式抹掉。于是那条路径改成**逐属性**还原：只动我们当初写过的那些属性，
-   * 而且只在「当前值仍是我们写的那份」时才动 —— 站点自己后来改的值不碰。
+   * ⚠️ 为什么退出时只能**逐属性**还原，不能把整个 style 属性写回去：
+   * 站点在全屏期间会往视频上写它自己的样式（滤镜、圆角、Video.js 那种
+   * width/height/left/top）。整块写回会把这些**统统抹掉** ——
+   * 用户退出全屏后看到的是「播放器样式整个被重置了」。
+   *
+   * 所以：只动我们当初写过的那些属性，而且只在「当前值仍是我们写的那份」
+   * 时才动 —— 站点自己后来改的值一个字都不碰。
    */
   originalInlineStyles: Map<string, InlineValue>;
   /**
@@ -50,6 +53,14 @@ interface FullscreenSnapshot {
    * 归一化成 `0px`，直接拿常量比对会永远不相等。
    */
   appliedInlineStyles: Map<string, InlineValue>;
+  /**
+   * 进全屏那一刻，视频在页面里的位置。
+   *
+   * 用途只有一个：**晚到的字幕**要靠它当参照框。
+   * 字幕是相对播放器容器定位的，进全屏后视频被搬进我们的 stage，
+   * 拿满屏的视频框去比，覆盖率与重心那几条判据全都不成立。
+   */
+  originalVideoRect: DOMRect | null;
   originalControls: boolean;
   originalBodyOverflow: string;
   currentTime: number;
@@ -109,9 +120,9 @@ export class FullscreenController {
     mode: null,
     originalParent: null,
     originalNextSibling: null,
-    originalStyle: '',
     originalInlineStyles: new Map(),
     appliedInlineStyles: new Map(),
+    originalVideoRect: null,
     originalControls: false,
     originalBodyOverflow: '',
     currentTime: 0,
@@ -126,13 +137,59 @@ export class FullscreenController {
   private controls: FullscreenControls | null = null;
 
   /**
-   * 站点在全屏期间把视频**拿回去了**吗？
+   * 「这一轮全屏会话结束了」的通知。
    *
-   * 站点重渲染时可能把 <video> 节点插回它的新播放器容器 —— 那时视频仍然
-   * connected（`video.isConnected` 挡不住这种情况），但它已经不在我们手上了。
-   * 这时候再把它「还原」到原位置，等于把站点刚建好的播放器掏空。
+   * ⚠️ 为什么必须有它，而且必须由控制器来发：
+   *
+   * 全屏会话有**若干条**结束路径 —— 控制条上的退出钮、Esc、站点把视频
+   * 拿回去了、站点把我们的背板摘了 —— 而「我们还在接管这个视频」这件事
+   * 在注册表那边**也有一份**。以前只有 Esc 那条路径会去通知注册表，
+   * 于是从控制条的退出钮退出之后，注册表仍然以为「我们接管着这个视频」：
+   * - 点工具栏图标 → 注册表把**那个已经退出全屏**的视频交回去（错的视频）；
+   * - 按空格 → 注册表认为那个视频是「我们自己接管的」，于是不再把它当成
+   *   页面预览，空格被它吃掉，页面翻不动了。
+   *
+   * 而在**第二个调用点**补一行通知是治标不治本：下一条退出路径还会漏。
+   * 所以出口只有一个 —— release()，也就是「会话真正结束」的那一处。
+   * 谁触发的退出**不重要**，重要的是会话结束了。
    */
-  private videoTakenBackBySite = false;
+  private readonly onSessionEnd: (() => void) | undefined;
+
+  /**
+   * 「这一轮全屏会话正在进行」。
+   *
+   * ⚠️ 它存在的唯一理由：让「会话结束」的通知**恰好一次**。
+   *
+   * release() 有一条「state.video 为空就提前返回」的路径 —— 那条路径
+   * 只会发生在**第二次** release()（第一次已经把 state 清空了），
+   * 而那时会话**早就结束过了**。如果通知直接写在 release() 的末尾，
+   * 第二次 release() 就会再通知一次。
+   */
+  private sessionActive = false;
+
+  /**
+   * 我们自己挂上去的那块全屏背板。
+   *
+   * ⚠️ 为什么必须留着这个引用（而不是每次用 `getElementById` 重新找）：
+   * 背板被站点摘掉之后，它在**文档里**就查不到了 ——
+   * `document.getElementById('vsc-page-fullscreen-overlay')` 会返回 null。
+   * 而「背板还在不在」正是判断「视频是不是被站点一起带走了」的唯一依据，
+   * 判据不能建立在「文档里还能不能找到它」之上。
+   *
+   * 这个引用指向那棵**游离的树**，游离树上 `contains()` 照样成立 ——
+   * 于是「视频还在不在我们手上」这个问题，在背板脱文档之后依然答得出来。
+   */
+  private overlayElement: HTMLElement | null = null;
+
+  /**
+   * 盯着「站点把我们的背板摘掉了」的观察器。
+   *
+   * 观察点是 **<html> 的直接子节点**（见 bodyObserver.ts 的说明）：
+   * 背板正是 <html> 的直接子节点（viewportRoot.ts），站点把它摘掉时
+   * 这一层才会收到通知 —— 而且这一层**不喂给 body 回调**，
+   * 所以只能显式订 `onHostMutation`。
+   */
+  private hostWatcher: BodyObserver | null = null;
 
   /**
    * 「iframe 里的网页全屏」：把装着这个视频的那个 <iframe> 元素撑满顶层视口。
@@ -146,7 +203,27 @@ export class FullscreenController {
    */
   private readonly frameExpander = new FrameExpander();
 
-  constructor() {
+  /**
+   * 盯着「站点在进全屏之后才把字幕放进来」。
+   *
+   * ⚠️ 为什么不能只在 enter() 里取一次快照：
+   * 字幕轨道是**异步加载**的（也可能中途换语言、换清晰度而重建字幕层）。
+   * 进全屏那一刻字幕往往还不存在 —— 那一瞬间取到的浮层列表是空的，
+   * 于是后来出现的字幕永远留在站点的播放器容器里，被我们的不透明背板
+   * 整个盖住。用户看到的是「一按 f 字幕就没了」。
+   *
+   * ⚠️ 为什么不做「每次 DOM 变化都全量重扫」：
+   * 全量重扫 = 遍历整棵子树并逐个量几何，在信息流页面上每秒几十次，
+   * 而收益只在于「字幕层刚出现或刚被填上文字」这一种变化。
+   * 这里只盯**站点播放器容器**这一棵小树，而且只在「有可能是字幕的变化」
+   * 时才重扫（已经搬进 stage 的字幕层内部的文字变化直接跳过 ——
+   * 那种变化每秒能来几十次，而重扫它什么也找不到）。
+   */
+  private layerWatcher: MutationObserver | null = null;
+  private layerProbeTimer: number | null = null;
+
+  constructor(options: { onSessionEnd?: () => void } = {}) {
+    this.onSessionEnd = options.onSessionEnd;
     // 父文档侧的消息监听装在这里：控制器在每个文档里都有一个（内容脚本
     // 注入到所有 frame），于是任何一个「装着别人 iframe 的文档」都能认领
     // 子 frame 的撑大请求 —— 顶层文档是其中最常见的一个。
@@ -213,6 +290,22 @@ export class FullscreenController {
     // （上一轮全屏的遗留），站点也可能已经改过它的内联样式。
     isolateFullscreenOverlay(overlay, stage);
 
+    // 舞台要能接住焦点：键盘进全屏时焦点落在它上面（而不是控制条里）。
+    //
+    // ⚠️ 为什么焦点不能留在控制条里：
+    // 1. 焦点在控制条里 →「焦点在里面就别藏控制条」那条守卫恒真 →
+    //    控制条**永远不消失**（屏幕上永远留着一整条控制条，挡住字幕与画面）；
+    // 2. 扩展的键盘拦截按**事件路径**判定，路径里有 #vsc-controls 就把
+    //    空格与方向键让给自己的控件 → 键盘用户的播放/暂停与快进全废。
+    //
+    // 舞台在 `#vsc-controls` **之外**（它是 overlay 里的元素），
+    // 两条毛病都不成立；而且它与控制条宿主在 <html> 里前后相邻，
+    // 一次 Tab 就能落到「永远在的退出入口」。
+    //
+    // tabindex="-1" = 可以被程序聚焦，但**不进 Tab 序列**：
+    // 舞台不是交互控件，用户不该在 Tab 遍历时停在它上面。
+    stage.tabIndex = -1;
+
     if (created) {
       // ⚠️ 挂到 <html> 而不是 <body>：body 带 transform 时它会变成
       // fixed 后代的包含块，背板就会铺成 body 那么高（而不是视口高），
@@ -237,6 +330,153 @@ export class FullscreenController {
    */
   private collectLayersToAttach(video: HTMLVideoElement): OverlayLayer[] {
     return findOverlayLayers(video).filter((layer) => layer.kind === 'subtitle');
+  }
+
+  /**
+   * 站点播放器容器 —— 字幕层的落点。
+   *
+   * ⚠️ 为什么每次都要重新取：`originalParent` 可能是 ParentNode（类型上），
+   * 而观察器的观察目标必须是 **Node**。这里做一次收窄，
+   * 免得把「不是节点」的东西喂给 MutationObserver（会抛 TypeError）。
+   */
+  private layerHost(): (ParentNode & Node) | null {
+    const parent = this.state.originalParent;
+    return parent instanceof Node ? parent : null;
+  }
+
+  /** 我们的 stage（字幕要搬进去的那个容器）。 */
+  private getStage(): HTMLElement | null {
+    const stage =
+      this.overlayElement?.querySelector(`#${STAGE_ID}`) ?? document.getElementById(STAGE_ID);
+    return stage instanceof HTMLElement ? stage : null;
+  }
+
+  /**
+   * 开始盯着「站点后来才放进来的字幕层」。
+   *
+   * ⚠️ 观察点是**站点播放器容器**（视频原来的父节点），不是整棵文档：
+   * 字幕插件几乎总是把字幕挂在播放器容器里（它要相对视频定位），
+   * 而盯整棵文档等于「每次 DOM 变化都全量重扫」——
+   * 信息流页面上那是每秒几十次全页几何测量。
+   */
+  private startLayerWatch() {
+    this.stopLayerWatch();
+    const host = this.layerHost();
+    if (!host) {
+      return;
+    }
+
+    this.layerWatcher = new MutationObserver((records) => {
+      for (const record of records) {
+        if (this.mayAffectLayers(record)) {
+          this.scheduleLayerProbe();
+          return;
+        }
+      }
+    });
+    this.layerWatcher.observe(host, {
+      childList: true,
+      // 字幕层「本来就在，只是后来被填上文字」也要看得见：
+      // characterData 必须配 subtree 才看得到更深处的文本节点。
+      subtree: true,
+      characterData: true,
+    });
+  }
+
+  private stopLayerWatch() {
+    this.layerWatcher?.disconnect();
+    this.layerWatcher = null;
+    if (this.layerProbeTimer !== null) {
+      window.clearTimeout(this.layerProbeTimer);
+      this.layerProbeTimer = null;
+    }
+  }
+
+  /**
+   * 这次 DOM 变化**有可能**带来新的字幕层吗？
+   *
+   * 已经搬进 stage 的字幕层内部发生的文字变化（每换一句字幕就来一次）
+   * 不算 —— 那种变化每秒能来几十次，而重扫它什么也找不到。
+   */
+  private mayAffectLayers(record: MutationRecord): boolean {
+    const attached = this.state.overlayLayers;
+    const insideAttached = (node: Node | null): boolean => {
+      let current: Node | null = node;
+      while (current) {
+        for (const layer of attached) {
+          if (layer.element === current) {
+            return true;
+          }
+        }
+        current = current.parentNode;
+      }
+      return false;
+    };
+
+    if (record.type === 'characterData') {
+      // 文字变了：它所在的那个元素是不是已经搬进来了？
+      return !insideAttached(record.target);
+    }
+
+    // 节点增删：新增的节点是不是已经搬进来了？
+    for (const node of record.addedNodes) {
+      if (!insideAttached(node)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 把重扫合并成一次（站点常常一口气改好几处）。 */
+  private scheduleLayerProbe() {
+    if (this.layerProbeTimer !== null) {
+      return;
+    }
+    this.layerProbeTimer = window.setTimeout(() => {
+      this.layerProbeTimer = null;
+      this.probeOverlayLayers();
+    }, 50);
+  }
+
+  /**
+   * 重扫一次浮层，把**新出现的字幕**搬进 stage。
+   *
+   * ⚠️ 参照框用的是**进全屏前**那个视频框（originalVideoRect）：
+   * 字幕是相对播放器容器定位的，拿满屏的视频框当参照，
+   * 覆盖率与重心那几条判据全都不成立 —— 晚到的字幕于是永远搬不进来。
+   */
+  private probeOverlayLayers() {
+    const video = this.state.video;
+    const host = this.layerHost();
+    const reference = this.state.originalVideoRect;
+    if (!video || !host || !reference) {
+      return;
+    }
+    // 站点把播放器容器整个换掉了（重渲染）：我们认识的落点已经没了，
+    // 再探也是白探（那个容器里的东西已经不是这个视频的字幕了）。
+    if (!host.isConnected) {
+      return;
+    }
+
+    const stage = this.getStage();
+    if (!stage) {
+      return;
+    }
+
+    const fresh = findOverlayLayersIn(host, video, reference)
+      .filter((layer) => layer.kind === 'subtitle')
+      .filter(
+        (layer) =>
+          !this.state.overlayLayers.some((existing) => existing.element === layer.element),
+      );
+    if (fresh.length === 0) {
+      return;
+    }
+
+    this.attachOverlayers(stage, fresh);
+    this.state.overlayLayers.push(...fresh);
+    // 控制条要为新来的字幕让位（控制条与字幕都贴着画面底部）。
+    this.controls?.setSubtitleLayers(this.state.overlayLayers);
   }
 
   /**
@@ -446,7 +686,9 @@ export class FullscreenController {
   }
 
   private applyFullscreenLayout(video: HTMLVideoElement, mode: FullscreenMode) {
-    video.classList.add('vsc-page-fullscreen-video', `vsc-page-fullscreen-video--${mode}`);
+    // ⚠️ 用 fullscreenSession.ts 导出的那一份常量，不写字符串：
+    // 角标与引导读的就是它，两边对不上这套机制会**静默**失效。
+    video.classList.add(FULLSCREEN_VIDEO_CLASS, `vsc-page-fullscreen-video--${mode}`);
     Object.entries(FULLSCREEN_LAYOUT_PROPERTIES).forEach(([property, value]) => {
       video.style.setProperty(property, value, 'important');
     });
@@ -503,13 +745,24 @@ export class FullscreenController {
   }
 
   /**
-   * 视频现在还在我们自己的 stage 里吗？
+   * 这个节点现在还在**我们**手上吗？
    *
    * 为什么要问：`video.isConnected` 挡不住「站点把视频拿回去了」这一种情况 ——
    * 全屏时视频在我们的 overlay 里，connected 恒为 true；而站点重渲染后
    * 把节点插回它的新播放器容器时，视频同样 connected，却已经不在我们手上了。
+   *
+   * ⚠️ 判据必须用**我们手里那个背板元素的引用**，不能用
+   * `document.getElementById(STAGE_ID)`：
+   * 背板被站点摘掉之后，那个 id 在文档里就查不到了 ——
+   * 于是「视频还在 stage 里」会被误判成「站点把视频拿回去了」。
+   * 而这两件事的处理方式**完全相反**：
+   * 前者要把视频**还给站点**（它是我们带走的），后者一个字都不能碰
+   * （动了就等于把站点刚建好的播放器掏空）。
    */
-  private isInsideOurStage(node: Node): boolean {
+  private isInsideOurOverlay(node: Node): boolean {
+    if (this.overlayElement) {
+      return this.overlayElement.contains(node);
+    }
     const stage = document.getElementById(STAGE_ID);
     return stage ? stage.contains(node) : false;
   }
@@ -653,6 +906,26 @@ export class FullscreenController {
       return;
     }
 
+    // ⚠️ 视频已经不连着文档 —— 先分清**是谁**造成的，别急着把它插回去：
+    //
+    // - 我们的**背板**也不在文档里了 → 背板带着视频一起脱了文档。
+    //   那是「站点摘掉背板」，该把视频**还给站点**（走恢复路径），
+    //   而不是降级成 css-cover —— 那样视频会以 fixed 铺满视口，
+    //   页面上看着根本不像「回到了原来的位置」。
+    // - 背板还在 → 站点把**视频**丢了 → 复活它是错的（见下）。
+    //
+    // ⚠️ 这一档以前是「照常降级」的：restoreToOriginalSlot 会把站点
+    // 已经丢弃的节点插回页面（页面上多一个没人要的幽灵视频），
+    // 还会对着没人看的游离节点调 play()。
+    if (!video.isConnected) {
+      if (this.overlayElement && !this.overlayElement.isConnected) {
+        this.recoverDetachedOverlay();
+        return;
+      }
+      this.release();
+      return;
+    }
+
     const playbackSnapshot = this.capturePlaybackSnapshot(video);
     // 落点一次算好：视频与字幕必须落在**同一个**地方。
     const plan = this.resolveRestorePlan();
@@ -688,24 +961,163 @@ export class FullscreenController {
 
     this.healthTimer = window.setInterval(() => {
       const video = this.state.video;
-      if (!video || !video.isConnected) {
-        // 页面已经把这个节点从文档里丢掉了：不能走 exit()，否则会把废弃节点
-        // 重新插回它原来的父节点（originalNextSibling 也可能已被移除 → NotFoundError），
-        // 还会对没人看的游离节点调 play()。这里只做清理。
-        //
-        // 浮层由 release() 统一还原：视频节点虽然没了，但字幕是站点自己的节点，
-        // 把它留在马上要删除的 overlay 里等于让字幕凭空消失。
-        this.release();
+      if (!video) {
+        // 已经收摊了（退出/释放都会把这个定时器清掉，这里只是兜底）。
+        return;
       }
+
+      // 我们的**背板**被站点摘掉了 → 视频可能被它一起带离了文档。
+      // （这条以前排在「视频连不连着文档」之后，于是「站点先摘背板、
+      //   再把视频搬走」这种顺序会被漏掉，扩展卡在半脱离状态。）
+      if (this.overlayElement && !this.overlayElement.isConnected) {
+        this.recoverDetachedOverlay();
+        return;
+      }
+
+      // ⚠️ 「视频已经不在我们的 stage 里」—— 站点把视频**拿回了它自己的容器**。
+      //
+      // 这一条以前没有（健康检查只在 `!video.isConnected` 时才动手），
+      // 于是站点重渲染（切清晰度、换播放列表、插广告）把 <video> 插回
+      // 它的新容器时，扩展卡在一个**半脱离**状态：
+      //   - 视频已经不在 stage 里，却仍被钉成视口大小
+      //     （站点 320×180 的容器里浮着一个 1280×900 的 position:fixed 元素）；
+      //   - 不透明背板还盖着整页；
+      //   - body 的滚动锁死没解。
+      // 页面在用户按 Esc 之前完全不可用，而且没有任何提示。
+      //
+      // 收摊方式：release() —— 只清理、**不搬运**。
+      // 视频是站点自己放回去的，再把它搬到「原位置」等于把站点刚建好的
+      // 播放器掏空（见 exit() 里那条「千万别再动它的位置」）。
+      if (this.state.mode === 'reparent' && !this.isInsideOurOverlay(video)) {
+        this.release();
+        return;
+      }
+
+      if (video.isConnected) {
+        return;
+      }
+
+      // 视频不在文档里了 —— 但要分清**是谁**造成的：
+      //
+      // - 我们的**背板**被摘了 → 视频是被**我们**带走的（它还在背板里），
+      //   应该还给站点，否则用户的视频从此人间蒸发；
+      // - 视频自己被站点丢掉了 → 只做清理。
+      //
+      // ⚠️ 以前这两种情况都走 release()（只清理、不搬运），
+      // 于是「站点摘掉背板」时用户的视频**从此人间蒸发，而且再也回不来**。
+      //
+      // 页面已经把这个节点从文档里丢掉了：不能走 exit()，否则会把废弃节点
+      // 重新插回它原来的父节点（originalNextSibling 也可能已被移除 → NotFoundError），
+      // 还会对没人看的游离节点调 play()。这里只做清理。
+      //
+      // 浮层由 release() 统一还原：视频节点虽然没了，但字幕是站点自己的节点，
+      // 把它留在马上要删除的 overlay 里等于让字幕凭空消失。
+      this.release();
     }, 500);
+  }
+
+  /**
+   * 开始盯着「我们的背板是不是还在文档里」。
+   *
+   * ⚠️ 观察点必须是 **<html> 的直接子节点**：背板挂在 <html> 上
+   * （viewportRoot.ts），站点把它摘掉时这一层才会响。
+   * 而这一层**不喂给 body 回调**（bodyObserver 的设计如此），
+   * 所以只能显式订 `onHostMutation`。
+   */
+  private startHostWatch() {
+    this.stopHostWatch();
+    this.hostWatcher = observeBody({
+      // 只看 body 的**直接子节点**：我们要的信号来自 <html> 那一层，
+      // body 里塞什么都不与全屏有关。
+      bodyInit: { childList: true },
+      onHostMutation: () => this.reconcileOverlayMount(),
+    });
+  }
+
+  private stopHostWatch() {
+    this.hostWatcher?.disconnect();
+    this.hostWatcher = null;
+  }
+
+  /**
+   * 背板还在不在文档里？
+   *
+   * 站点把背板摘掉时，**我们带走的视频也跟着消失了** ——
+   * 它还好好地待在 stage 里（我们还没放手），只是整块背板脱离了文档。
+   * 这时候必须把它还给站点：否则用户的视频从此人间蒸发，
+   * 而且再也回不来（release() 只做清理，不会把节点插回去）。
+   */
+  private reconcileOverlayMount() {
+    const overlay = this.overlayElement;
+    const video = this.state.video;
+    if (!overlay || !video) {
+      return;
+    }
+    if (overlay.isConnected) {
+      // 背板还在 —— 站点只是动了 <html> 的其它子节点。
+      return;
+    }
+    this.recoverDetachedOverlay();
+  }
+
+  /**
+   * 背板被站点摘掉了 —— 收摊，把视频还给站点。
+   *
+   * 三种情况，分得很清楚：
+   *
+   * 1. **视频还在我们的背板里**（`overlay.contains(video)`）：
+   *    视频是**我们**带走的，它只是跟着背板一起脱离了文档。
+   *    → 必须把它插回 originalParent —— 用户还要接着看。
+   * 2. **视频还连着文档，但不在我们的背板里**：
+   *    站点重渲染时把视频拿回了它的新播放器容器。
+   *    → 一个字都别碰（动了就等于把站点刚建好的播放器掏空）。
+   * 3. **视频不连着文档，也不在我们的背板里**：
+   *    站点自己把视频丢了。
+   *    → 不复活（复活一个没人要的节点只会多一个幽灵视频），只做清理。
+   */
+  private recoverDetachedOverlay() {
+    const overlay = this.overlayElement;
+    const video = this.state.video;
+    if (!overlay || !video) {
+      return;
+    }
+
+    const plan = this.resolveRestorePlan();
+
+    if (overlay.contains(video)) {
+      // 情况 1：视频是我们带走的 → 还给站点。
+      const playbackSnapshot = this.capturePlaybackSnapshot(video);
+
+      // 字幕先回原位：字幕也是**站点自己的节点**，同样被背板带走了。
+      // 顺序不能反 —— 视频的 originalNextSibling 往往就是它，
+      // 字幕先归位，那次 insertBefore 才会落对位置（见 exit() 的说明）。
+      this.restoreOverlayers(this.state.overlayLayers, plan);
+      this.state.overlayLayers = [];
+
+      // 视频回原位。
+      //
+      // ⚠️ 顺序要紧：先插回去，它才重新连着文档；之后 restoreIfLost 才敢
+      // 调 play() —— 游离节点上的 play() 毫无意义（用户看不见），
+      // 连着文档之后才有意义。
+      this.restoreToOriginalSlot(video, plan);
+      if (plan.fallback) {
+        this.ensureRestoredVisible(video);
+      }
+      this.restoreIfLost(video, playbackSnapshot);
+      this.release();
+      return;
+    }
+
+    // 情况 2 / 3：视频已经不在我们手上了 —— 只做清理，绝不搬运。
+    this.release();
   }
 
   /**
    * 进入网页全屏。
    *
-   * @param options.focusControls 是否把焦点送进控制条。
-   *   **只在键盘发起时为 true** —— 焦点进控制条会让 scheduleHide 无限续期
-   *   （控制条于是不再自动隐藏），那是给键盘用户的保护，不该强加给鼠标用户。
+   * @param options.focusControls 是否把焦点送进全屏的落点（播放器表面）。
+   *   **只在键盘发起时为 true** —— 纯键盘用户需要知道焦点在哪，
+   *   而鼠标用户没在用键盘，把焦点抢进全屏只会让他原来的输入目标丢掉。
    */
   enter(video: HTMLVideoElement, options: { focusControls?: boolean } = {}) {
     if (!this.canEnter(video)) {
@@ -726,6 +1138,9 @@ export class FullscreenController {
     }
 
     const { overlay, stage } = overlayState;
+    // 留住背板的引用：它被站点摘掉之后，文档里就再也找不到了，
+    // 而「背板还在不在」是我们判断「视频是不是被一起带走了」的唯一依据。
+    this.overlayElement = overlay;
     // 若页面正处于系统原生全屏（如之前点了站点自己的全屏按钮），先退出：
     // 否则后续按 ESC 会被浏览器拿去退系统全屏，keydown 不再派发给页面，
     // 我们的 overlay 盖在最上层，看起来就像“按 ESC 没反应”。
@@ -752,6 +1167,10 @@ export class FullscreenController {
     // getBoundingClientRect，而那时视频还没被搬走，坐标才是对的。
     const layersToAttach = this.collectLayersToAttach(video);
 
+    // 同一个时刻把视频在页面里的位置记下来：晚到的字幕要靠它当参照框
+    // （字幕是相对播放器容器定位的，拿满屏的视频框去比，判据全都不成立）。
+    const originalVideoRect = video.getBoundingClientRect();
+
     // 搬运前先记下全屏布局那组属性的内联值：站点可能在全屏期间重渲染并
     // 改掉它们，退出时必须**逐属性**精确还原（见 restoreLayoutProperties）。
     const originalInlineStyles = this.captureInlineStyles(video);
@@ -761,9 +1180,9 @@ export class FullscreenController {
       mode,
       originalParent: video.parentNode,
       originalNextSibling: video.nextSibling,
-      originalStyle: video.getAttribute('style') ?? '',
       originalInlineStyles,
       appliedInlineStyles: new Map(),
+      originalVideoRect,
       originalControls: video.controls,
       originalBodyOverflow: document.body.style.overflow,
       currentTime: video.currentTime,
@@ -773,6 +1192,8 @@ export class FullscreenController {
       readyState: video.readyState,
       overlayLayers: layersToAttach,
     };
+    // 会话开始：这一次全屏要有一个「结束」通知等着它。
+    this.sessionActive = true;
 
     // ⚠️ class 与内联 display 必须**一起**切：class 只能改样式表里的规则，
     // 而那是普通作者声明 —— 站点的 `html > div { display: none !important }`
@@ -789,19 +1210,27 @@ export class FullscreenController {
       // 传函数而不是快照值：180ms 探测可能把模式从 reparent 降级到 css-cover，
       // 降级后视频回到站点 DOM，点击必须交还给站点，否则一次点击被切换两次。
       ownsVideoSurface: () => this.state.mode === 'reparent' && this.state.video === video,
+      // 焦点的休息位 = 播放器表面。控制条不持有焦点时焦点就待在这里。
+      restingTarget: stage,
     });
     this.controls.mount();
-    // 把焦点送进控制条 —— **只在键盘发起时**。
+    // 把焦点送进全屏的落点 —— **只在键盘发起时**。
     //
     // 为什么：进全屏后视频接管了用户的注意力，而控制条 3 秒就自动隐藏。
     // 纯键盘用户此刻若不知道焦点在哪，Tab 会从页面开头重新遍历 ——
-    // 他根本不知道自己能操作控制条。
+    // 他根本不知道自己能操作控制条，更不知道「永远在的退出入口」在哪。
     //
-    // ⚠️ 为什么只给键盘用户：焦点进控制条后，scheduleHide() 会一直把它算作
-    // 「用户正在操作」，控制条因此**不再自动隐藏**。那是保护键盘用户
-    // （控制条藏了而焦点还在里面，键盘用户盯着屏幕什么也看不到），
-    // 但强加给鼠标用户就违背了产品最核心的承诺「鼠标静止 3 秒后自动隐藏」。
-    // 实测（真实 Chromium）：鼠标进全屏后控制条一直挂着不消失。
+    // ⚠️ 落点是**舞台**（播放器表面），不是控制条里的播放键 ——
+    // 焦点停在控制条里会同时坏掉两件事：
+    //   1. 「焦点在里面就别藏控制条」那条守卫恒真 → 控制条永远不消失；
+    //   2. 扩展的键盘拦截按事件路径判定，路径里有 #vsc-controls 就把
+    //      空格与方向键让给自己的控件 → 键盘用户的播放/暂停与快进全废。
+    // 舞台在 #vsc-controls 之外，两条都不成立；而且它与控制条宿主在
+    // <html> 里前后相邻，一次 Tab 就能落到收起态的退出入口。
+    //
+    // ⚠️ 为什么只给键盘用户：鼠标用户没在用键盘，把焦点抢进全屏里
+    // 只会让他原来的输入目标丢掉（而且违背产品最核心的承诺
+    // 「鼠标静止 3 秒后自动隐藏」）。
     if (options.focusControls) {
       this.controls.focusFirst();
     }
@@ -814,6 +1243,11 @@ export class FullscreenController {
     stage.appendChild(video);
     // 先建字幕容器（与画面等大、居中），再对齐它 —— 顺序反了尺寸就对不上。
     this.attachOverlayers(stage, layersToAttach);
+    // 盯着站点的播放器容器：字幕是异步加载的，进全屏那一刻往往还没有 ——
+    // 后来出现的那些要补搬进 stage（见 probeOverlayLayers）。
+    // 必须在 attachOverlayers **之后**开始盯：搬运本身就是一次 DOM 变化，
+    // 先盯上会立刻被自己刚才的动作触发一次没必要的重扫。
+    this.startLayerWatch();
     this.alignStageToVideo(stage, video);
     // 控制条出现时要给字幕让位（两者都贴着画面底部）。
     this.controls?.setSubtitleLayers(layersToAttach);
@@ -857,7 +1291,29 @@ export class FullscreenController {
       // `readyState > 0` 这个前提同样必需：页面本来就没有源的 <video>
       // （占位符、还没挂 src）readyState 恒为 0，不加前提会把它们全部误判。
       const lostMedia = this.state.readyState > 0 && video.readyState === 0;
-      const lostLayout = rect.width < 32 || rect.height < 32 || !stage.contains(video);
+
+      // ⚠️ 「站点把视频**拿回了自己的容器**」是**会话结束**，不是「我们的布局坏了」。
+      //
+      // 以前它被并进 lostLayout，于是走的是 fallbackToCssCover()：
+      //   - 视频被搬回**原位置**（把站点刚建好的播放器掏空）；
+      //   - 降级成 fixed 铺满视口，body 照样锁死。
+      // 而这一档**永远等不到收摊** —— 健康检查的判据只认 reparent 模式，
+      // css-cover 模式里没有任何机制会发现「站点已经把视频拿回去了」。
+      // 结果就是同一个症状（页面卡死到用户按 Esc）换了一条门进来。
+      //
+      // 判据：视频**还连着文档**，却已经不在我们的 stage 里 ——
+      // 那就是站点自己把它拿走了，会话到此为止（release() 只清理、不搬运：
+      // 视频在站点手里，位置归站点管）。
+      //
+      // ⚠️ `video.isConnected` 这个前提必需：视频整个被站点丢掉时，
+      // 它同样不在 stage 里，但那是「节点死了」，走 release() 之外的
+      // 恢复路径（recoverDetachedOverlay）才对。
+      if (video.isConnected && !stage.contains(video)) {
+        this.release();
+        return;
+      }
+
+      const lostLayout = rect.width < 32 || rect.height < 32;
 
       if (lostPlaybackPosition || lostMedia || lostLayout) {
         this.fallbackToCssCover();
@@ -865,11 +1321,17 @@ export class FullscreenController {
     }, 180);
 
     this.startHealthCheck();
+    // 盯着「站点把我们的背板摘掉了」：摘掉的那一刻我们要把视频还给站点。
+    this.startHostWatch();
     return true;
   }
 
   // 只清理、不碰视频在页面里的位置。给「节点已经不在文档里」的路径用：
   // 还原 class/style/controls 对游离节点是 no-op，无副作用。
+  //
+  // ⚠️ 这是「全屏会话结束」的**唯一出口**：
+  // 无论是谁触发的结束（控制条的退出钮、Esc、站点把视频拿回去、
+  // 站点把背板摘了），最终都会走到这里。
   private release() {
     // ⚠️ 必须在最前面：撑大与还原必须**成对**。
     // 父文档那边被撑大的 iframe 元素若不还原，用户页面就被永久改成
@@ -879,9 +1341,27 @@ export class FullscreenController {
     this.frameExpander.setOwnFullscreen(false);
     // 同样必须无条件卸掉：监听器在 enter() 里注册，release() 是它的对称操作。
     document.removeEventListener('fullscreenchange', this.boundHandleFullscreenChange);
+    // ⚠️ 收摊的这几件事必须**无条件**做：即使下面 `state.video` 为空而提前返回，
+    // 它们也必须执行 ——
+    // - 宿主观察器不关，它会一直盯着 <html> 的子节点变化；
+    // - 健康检查不关，它会每 500ms 空转一次（视频早就没了，什么也干不了）。
+    this.stopHostWatch();
+    this.stopLayerWatch();
+    if (this.healthTimer !== null) {
+      window.clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
+
+    // 这一轮全屏用的那块背板。
+    //
+    // ⚠️ 必须在这里取出来并清空字段：它可能**已经被站点摘掉**了
+    // （恢复路径），那时 getElementById 找不到它 —— 只有这个引用还在。
+    const overlay = this.overlayElement;
+    this.overlayElement = null;
 
     const video = this.state.video;
     if (!video) {
+      this.finishSession();
       return;
     }
 
@@ -906,37 +1386,41 @@ export class FullscreenController {
     window.removeEventListener('resize', this.boundHandleViewportChange);
     window.visualViewport?.removeEventListener('resize', this.boundHandleViewportChange);
 
-    video.classList.remove('vsc-page-fullscreen-video', 'vsc-page-fullscreen-video--reparent', 'vsc-page-fullscreen-video--css-cover');
+    video.classList.remove(
+      FULLSCREEN_VIDEO_CLASS,
+      'vsc-page-fullscreen-video--reparent',
+      'vsc-page-fullscreen-video--css-cover',
+    );
     video.controls = this.state.originalControls;
-    if (this.videoTakenBackBySite && video.isConnected) {
-      // 站点把视频拿回去了 → 只撤掉**我们**写的那几个属性，
-      // 站点自己在这期间写下的样式一个字都不碰。
-      this.restoreLayoutProperties(video);
-    } else {
-      video.setAttribute('style', this.state.originalStyle);
-    }
+    // ⚠️ **逐属性**还原，不整块写回 style 属性。
+    //
+    // 站点在全屏期间会往视频上写它自己的样式（滤镜、圆角、Video.js/Plyr
+    // 那种 width/height/left/top）。整块写回会把这些统统抹掉 ——
+    // 用户退出全屏后看到的是「播放器样式整个被重置了」。
+    //
+    // 而「站点把视频拿回了自己的容器」那条路径早就是逐属性还原的，
+    // 两条出口对**同一件事**给出相反的结果（同一个 style 属性，
+    // 一条留着站点写的样式，一条全抹掉）—— 那不是两种策略，
+    // 是同一个 bug 的两副面孔。
+    this.restoreLayoutProperties(video);
 
-    document.getElementById(OVERLAY_ID)?.remove();
+    // 背板：正常退出时它还挂在文档里（摘掉）；恢复路径上它**已经被站点摘掉了**
+    // （摘不掉，但那个游离节点也不能留在我们手里）。
+    (overlay ?? document.getElementById(OVERLAY_ID))?.remove();
     // 正常情况下 body 必然存在（enter 已用 ensureOverlay 守过）；这里额外
     // 判空只为兜住「全屏中途文档把 body 移除」的极端情况，不让退出流程中断。
     if (document.body) {
       document.body.style.overflow = this.state.originalBodyOverflow;
     }
 
-    if (this.healthTimer !== null) {
-      window.clearInterval(this.healthTimer);
-      this.healthTimer = null;
-    }
-
-    this.videoTakenBackBySite = false;
     this.state = {
       video: null,
       mode: null,
       originalParent: null,
       originalNextSibling: null,
-      originalStyle: '',
       originalInlineStyles: new Map(),
       appliedInlineStyles: new Map(),
+      originalVideoRect: null,
       originalControls: false,
       originalBodyOverflow: '',
       currentTime: 0,
@@ -946,6 +1430,29 @@ export class FullscreenController {
       readyState: 0,
       overlayLayers: [],
     };
+
+    this.finishSession();
+  }
+
+  /**
+   * 「这一轮全屏会话结束了」—— 通知订阅方。
+   *
+   * ⚠️ 必须**恰好一次**：
+   * 订阅方（注册表）据此把「我们接管着哪个视频」清掉，
+   * 而那份状态留在那里会让注册表把一个**已经退出全屏**的视频当成
+   * 当前目标（症状见 onSessionEnd 的注释）。
+   *
+   * ⚠️ 为什么单独一个方法，而不是把通知写在 release() 的末尾：
+   * release() 有一条「state.video 为空就提前返回」的路径（视频早被站点
+   * 丢掉了），那条路径同样代表「会话结束了」—— 通知放在末尾就会被跳过。
+   */
+  private finishSession() {
+    if (!this.sessionActive) {
+      // 会话已经结束过了（第二次 release）—— 不重复通知。
+      return;
+    }
+    this.sessionActive = false;
+    this.onSessionEnd?.();
   }
 
   // sibling 守卫：全屏期间页面可能把 originalNextSibling 移走了（重排 DOM），
@@ -1025,22 +1532,33 @@ export class FullscreenController {
     if (this.state.mode === 'reparent' && this.state.originalParent) {
       const playbackSnapshot = this.capturePlaybackSnapshot(video);
 
-      // isConnected 守卫：页面若已把视频连同 originalNextSibling 一起丢弃，
-      // 插回去要么插入一张已经被页面丢弃的节点，要么直接抛 NotFoundError 让退出流程中断。
-      if (video.isConnected) {
-        if (this.isInsideOurStage(video)) {
-          // 我们还占着它 → 必须把它还给站点。
-          this.restoreToOriginalSlot(video, plan);
-          this.restoreIfLost(video, playbackSnapshot);
-        } else {
-          // 站点已经把视频拿回去了（重渲染时插回了它的新播放器容器）。
-          //
-          // ⚠️ 千万别再动它的位置：把它从站点刚建好的播放器里拔出来，
-          // 等于把站点的新播放器掏空 —— 那正是「站点变成空壳」的做法。
-          // 位置一个字都不碰，只在 release() 里撤掉我们写在它身上的样式。
-          this.videoTakenBackBySite = true;
-        }
+      // ⚠️ 判据是「**视频还在不在我们手上**」，不是「视频连不连着文档」。
+      //
+      // 这两件事本来是一致的 —— 直到站点把**我们的背板**摘掉：
+      // 视频会跟着背板一起脱离文档（isConnected 变 false），
+      // 但它仍然是**我们带走的**那个节点，站点并没有丢弃它。
+      // 那种情况下不还回去 = 用户的视频从此人间蒸发。
+      //
+      // 顺序也不能反：先判「在不在我们手上」，再判「站点是不是自己丢了它」。
+      if (this.isInsideOurOverlay(video)) {
+        // 我们还占着它 → 必须把它还给站点。
+        //
+        // ⚠️ 这里**不看** video.isConnected：它不连着文档可能只是因为
+        // 我们的背板脱了文档。它照样能被插回 originalParent ——
+        // 插回去之后自然就重新连着文档了。
+        this.restoreToOriginalSlot(video, plan);
+        this.restoreIfLost(video, playbackSnapshot);
+      } else if (video.isConnected) {
+        // 站点已经把视频拿回去了（重渲染时插回了它的新播放器容器）。
+        //
+        // ⚠️ 千万别再动它的位置：把它从站点刚建好的播放器里拔出来，
+        // 等于把站点的新播放器掏空 —— 那正是「站点变成空壳」的做法。
+        // 位置一个字都不碰，只在 release() 里撤掉我们写在它身上的样式
+        // （而且是**逐属性**撤：站点自己在这期间写下的样式不碰）。
       }
+      // 视频不连着文档、也不在我们的背板里 → 站点自己把它丢了：
+      // 不复活（把废弃节点插回 originalParent 会抛 NotFoundError，
+      // 还会对着没人看的游离节点调 play()）。只做清理。
     }
 
     // 可见性兜底：只在**兜底落点**上做（正常还原时样式是站点自己的，不能碰）。

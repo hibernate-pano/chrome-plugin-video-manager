@@ -13,6 +13,9 @@ import {
   type PersistedSettings,
   type ShortcutSettings,
 } from '../shared/types';
+import { markFirstRunHintAccepted } from '../shared/settings';
+// 判定规则所在的那个模块（只读结论，不碰它的实现细节）。
+import { readAmbientPreview } from './ambientPreview';
 // 只取类型，不引入运行时依赖：keyboardController 不需要 registry 的任何实现。
 import type { WatchedTarget } from './videoRegistry';
 
@@ -116,6 +119,15 @@ interface KeyboardControllerOptions {
    */
   getSiteAdapter?: (hostname: string) => SiteAdapter;
 }
+
+/**
+ * 「这是页面预览」这条解释的最小间隔（毫秒）。
+ *
+ * 提示本身要挂 2.6 秒，而读屏通道是**排队**播报的 ——
+ * 连按三下就是同一句话念三遍。3 秒既盖住了提示的停留时长，
+ * 又不至于让用户「再按一次看看」时看不到回应。
+ */
+const AMBIENT_NOTICE_THROTTLE_MS = 3000;
 
 /** 真正接收文本输入的 <input> 类型；其余（range/checkbox/button/color…）不算编辑态。 */
 const TEXT_INPUT_TYPES = new Set(['text', 'search', 'password', 'email', 'tel', 'url', 'number']);
@@ -454,6 +466,15 @@ export class KeyboardController {
    */
   private holdKey: string | null = null;
   /**
+   * 上一次解释「这是页面预览」的时间（毫秒时间戳，0 = 从没解释过）。
+   *
+   * ⚠️ 为什么要节流：那条提示会**跟着视频走**，而且每次按键都会重新播报
+   * （读屏通道是排队播报的，连按三下 = 同一句话念三遍）。
+   * 而提示本身要挂 2.6 秒 —— 所以这几秒里再按，屏幕上那条还在，
+   * 重新弹一遍只是闪一下、念一遍，纯粹是噪音。
+   */
+  private lastAmbientNoticeAt = 0;
+  /**
    * 我们最后一次**自己**写进去的倍速。
    *
    * 用途：长按重复的兜底 —— 发现当前倍速与这个值对不上，
@@ -769,6 +790,23 @@ export class KeyboardController {
       return false;
     }
 
+    // ⚠️ 「用户按下了扩展自己的键」= 他**会用**这个扩展了。
+    //
+    // 首次引导的落盘判据是「你会用了」，不是「你读过了」——
+    // 教一个已经会的人，比不教更糟（那唯一一次教学机会白白占了他的屏幕）。
+    // 所以这里**立刻**把「已展示」落盘：引导的 reveal() 在抢到锁之后会
+    // 复查这个标记（见 firstRunHint.ts 的 reveal），复查为真就不弹了。
+    //
+    // ⚠️ 为什么落盘判据改了，这里却不用改 firstRunHint.ts：
+    // 那边的 dismiss('accepted') 只在「提示已经显示过」时才落盘 ——
+    // 于是「用户先按了键、2.5 秒后引导才弹出」的顺序下，标记始终没落盘，
+    // 引导照弹不误（实测：用户已经会用 = 改了倍速，引导还是冒了出来）。
+    // 落盘的**判据**归 settings.ts，触发点在这里（唯一能确定
+    // 「用户按了扩展的键」的地方），两边不用改同一个文件。
+    void markFirstRunHintAccepted().catch(() => {
+      // 落盘失败只会导致引导多出现一次，不值得打断用户。
+    });
+
     // ⚠️ 站点自己在 **keyup** 上处理这个键 → **keydown 与 keyup 一起放行**。
     //
     // 我们在 keydown 上拦截 = 页面收不到 keydown；而 keyup 是另一次派发，
@@ -819,9 +857,24 @@ export class KeyboardController {
     const target = this.options.getWatchedTarget();
     if (!target) {
       this.clearHold();
-      // 放行不等于「什么都没发生」：这一层没有视频，不代表整个页面没有。
-      // 让运行时去说明原因（见 notifyNoVideoHere 的说明）。
-      this.options.notifyNoVideoHere?.();
+      // 「没有目标」有**两种**原因，说法必须不一样：
+      //
+      // 1. 这一层压根没有视频 → 问一圈别的 frame（视频可能在嵌入框里）；
+      // 2. 这一层**有**视频，但它被当成「页面预览」，我们**故意**不接管它。
+      //
+      // ⚠️ 第 2 种以前是**一声不吭**的（键穿透给页面、页面没绑定）：
+      // 用户按了 = 什么都没发生，而那条视频**看得见、正在播**——
+      // 他能得出的唯一结论是「扩展坏了」。
+      // 而这条视频是**页面摆在那儿的预览**（判定见 ambientPreview.ts），
+      // 原因**是已知的**，所以完全说得出「为什么」与「下一步做什么」。
+      const ambient = readAmbientPreview();
+      if (ambient) {
+        this.explainAmbientPreview(ambient, action);
+      } else {
+        // 放行不等于「什么都没发生」：这一层没有视频，不代表整个页面没有。
+        // 让运行时去说明原因（见 notifyNoVideoHere 的说明）。
+        this.options.notifyNoVideoHere?.();
+      }
       return false;
     }
 
@@ -953,6 +1006,40 @@ export class KeyboardController {
     this.clearRepeat();
     this.options.toggleFullscreen(video);
     return true;
+  }
+
+  /**
+   * 「这是页面预览」—— 把**为什么**与**下一步**一起说出来。
+   *
+   * ⚠️ 为什么这条提示**不能**说「控制不了」：
+   * 工具栏图标那条路径**能**接管页面预览（显式点击是明确意图，
+   * 见 videoRegistry.ts 的 resolveCurrentVideo），
+   * 所以「控制不了」会与事实矛盾，用户看到的会是「图标能、键盘不能」——
+   * 而且是**自相矛盾**的「图标能、键盘不能」。
+   * 这句话说的是**这条视频是什么**（页面摆在那儿的预览）
+   * 与**下一步做什么**（点一下它 / 点扩展图标），两边对得上。
+   *
+   * ⚠️ 空格不打扰：空格在页面上首先是「往下翻页」。
+   * 用户在读长文时按空格翻页，弹一条「这是页面预览」纯属噪音 ——
+   * 他并没有在「想控制视频」，键穿透给页面正是他想要的。
+   * 其余键（= / - / 方向键 / f）在页面上本来就没有默认行为，
+   * 用户按它们就是冲着视频来的，**不解释**就等于「按了没反应」。
+   */
+  private explainAmbientPreview(video: HTMLVideoElement, action: ShortcutAction) {
+    if (action === 'togglePlay') {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastAmbientNoticeAt < AMBIENT_NOTICE_THROTTLE_MS) {
+      return;
+    }
+    this.lastAmbientNoticeAt = now;
+
+    // ⚠️ 走的是「接管失败提示」那一条通道：它是这个产品**唯一**会说话的
+    // 视觉提示（与首次引导共用同一套胶囊与读屏播报），
+    // 而这里没有第二条通道可走 —— 运行时把「说什么」交给了它。
+    this.options.notifyTakeoverUnavailable?.(video);
   }
 
   handleKeyUp(event: KeyboardEvent): boolean {

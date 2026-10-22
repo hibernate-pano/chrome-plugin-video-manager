@@ -6,6 +6,8 @@ import {
 } from '../shared/settings';
 import {
   DEFAULT_SHORTCUTS,
+  EXTENSION_INSTALLED_MESSAGE,
+  ExtensionInstalledResponse,
   FrameFocusMessage,
   FRAME_FOCUS_MESSAGE,
   FRAME_GONE_MESSAGE,
@@ -147,7 +149,24 @@ export interface ContentRuntimeOptions {
 
 export class ContentRuntime {
   private readonly registry = new VideoRegistry();
-  private readonly fullscreenController = new FullscreenController();
+  /**
+   * 全屏控制器。
+   *
+   * ⚠️ 这里接了一条**唯一**的「会话结束」通知：
+   * 全屏会话的结束路径不止一条（控制条的退出钮、Esc、站点把视频拿回去、
+   * 站点把我们的背板摘了），而「我们接管着哪个视频」在注册表那边也有一份。
+   * 以前只有 Esc 那条路径会去更新注册表 —— 于是从控制条的退出钮退出之后，
+   * 注册表仍以为「我们接管着那个视频」：
+   * - 点工具栏图标 → 把那个**已经退出全屏**的视频搬进全屏（而不是眼前那个）；
+   * - 按空格 → 注册表认为那条视频是「我们自己接管的」，于是不再把它当成
+   *   页面预览，空格被它吃掉，页面翻不动。
+   *
+   * ⚠️ 回调是**延迟求值**的：注册表字段声明在前面，而真正调用发生在
+   * 全屏结束之后 —— 所以这里不存在初始化顺序问题。
+   */
+  private readonly fullscreenController = new FullscreenController({
+    onSessionEnd: () => this.registry.setFullscreenVideo(null),
+  });
   /**
    * 倍速的**唯一**上报入口在胶囊里：它把「读数变了」这件事统一成一次回调。
    *
@@ -179,6 +198,18 @@ export class ContentRuntime {
      * 视频开始播放之后 —— 所以这里不存在初始化顺序问题。
      */
     (video) => this.registry.isAmbientPreview(video),
+    /**
+     * 「这一层文档里有哪些视频」由 **VideoRegistry** 代答。
+     *
+     * ⚠️ 这条接缝是**补记**用的：扩展注入在 document_start，
+     * 但要等设置加载完才挂上 `play` 监听器 —— 页面脚本在这中间
+     * 把视频播起来，那次事件我们根本没听见，引导于是**永远不出现**。
+     * 而这恰恰是**首次安装**时最典型的场景（扩展是冷的）。
+     *
+     * ⚠️ 枚举口径只有一份（registry 的 shadow root 下钻规则），
+     * 这边不自己抄一份 `querySelectorAll('video')`。
+     */
+    () => this.registry.getAllVideos(),
   );
   private readonly keyboardController: KeyboardController;
   private settings: PersistedSettings = createDefaultSettings();
@@ -191,6 +222,17 @@ export class ContentRuntime {
    * 那不是「刚刚失效」，误判会让整个扩展把自己拆了。
    */
   private readonly hadRuntimeId: boolean;
+  /**
+   * 「扩展在这一页已停用」这条提示的**文案**，在上下文还活着的时候取好。
+   *
+   * ⚠️ 为什么不能等到要显示时再取：上下文失效之后，
+   * `chrome.i18n.getMessage` 会抛 "Extension context invalidated."，
+   * `t()` 于是回退到**中文兜底** —— 于是英文界面上的用户看到的是一句中文
+   * （实测：失效提示显示的正是那句中文兜底，而不是 locale 里的英文）。
+   *
+   * 构造函数跑在注入的那一刻，上下文还活着 —— 那里是唯一能拿到正确语言的地方。
+   */
+  private readonly staleNoticeText: string;
   /** 扩展上下文是否已经失效（一旦失效就不会恢复）。 */
   private contextInvalidated = false;
   /** 是否已经拆过一次（stop() 幂等）。 */
@@ -200,6 +242,11 @@ export class ContentRuntime {
     this.hadRuntimeId = typeof chrome !== 'undefined'
       && typeof chrome.runtime?.id === 'string'
       && chrome.runtime.id.length > 0;
+
+    this.staleNoticeText = t(
+      'extensionInactive',
+      '扩展在这一页已停用。请刷新本页。如果扩展已被禁用，请到扩展程序页重新启用它。',
+    );
 
     this.keyboardController = new KeyboardController({
     getSettings: () => this.settings,
@@ -218,8 +265,11 @@ export class ContentRuntime {
     toggleFullscreen: (video) => this.toggleFullscreenFor(video, { focusControls: true }),
     exitFullscreen: () => {
       const wasActive = this.fullscreenController.isActive();
+      // ⚠️ 这里**不再**调 registry.setFullscreenVideo(null)：
+      // 「会话结束」的通知由控制器在 release() 里统一发出（谁触发的退出
+      // 都不重要）。在这里再补一行，就是「第二个调用点补一行」的那种补丁 ——
+      // 下一条退出路径还会漏（而它已经漏过一次了）。
       this.fullscreenController.exit();
-      this.registry.setFullscreenVideo(null);
       this.announceFullscreen(this.fullscreenController.isActive(), wasActive);
     },
     // 全屏内外都给一次性提示：控制条鼠标静止 3 秒就隐藏，键盘调速时它
@@ -237,7 +287,23 @@ export class ContentRuntime {
       void this.notifyNoVideoHere();
     },
     // 播放状态变了：画面上没有任何提示，读屏用户完全无从确认。
+    //
+    // ⚠️ 这里同时要告诉注册表「**是我们**按停的」。
+    //
+    // 根因（实测，真实 Chromium）：`isRunning`（正在播）是「能不能吃空格」
+    // 的条件之一。扩展自己按空格把视频暂停之后它立刻变 false →
+    // 权限从 'full' 掉到 'no-space' → 下一次空格被**还给页面**：
+    // 视频不动，页面往下翻页。用户看到的是「空格键坏了」（而 `=` 仍然有效）。
+    //
+    // ⚠️ 为什么不能把这个信号记在 `getWatchedTarget` 里（那是最初的写法）：
+    // 那条路径对**任何**解析出的目标都会记录，包括 no-space 的 ——
+    // 于是文章页里的预览视频只要被 `=` 碰过一次，就会升级成能吃空格的
+    // 'full'，翻页彻底失效（判据 11）。
+    //
+    // 这个回调**只**在快捷键路径上触发（keyboardController 的 togglePlay 分支），
+    // 语义正好是「我们自己的快捷键切换了播放状态」—— 不多不少。
     onPlaybackStateChange: (playing) => {
+      this.registry.noteShortcutPlaybackChange(playing);
       announce(playing
         ? t('playbackPlaying', '正在播放')
         : t('playbackPaused', '已暂停'));
@@ -763,7 +829,20 @@ export class ContentRuntime {
   }
 
   /**
-   * 「扩展已更新，请刷新本页」。
+   * 「扩展在这一页已停用。请刷新本页。如果扩展已被禁用，请到扩展程序页重新启用它。」
+   *
+   * ⚠️ **为什么不能写成「扩展已更新」**：这句话只有一种触发路径
+   * （chrome.runtime.id 变成 undefined），而那条路径上「被更新」与「被禁用」
+   * **根本分不开** —— 实测（真实 Chromium，真实禁用）两者的 18 项可观察信号
+   * 逐项相同：`runtime.id` 都是 undefined，`getManifest` / `getURL` /
+   * `getVersion` / `i18n.getMessage` / `storage.*` / `runtime.connect` 全都抛
+   * "Extension context invalidated."，`sendMessage` 全都 reject。
+   * 于是旧文案在「被禁用」时是**一句谎话**，而且它指向的恰好是
+   * 被禁用时**唯一没用**的那一招（刷新页面救不回一个被禁用的扩展）——
+   * 用户会一直刷新，一直看到同一句话。
+   *
+   * 所以文案必须对三种原因（更新 / 重载 / 禁用）都成立，
+   * 并把「禁用」的那条路一起说清楚。
    *
    * ⚠️ 它自己就是一个 live region（role=status + aria-live=polite）：
    * 共享的 #vsc-live-region 刚刚被拆掉了，而读屏用户仍然需要听到这句话 ——
@@ -774,6 +853,22 @@ export class ContentRuntime {
    */
   private showExtensionStaleNotice() {
     if (!document.body) {
+      return;
+    }
+
+    // ⚠️ 只有**顶层**文档说这句话。
+    //
+    // 内容脚本注入到所有 frame（all_frames: true），而「同一层只说一次」
+    // 那道闸是**按文档**判的（getElementById 查的是本 frame 的文档）——
+    // 它挡得住「同一层说两遍」，挡不住「每个 frame 各说一遍」。
+    //
+    // 实测：顶层 frame 一定会在一秒内察觉（它占着用户焦点，巡检在跑），
+    // 而子 frame 要等用户点进去才察觉 —— 那时用户会同时看到两条一样的
+    // 提示（一条在页面左上角，一条在嵌入框里），而这句话只需要说一遍。
+    //
+    // `window.top !== window` 这个判据跨域也合法：它只比较引用，不读
+    // 顶层窗口的任何属性。
+    if (window.top !== window) {
       return;
     }
 
@@ -794,7 +889,9 @@ export class ContentRuntime {
     mountViewportRoot(root);
     showNotice(root, 'vsc-visible');
 
-    root.textContent = t('extensionUpdated', '扩展已更新，请刷新本页');
+    // ⚠️ 用构造时取好的文案：此刻上下文已经死了，
+    // 现在去问 chrome.i18n 只会拿到中文兜底（见 staleNoticeText 的说明）。
+    root.textContent = this.staleNoticeText;
   }
 
   /**
@@ -1057,6 +1154,37 @@ export class ContentRuntime {
       sendResponse(this.answerFrameProbe());
       return;
     }
+
+    if (type === EXTENSION_INSTALLED_MESSAGE) {
+      // background 在问「你这一层跑的是哪一版？」
+      //
+      // ⚠️ 这里**不弹提示**：能收到这条消息的内容脚本，跑的就是当前版本
+      // （它是在扩展装好之后才被注入的），没什么要提示的。
+      // 这条消息是一把尺子 —— 版本号就是尺子上的刻度。
+      sendResponse(this.answerExtensionInstalled());
+      return;
+    }
+  }
+
+  /**
+   * 回答「我这一层跑的是哪一版？」
+   *
+   * ⚠️ 版本号取自 `chrome.runtime.getManifest()`：
+   * 它是**注入这一份内容脚本时**那一版的版本号 —— 也就是
+   * 「这个标签页跑的是哪一版」的唯一证据。
+   *
+   * ⚠️ 上下文已经失效时 `getManifest()` 会抛 —— 那时 background 反正
+   * 收不到回答（发消息的路已经断了），所以这里回一个空版本号即可。
+   */
+  private answerExtensionInstalled(): ExtensionInstalledResponse {
+    let version = '';
+    try {
+      version = chrome.runtime?.getManifest?.()?.version ?? '';
+    } catch {
+      // 上下文已死：回答一个空版本号，background 会把它当成「答不上来」。
+    }
+
+    return { ok: true, version };
   }
 
   /**

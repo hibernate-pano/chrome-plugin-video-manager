@@ -108,7 +108,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        # ⚠️ 装进**项目内的私有缓存**，不是全局那一份。
+        # 全局缓存是这台机器上所有项目共享的，而 Playwright 的
+        # `_deleteStaleBrowsers` 会把「没有标记文件」的浏览器目录删掉 ——
+        # 别的项目跑一次 install 就能把这里装好的浏览器清掉。
+        # 私有缓存别人碰不到（GC 只扫全局注册表那一份）。
+        # 详见 tests/e2e/helpers/launch.js 的说明。
+        run: PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright pnpm exec playwright install --with-deps chromium
 
       - name: Run real-extension e2e
         run: pnpm run test:e2e:ext

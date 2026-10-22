@@ -142,11 +142,16 @@ test.describe('标题不许挂在早已不存在的倍速上', () => {
     // 现在谎报没了（「这里没有视频」不是一个可以写进标题的倍速），
     // 复位必须由**明确的路径**负责。
     //
-    // ⚠️ 实测（真实 Chromium）：**跨文档导航时 Chrome 自己会把这一标签页的
-    // 标题恢复成默认值**（探针里全程没有一次 setTitle 调用，标题却已经回到
-    // 默认态了）。所以这条用例守的不是「谁改的」，而是「这条契约仍然成立」——
-    // 哪天那条「顺带」的路被彻底堵死（或者我们自己的逻辑把它覆盖回去），
-    // 它会红。
+    // ⚠️ 上一版这条用例是**恒真**的：跨文档导航时 Chrome 自己会把这一标签页的
+    // 标题恢复成默认值（探针里全程没有一次 setTitle 调用，标题却已经回到
+    // 默认态了）。于是「标题复位了」这件事**无论我们的内容脚本跑没跑都成立** ——
+    // 守卫等于没守：内容脚本在新文档里根本没起来，它照样绿。
+    //
+    // 现在这条用例量的是**我们自己的两条路径**：
+    // 1. 新文档里我们的内容脚本确实起来了（`#vsc-runtime-styles` 已挂上）；
+    // 2. 它**没有**再拿 1 冒充倍速（标题是 actionTitle 本身，不是「… — 1x」）。
+    // 第 1 条堵住「Chrome 帮我们复位了」这个漏洞（内容脚本没起来 → 红灯）；
+    // 第 2 条堵住「谎报」这个漏洞（报 1 倍 → 红灯）。
     const ext = await launchExtension();
     try {
       const { page, title } = await setUp(ext);
@@ -166,8 +171,81 @@ test.describe('标题不许挂在早已不存在的倍速上', () => {
       });
       await page.goto('http://127.0.0.1:4173/blank');
 
+      // 前置条件：新文档里我们的内容脚本确实活着。
+      // ⚠️ 没有这一条，下面那句「标题复位了」是恒真的 ——
+      // Chrome 自己会复位标题，我们的代码死没死这条用例都绿。
+      await expect(page.locator('#vsc-runtime-styles')).toHaveCount(1);
+
       await expect.poll(title, { timeout: 10_000 }).not.toContain('1.2x');
+      // ⚠️ anyLocale 是带 ^...$ 锚点的全等正则：
+      // 标题要是变成「… — 1x」（拿 1 冒充倍速），它匹配不上 → 红灯。
       await expect.poll(title, { timeout: 10_000 }).toMatch(anyLocale('actionTitle'));
+    } finally {
+      await ext.close();
+    }
+  });
+
+  /**
+   * 整页导航到**另一个有视频**的页面 → 标题必须跟着**新页面**的倍速走。
+   *
+   * ⚠️ 为什么必须多这一条：跨文档导航时 Chrome 自己会把标题复位成默认值。
+   * 于是「标题里没有 1.2x」那种断言，在**我们的内容脚本根本没起来**时
+   * 也会成立（Chrome 帮它复位了）—— 守卫是空的。
+   * 加上「标题上必须有新页面的 1.5x」，断言就只有在
+   * **我们真的在新文档里重新接管并上报了新倍速**时才成立。
+   *
+   * 这条守的是一条真实的用户路径：看着一个视频 → 整页跳到另一个视频
+   * → 倍速读数必须跟着走，而不是停在旧页面的 1.2 倍上。
+   */
+  test('整页导航到另一个有视频的页面 → 标题跟着新页面的倍速走', async () => {
+    const ext = await launchExtension();
+    try {
+      const { page, title } = await setUp(ext);
+
+      // 新页面：主 frame 里直接有一个视频（不是 iframe）。
+      await page.route('**/*', (route) => {
+        const url = route.request().url();
+        if (url.startsWith('chrome-extension://')) return route.continue();
+        return route.fulfill({
+          status: 200,
+          contentType: 'text/html; charset=utf-8',
+          body: '<!DOCTYPE html><html><head><meta charset="utf-8"><style>video{display:block;width:320px;height:180px;background:#000}</style></head><body><video id="v2" muted playsinline></video><p id="grab">grab</p></body></html>',
+        });
+      });
+      await page.goto('http://127.0.0.1:4173/other');
+
+      // 前置条件：新文档里我们的内容脚本活着。
+      await expect(page.locator('#vsc-runtime-styles')).toHaveCount(1);
+
+      // 焦点进新页面。
+      // ⚠️ 必须**点一下视频**并让它看起来在播：扩展是按「打分」挑目标视频的
+      // （尺寸 / 在视口 / 在播 / 用户刚选过），一个没人碰过的静止视频
+      // 拿不到分，`=` 就没有落点 —— 那是**扩展的既定规矩**，不是本条要测的东西。
+      // 这也正是用户真实的路径：点开视频，再调速。
+      await page.locator('#v2').click();
+      await page.evaluate(() => {
+        const video = document.getElementById('v2');
+        Object.defineProperty(video, 'readyState', { value: 4, configurable: true });
+        Object.defineProperty(video, 'paused', { value: false, writable: true, configurable: true });
+      });
+
+      // 把它调到 1.5 倍（每按一次 +0.1）。
+      for (let index = 0; index < 5; index += 1) {
+        await page.keyboard.press('=');
+        await page.waitForTimeout(150);
+      }
+
+      // 前置条件：新页面的视频真的到了 1.5 倍。
+      await expect
+        .poll(
+          () => page.evaluate(() => document.getElementById('v2').playbackRate),
+          { timeout: 10_000 },
+        )
+        .toBeCloseTo(1.5, 2);
+
+      // 标题挂的必须是**新页面**的倍速 —— 旧页面的 1.2x 不许留下来。
+      await expect.poll(title, { timeout: 10_000 }).toContain('1.5x');
+      await expect.poll(title, { timeout: 10_000 }).not.toContain('1.2x');
     } finally {
       await ext.close();
     }

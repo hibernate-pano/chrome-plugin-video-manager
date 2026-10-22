@@ -30,7 +30,7 @@ Chrome. The extension itself communicates with no server.
 | 存储项 / Item | 位置 / Where | 内容 / Contents | 目的 / Purpose |
 |---|---|---|---|
 | 快捷键绑定 / Key bindings | `chrome.storage.sync` | 你为每个动作绑定的按键 / The key you bound to each action | 让你在所有设备上用同一套键 / So the same keys work on every device |
-| 首次引导已展示标记 / First-run hint flag | `chrome.storage.local` | 一个布尔值 / A single boolean | 避免每次刷新都重新提示你 / So the intro only appears once |
+| 首次引导已展示标记 / First-run hint flag | `chrome.storage.local` | 一个布尔值 / A single boolean | 避免每次刷新都重新提示你 / So the intro only appears once —— 提示**显示出来**的那一刻就写下它；你按下扩展的快捷键、它真的生效了，也会写下它（「会用」比「你读过」更早也更准）/ It is written the moment the intro appears, and also as soon as you press one of the extension's own shortcuts and it works — using it is a stronger signal than having read the intro |
 | 首次引导的关闭次数 / Intro dismissal count | `chrome.storage.local` | 一个整数 / A single integer | 连续主动关掉三次就暂时不再出现 / Stop nagging after three deliberate dismissals |
 | 首次引导的冷却到期时间 / Intro cooldown expiry | `chrome.storage.local` | 一个时间戳 / A single timestamp | 安静 1 天，但冷却到期仍会再给一次机会 / Quiet for one day — with an expiry, so it can still come back |
 | 引导的「一次性认领」标记 / Intro claim lock | `chrome.storage.local` | 一个随机 ID 与一个时间戳（30 秒后过期）/ A random id and a timestamp (expires after 30 seconds) | 保证同一条引导只在一个 frame 里出现一次 / So the intro appears once, in one frame only |

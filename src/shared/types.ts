@@ -258,6 +258,45 @@ export interface FrameGoneMessage {
  */
 export const SPEED_CHANGE_EVENT = 'vsc-speed-change';
 
+/**
+ * 「扩展刚装好 / 刚更新」—— background 在 `chrome.runtime.onInstalled`
+ * 时刻向所有标签页发的一次**探测**。
+ *
+ * ⚠️ 它**不是**「弹一条提示」的消息：能收到它的内容脚本，跑的就是**当前版本**
+ * （它是在扩展装好之后才被注入的），没什么要提示的。
+ * 它是一把尺子 —— 回答里带着**注入它的那一版版本号**，
+ * background 拿它跟当前版本比：
+ *
+ * - 有人回答且版本相同 → 那个标签页是新的 → 不用管；
+ * - 有人回答但版本不同 → 那个标签页在跑旧副本 → 要刷新；
+ * - 没人回答 → 那个标签页要么没有内容脚本（刚装），
+ *   要么只剩一个上下文已死的僵尸（刚更新）→ 两种都得刷新。
+ *
+ * ⚠️ 实测（真实 Chromium，见 docs/ARCHITECTURE.md「装完了」那一节）：
+ * `chrome.tabs.sendMessage` **送不到**僵尸内容脚本（它的 chrome.runtime
+ * 上下文已经死了），也送不到没有内容脚本的标签页
+ * （"Could not establish connection. Receiving end does not exist."）。
+ * 唯一能往那些标签页里塞东西的办法是 `chrome.scripting.executeScript`，
+ * 而它需要 "scripting" 权限 —— 那是一次 manifest 改动，不在本次范围内。
+ */
+export const EXTENSION_INSTALLED_MESSAGE = 'vsc-extension-installed';
+
+/** 探测本身：一条不带载荷的指令。 */
+export interface ExtensionInstalledMessage {
+  type: typeof EXTENSION_INSTALLED_MESSAGE;
+}
+
+/**
+ * 探测的回答。
+ *
+ * `version` 是**注入这一份内容脚本时**扩展的版本号 ——
+ * 它是「这个标签页跑的是哪一版」的唯一证据。
+ */
+export interface ExtensionInstalledResponse {
+  ok: true;
+  version: string;
+}
+
 export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   { id: 'increaseSpeed' },
   { id: 'decreaseSpeed' },

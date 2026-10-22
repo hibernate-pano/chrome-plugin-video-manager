@@ -5,6 +5,8 @@ import {
   isDecorativeAutoplay,
   isPageMainContent,
   isSiteMainPlayerVideo,
+  publishAmbientPreview,
+  readAmbientPreview,
 } from './ambientPreview';
 
 /**
@@ -316,5 +318,38 @@ describe('ambientPreview：判定只有一份（结构守卫）', () => {
         `${path} 不能给 isPageMainContent 传第三个参数`,
       ).not.toMatch(/isPageMainContent\([^)]*,[^)]*,/);
     }
+  });
+});
+
+/**
+ * 「判定的对外一格」—— 判定结果要有一处**别处能读到**的地方。
+ *
+ * ⚠️ 为什么需要它：规则只有一份（本文件 + VideoRegistry 的两条私有证据），
+ * 但**说这句话**的有两处（快捷键路径、接管失败提示），
+ * 而它们各自只拿到「这里没有可接管的目标」这一半。
+ *
+ * 所以这里守的是「登记了就能读到、没登记就是没有」——
+ * 没有它，两处会各自去猜「为什么接管不了」，于是又出现两份判据。
+ */
+describe('ambientPreview：判定结果对外可见', () => {
+  afterEach(() => {
+    publishAmbientPreview(null);
+  });
+
+  it('登记了就能读到，读到的是同一条视频', () => {
+    const video = document.createElement('video');
+
+    publishAmbientPreview(video);
+
+    expect(readAmbientPreview()).toBe(video);
+  });
+
+  it('登记 null 就是「这一层没有页面预览」', () => {
+    const video = document.createElement('video');
+    publishAmbientPreview(video);
+
+    publishAmbientPreview(null);
+
+    expect(readAmbientPreview()).toBeNull();
   });
 });

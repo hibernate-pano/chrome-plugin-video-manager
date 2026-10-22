@@ -155,6 +155,23 @@ describe('FullscreenControls', () => {
     return controls;
   };
 
+  /**
+   * 装一个「休息位」（生产环境里是播放器舞台）。
+   *
+   * ⚠️ tabindex="-1" 不是装饰：jsdom 只让**可聚焦**的元素接住 focus()，
+   * 而「可聚焦」的判定之一就是有没有 tabindex 属性。生产环境里舞台也是
+   * tabindex="-1"（可被程序聚焦，但不进 Tab 序列）。
+   */
+  const mountWithRestingTarget = () => {
+    const restingTarget = document.createElement('div');
+    restingTarget.id = 'vsc-test-player-surface';
+    restingTarget.tabIndex = -1;
+    document.body.appendChild(restingTarget);
+    const controls = new FullscreenControls(video, { onExit, restingTarget });
+    controls.mount();
+    return { controls, restingTarget };
+  };
+
   const clickVideo = (init: MouseEventInit = {}) => {
     video.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
   };
@@ -557,7 +574,28 @@ describe('FullscreenControls', () => {
     vi.advanceTimersByTime(10_000);
 
     // 焦点还在控制条里却把它藏了，键盘用户盯着屏幕什么也看不到。
+    //
+    // ⚠️ 这是**交不出焦点时的兜底**：没有休息位（焦点无处可去）就不能藏。
+    // 生产路径有休息位（播放器舞台），走的是下一条用例。
     expect(shadowRoot()?.querySelector('.bar')?.classList.contains('bar--visible')).toBe(true);
+  });
+
+  it('hands the focus to the resting target before the bar collapses', () => {
+    const { restingTarget } = mountWithRestingTarget();
+    $('play').focus();
+    expect(document.activeElement).toBe(document.getElementById('vsc-controls'));
+
+    vi.advanceTimersByTime(10_000);
+
+    // 控制条必须能自动隐藏 —— 键盘进全屏时焦点是**我们**放进去的，
+    // 用户并没有选它；控制条因此永远霸占着屏幕（挡住字幕与画面），
+    // 而「永远在的退出入口」也就永远不出现。
+    expect(
+      shadowRoot()?.querySelector('.bar')?.classList.contains('bar--visible'),
+      '控制条必须能自动隐藏（焦点交出去之后就该藏）',
+    ).toBe(false);
+    // 焦点不能凭空消失：它必须落在看得见的地方。
+    expect(document.activeElement, '焦点必须被交到休息位（看得见的地方）').toBe(restingTarget);
   });
 
   it('exposes focusFirst() for keyboard-driven fullscreen entry', () => {
@@ -567,6 +605,18 @@ describe('FullscreenControls', () => {
     controls.focusFirst();
 
     expect(document.activeElement).toBe(document.getElementById('vsc-controls'));
+  });
+
+  it('focusFirst() puts the focus on the player surface, not inside the bar', () => {
+    const { controls, restingTarget } = mountWithRestingTarget();
+
+    controls.focusFirst();
+
+    // ⚠️ 焦点停在控制条里会同时坏掉两件事：
+    // 1. 「焦点在里面就别藏控制条」那条守卫恒真 → 控制条永远不消失；
+    // 2. 扩展的键盘拦截按**事件路径**判定，路径里有 #vsc-controls 就把
+    //    空格与方向键让给自己的控件 → 键盘用户的播放/暂停与快进全废。
+    expect(document.activeElement, '焦点必须落在控制条宿主之外').toBe(restingTarget);
   });
 
   // --- 无障碍 ---
@@ -819,6 +869,38 @@ describe('FullscreenControls', () => {
       collapsed().click();
       expect(onExit, '点收起态的退出钮必须退出全屏（与控制条里的退出按钮同一个动作）')
         .toHaveBeenCalledTimes(1);
+    });
+
+    it('Tab 不会唤醒控制条 —— 唤醒会把收起态的退出钮踢出焦点序列', () => {
+      mount();
+      vi.advanceTimersByTime(3000);
+      expect(barIsVisible(), '控制条应该已经收起').toBe(false);
+      expect(collapsed().style.visibility).toBe('visible');
+
+      // 真实的按键：Tab。
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+
+      // ⚠️ 唤醒处理跑在 **window 的捕获阶段**，而浏览器计算「下一个 Tab
+      // 停靠点」发生在 keydown 的**默认动作**阶段 —— 也就是唤醒之后。
+      // 唤醒会把收起态的退出钮移出焦点序列（tabIndex = -1），
+      // 于是浏览器算停靠点时那枚「永远在的退出入口」已经不在序列里了：
+      // 它**永远 Tab 不到**，键盘用户只能靠 Esc。
+      //
+      // 所以 Tab（导航键）不许唤醒控制条。
+      expect(barIsVisible(), 'Tab 是导航键，不该唤醒控制条').toBe(false);
+      expect(collapsed().tabIndex, '收起态的退出钮必须留在焦点序列里').toBe(0);
+      expect(collapsed().style.visibility, '收起态的退出钮必须还在').toBe('visible');
+    });
+
+    it('其他按键仍然会把控制条唤回来', () => {
+      mount();
+      vi.advanceTimersByTime(3000);
+      expect(barIsVisible(), '控制条应该已经收起').toBe(false);
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+
+      // 纯键盘用户没有鼠标可动 —— 按键必须能把控制条唤回来。
+      expect(barIsVisible(), '任何按键都要能把控制条唤回来').toBe(true);
     });
 
     it('焦点落到退出钮上 → 控制条回来、退出钮让位，焦点交接给控制条里的退出按钮', () => {

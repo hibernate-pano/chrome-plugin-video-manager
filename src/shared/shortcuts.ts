@@ -1,6 +1,51 @@
 import { DEFAULT_SHORTCUTS, ShortcutSettings } from './types';
 
-const MODIFIER_KEYS = new Set(['ctrl', 'control', 'alt', 'shift', 'meta', 'os']);
+/**
+ * 修饰键的**规范名**。
+ *
+ * ⚠️ 只有这四个是合法的修饰键名。其余的写法（`control` / `os` / `option` /
+ * `cmd` / `command`）都是**别名** —— 它们必须被**归一到**规范名，
+ * 而不是被当成另一套合法的修饰键。
+ *
+ * 背景（6.2.0 审计缺陷 3）：`MODIFIER_PREFIX` 曾经同时接受 `control` 与 `os`，
+ * 而 `matchesShortcut` 只认 `ctrl` / `meta` —— 两套集合**分裂**了。
+ * 于是 `control+j` 落进 storage 就是一条**永远不生效**的绑定：
+ * 归一后保留成 `control+j`，而事件匹配时找的是 `ctrl` → 永远匹配不上。
+ * 更糟的是它**抢走了裸键**：`control+j` 与裸 `j` 归一后主键都是 `j`，
+ * 但匹配时 `modifiers.has('ctrl')` 为假 → 裸 `j` 也触发不了。
+ *
+ * 所以别名必须在**归一阶段**就折成规范名：`control+j` → `ctrl+j`（立刻生效），
+ * `os+k` → `meta+k`。
+ */
+export const CANONICAL_MODIFIERS: ReadonlySet<string> = new Set(['ctrl', 'alt', 'shift', 'meta']);
+
+/**
+ * 修饰键的**别名** → 规范名。
+ *
+ * ⚠️ 这张表是**闭集**：表里没有的名字一律不是修饰键（会被当成主键，
+ * 进而被「主键是修饰键」那条守卫判成非法绑定）。
+ */
+export const MODIFIER_ALIASES: Readonly<Record<string, string>> = {
+  ctrl: 'ctrl',
+  control: 'ctrl',
+  alt: 'alt',
+  option: 'alt',
+  shift: 'shift',
+  meta: 'meta',
+  os: 'meta',
+  cmd: 'meta',
+  command: 'meta',
+  super: 'meta',
+  win: 'meta',
+};
+
+/**
+ * 所有「算是修饰键」的名字（规范名 + 别名）。
+ *
+ * ⚠️ 这个集合只用于**判断「这串东西是不是修饰键」**，
+ * 归一之后留下的必须永远是 `CANONICAL_MODIFIERS` 里的规范名。
+ */
+const MODIFIER_KEYS = new Set(Object.keys(MODIFIER_ALIASES));
 
 /**
  * 「+」键的规范写法。
@@ -20,11 +65,15 @@ const MODIFIER_KEYS = new Set(['ctrl', 'control', 'alt', 'shift', 'meta', 'os'])
 export const PLUS_KEY = 'plus';
 
 /**
- * 修饰键前缀：`ctrl+` / `control+` / `alt+` / `shift+` / `meta+` / `os+`。
+ * 修饰键前缀：`ctrl+` / `control+` / `alt+` / `option+` / `shift+` / `meta+` /
+ * `os+` / `cmd+` / `command+` / `super+` / `win+`。
  *
  * 从左往右逐层剥掉修饰键，剩下的就是主键。
+ *
+ * ⚠️ 剥掉之后**必须**折成规范名（见 MODIFIER_ALIASES）——
+ * 留着别名就等于多出一套「看起来合法、实际匹配不上」的修饰键。
  */
-const MODIFIER_PREFIX = /^(ctrl|control|alt|shift|meta|os)\+(.*)$/i;
+const MODIFIER_PREFIX = /^(ctrl|control|alt|option|shift|meta|os|cmd|command|super|win)\+(.*)$/i;
 
 /**
  * Shift 变体字符 → 基础键字符。
@@ -67,6 +116,61 @@ export const SHIFT_VARIANT_KEYS: Readonly<Record<string, string>> = {
 export const normalizeShiftVariant = (value: string): string =>
   SHIFT_VARIANT_KEYS[value] ?? value;
 
+/**
+ * **物理键位**（`KeyboardEvent.code`）→ 规范主键名。
+ *
+ * ## 为什么需要它
+ *
+ * `event.key` 是**当前键盘布局打出来的字符**，`event.code` 是**物理键位**。
+ * 同一个物理键（`code: "Comma"`）在不同布局下给出不同的 `event.key`：
+ *
+ * | 布局 | 物理键 Comma 打出来的字符 |
+ * | --- | --- |
+ * | 美式 | `,`（Shift 时是 `<`） |
+ * | 德式 | `,`（Shift 时是 `;`） |
+ *
+ * 扩展自己的命令键在 manifest 里写的是 `"Ctrl+Shift+Comma"` ——
+ * 那说的是**物理键位**，不是「美式键盘上的逗号字符」。
+ * 于是德式键盘上用户按 Ctrl+Shift+Comma 时录到的是 `ctrl+shift+;`，
+ * 与 manifest 比对不上 → **自冲突检测失效** → 用户把动作绑上去，
+ * 浏览器先调度命令（弹出设置页），他要的动作一次都不会发生。
+ *
+ * ## ⚠️ 为什么表里**只有 Comma**
+ *
+ * 审计建议「全局改成 code 优先」，实测那条路会**弄坏非美式布局的默认绑定**：
+ *
+ * - 德式键盘上，`code: "Slash"` 那个键印的是 `-`，打出来的是 `-`；
+ *   把 `Slash` 归成 `/` 之后，用户按那个键录到 `/`，
+ *   而默认的「减速 = `-`」从此**永远匹配不上**；
+ * - `code: "Minus"` 在德式键盘上打的是 `ß`、`code: "Equal"` 打的是 `´` ——
+ *   按物理键归一会把用户**看得见的字符**改掉。
+ *
+ * 也就是说：**字符才是用户心里的那个键，物理键位只在「跨布局必须指向同一个
+ * 物理位置」时才有意义**。而本产品里唯一有这条要求的是扩展自己的命令键
+ * （manifest 写的就是物理键名 `Comma`）。所以只归一这一颗，
+ * 其余一律按字符 —— 默认绑定在所有布局上都不受影响。
+ *
+ * ⚠️ 加新条目之前先问一句：**这个物理键在别的布局上印的是不是同一个字符？**
+ * 不是的话，加进来就是在改用户的绑定。
+ */
+export const PHYSICAL_KEY_ALIASES: Readonly<Record<string, string>> = {
+  Comma: ',',
+};
+
+/**
+ * `KeyboardEvent.code` → 规范主键名。
+ *
+ * ⚠️ **查不到就返回空串** —— 那表示「这个物理键位我们不额外归一」，
+ * 调用方应当回落到 `event.key`（字符形态），而不是猜一个。
+ */
+export const normalizeKeyCode = (code: string): string => {
+  if (code === '') {
+    return '';
+  }
+
+  return PHYSICAL_KEY_ALIASES[code] ?? '';
+};
+
 const normalizeMainKey = (value: string) => {
   if (value === '' || value === ' ' || value === 'Space' || value === 'Spacebar') {
     return ' ';
@@ -88,6 +192,33 @@ const normalizeMainKey = (value: string) => {
   }
 
   return base;
+};
+
+/**
+ * 一个键盘事件的主键 —— **优先按物理键位（`event.code`）判**。
+ *
+ * ## 为什么优先用 code
+ *
+ * `event.key` 是**当前键盘布局打出来的字符**，`event.code` 是**物理键位**。
+ * 同一个物理键在不同布局下给出不同的 `event.key`：
+ * 逗号键（`code: "Comma"`）在美式键盘上是 `,`，在德式键盘上是 `;`。
+ *
+ * 扩展自己的命令键在 manifest 里写的是 `"Ctrl+Shift+Comma"` ——
+ * 那说的是**物理键位**。所以归一必须以物理键为准，
+ * 否则德语键盘上用户按 Ctrl+Shift+Comma 时录到的是 `ctrl+shift+;`，
+ * 与 manifest 比对不上 → **自冲突检测失效** → 用户把动作绑上去，
+ * 浏览器先调度命令（打开设置页），他要的动作一次都不会发生。
+ *
+ * ⚠️ `code` 不可得时（合成事件、老浏览器）**回落到字符**：
+ * 那时我们只知道「他按出了这个字符」，那是能拿到的唯一事实。
+ */
+export const eventMainKey = (event: KeyboardEvent): string => {
+  const byCode = normalizeKeyCode(event.code ?? '');
+  if (byCode !== '') {
+    return byCode;
+  }
+
+  return normalizeMainKey(event.key);
 };
 
 /**
@@ -120,7 +251,7 @@ export const normalizeShortcut = (value: string) => {
       break;
     }
 
-    modifiers.push(matched[1].toLowerCase());
+    modifiers.push(MODIFIER_ALIASES[matched[1].toLowerCase()] ?? matched[1].toLowerCase());
     rest = matched[2];
   }
 
@@ -191,7 +322,10 @@ export const keyboardEventToShortcut = (event: KeyboardEvent) => {
     parts.push('meta');
   }
 
-  const key = normalizeMainKey(event.key);
+  // ⚠️ 主键按**物理键位**取（eventMainKey），不是按字符 ——
+  // 见 eventMainKey 的说明：德式键盘上的逗号键打出来是 `;`，
+  // 按字符录会得到一条与扩展自己的命令键对不上的绑定。
+  const key = eventMainKey(event);
   if (MODIFIER_KEYS.has(key.toLowerCase())) {
     return null;
   }
@@ -375,22 +509,107 @@ export const matchesShortcut = (event: KeyboardEvent, shortcut: string) => {
   const expectedKey = parts[parts.length - 1];
   const modifiers = new Set(parts.slice(0, -1));
 
-  // 主键是加号时，「裸加号」这一档不比较 Shift。
+  // ⚠️ 主键是加号时，「裸加号」这一档**不比较 Shift**。
   //
   // 原因：绝大多数键盘上 '+' 字符只能靠 Shift+= 打出来（数字键盘上的 + 是另一个键）。
   // 若严格要求 shiftKey===false，用户在设置页按下 Shift+= 记下的是 'shift+plus'，
   // 但任何地方都不该出现「只有 shift+plus 能触发、裸加号触发不了」的割裂；
   // 更糟的是，用户若从别处导入一条裸 'plus' 绑定，它将永远无法触发。
   // 所以：带 shift 修饰的 'shift+plus' 仍严格要求 Shift，裸 'plus' 则两种都认。
+  //
+  // ⚠️⚠️ **但这条放宽不能变成「两个动作撞车」**（6.2.0 审计缺陷 4）：
+  //
+  // 放宽之后，裸 `plus` 与 `shift+plus` 匹配的是**同一个物理事件** ——
+  // 按 Shift+= 时两条绑定同时命中。而 `matchAction` 按固定顺序返回，
+  // 排在前面���那条永远赢（`increaseSpeed` 赢过 `resetSpeed`），
+  // 于是用户以为「重置」也绑上了，实际重置**一次都不会发生**。
+  //
+  // 修法不是在这里加特判，而是让**设置页用同一份判据**（见
+  // `shortcutsOverlap`）把这种撞车当成「重复绑定」**拒绝保存** ——
+  // 运行时与设置页必须共用同一个判据，否则就会出现
+  // 「设置页说没事、运行时打架」。
   const shiftMatches = expectedKey === PLUS_KEY && !modifiers.has('shift')
     ? true
     : event.shiftKey === modifiers.has('shift');
 
-  return normalizeMainKey(event.key) === expectedKey
+  return eventMainKey(event) === expectedKey
     && event.ctrlKey === modifiers.has('ctrl')
     && event.altKey === modifiers.has('alt')
     && shiftMatches
     && event.metaKey === modifiers.has('meta');
+};
+
+/**
+ * 一条绑定在 **Shift 这一档**上接受哪些状态。
+ *
+ * ⚠️ 这必须与 `matchesShortcut` 的判据**逐字一致** ——
+ * 两处各写一份的话，就会出现「设置页说没事、运行时打架」
+ * （6.2.0 审计缺陷 4）。
+ *
+ * 正常情况下：写了 shift 就只接受 `true`，没写就只接受 `false`。
+ * 例外是**主键为加号、且没写 shift** 的那一档 ——
+ * `matchesShortcut` 对它放宽了 Shift 的比较（两种都认），
+ * 于是它接受 `{false, true}` 两种状态。
+ */
+const acceptedShiftStates = (parts: ShortcutParts): boolean[] => {
+  const hasShift = parts.modifiers.includes('shift');
+
+  if (parts.mainKey === PLUS_KEY && !hasShift) {
+    return [false, true];
+  }
+
+  return [hasShift];
+};
+
+/**
+ * 两条绑定**会不会被同一个物理事件同时命中**。
+ *
+ * ## 为什么需要它
+ *
+ * 「同一个键的两种写法」必须归到同一个值（判据 11）——
+ * 但那条判据要落地，必须有一处**明确**说出「这两条绑定会同时被同一个
+ * 物理事件命中」。设置页的重复检测与运行时的匹配必须用**同一份判据**：
+ * 否则就会出现「设置页说没事、运行时打架」（6.2.0 审计缺陷 4）。
+ *
+ * ## 判据
+ *
+ * 撞车 = 存在**一个**修饰键组合，能同时满足两条绑定。
+ * 也就是三件事同时成立：
+ * 1. 主键相同（归一之后），**且**
+ * 2. ctrl / alt / meta 三档**完全一致**，**且**
+ * 3. 两条绑定接受的 Shift 状态**有交集**。
+ *
+ * 第 3 条是缺陷 4 的要害：裸 `plus` 与 `shift+plus` 是两个不同的串，
+ * 但运行时空洞的那一档**接受两种 Shift 状态**，于是按 Shift+= 时
+ * **两条同时命中** —— 而 `matchAction` 按固定顺序返回，
+ * 排在前面那条永远赢（`increaseSpeed` 赢过 `resetSpeed`）。
+ *
+ * 症状：设置页显示「已保存」，两行都没有错误；
+ * 按 Shift+= 时倍速变了（加速赢了），重置**一次都没发生**。
+ *
+ * ⚠️ 反过来，`plus` 与 `shift+plus` **物理上是两个不同的键**
+ * （小键盘的 + 与主键盘的 Shift+=）——
+ * 真正的问题在 `matchesShortcut` 的 Shift 比较上（见那里的说明）。
+ * 这条判据说的不是「同一个物理键」，而是「会不会同时命中」。
+ */
+export const shortcutsOverlap = (first: string, second: string): boolean => {
+  const a = splitShortcut(first);
+  const b = splitShortcut(second);
+
+  if (a.mainKey === '' || b.mainKey === '' || a.mainKey !== b.mainKey) {
+    return false;
+  }
+
+  // ctrl / alt / meta 三档必须**完全一致**。
+  const withoutShift = (parts: ShortcutParts) =>
+    parts.modifiers.filter((modifier) => modifier !== 'shift').sort().join('+');
+
+  if (withoutShift(a) !== withoutShift(b)) {
+    return false;
+  }
+
+  // Shift：两条接受的集合必须有交集。
+  return acceptedShiftStates(a).some((state) => acceptedShiftStates(b).includes(state));
 };
 
 export const isBrowserReservedShortcut = (shortcut: string) => {

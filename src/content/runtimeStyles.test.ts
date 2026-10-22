@@ -302,6 +302,63 @@ describe('注入的 CSS 内容', () => {
     expect(rule, '必须铺满视口').toContain('position: fixed');
     expect(rule, '必须铺满视口').toContain('inset: 0');
   });
+
+  /**
+   * 焦点环**不许**回到样式表里。
+   *
+   * ⚠️ 这条不是洁癖，是防**复发**：
+   * 焦点环原先写在这份样式表里
+   * （`#vsc-first-run-hint-close:focus-visible { outline: … }`），
+   * 而按钮上有一句**内联**的 `all: initial !important`（样式隔离机制）——
+   * 它把 outline / box-shadow **整个重置**掉。
+   * 而**内联的 important 赢过样式表里的任何声明**（连 `!important` 也一样：
+   * 实测 `#b:focus { outline: 3px solid red !important }` 在
+   * `style="all: initial !important"` 面前依然输）。
+   * 于是那条规则**从来没生效过**。
+   *
+   * 而它看起来完全正常 —— 下一个人会以为「焦点环已经做过了」，
+   * 于是把内联那段删掉，焦点环**当场消失**而没有任何测试变红。
+   *
+   * 焦点环现在住在 firstRunHint.ts（内联 important，跟着 focus/blur 写）。
+   *
+   * ⚠️ 断言的是**注入出去的那份 CSS**（styleText()），不是源码：
+   * 源码里有大段解释「为什么没有这条规则」的注释，
+   * 按源码正则匹配会把注释本身当成规则 —— 那是**假红**。
+   */
+  it('关闭按钮的焦点环不许回到样式表里（内联 important 才赢得过 `all: initial`）', () => {
+    const css = styleText();
+
+    expect(
+      css,
+      '焦点环在样式表里永远赢不过内联的 `all: initial !important`',
+    ).not.toMatch(/vsc-first-run-hint-close[^{}]*:focus-visible/);
+
+    // 静态外观（圆角、悬停底色）仍然留在样式表里 —— 那部分**没有**被隔离机制重置。
+    expect(ruleOf(css, '#vsc-first-run-hint-close'), '静态外观仍然在').toContain('border-radius');
+  });
+
+  /**
+   * 注入出去的 CSS 里**不该有大段中文注释**。
+   *
+   * ⚠️ 这条不是审美偏好，是一个**事实**：这段 CSS 会被原样注入**每一个**
+   * 页面（每个 frame、每次导航都重来一遍）。
+   * 注释占着字节，跟着页面走，占的是**用户的流量和内存**，
+   * 而不是我们的仓库。
+   *
+   * 实测（2026-10-22）：注入的那份 CSS 有 7791 字节，
+   * 去掉注释只剩 1432 字节 —— **82% 是注释**。
+   * 那部分注释在**浏览器里**对任何人都没用（样式表不是文档），
+   * 只有在仓库里才有用 —— 而仓库里它们已经写在源码的注释里了。
+   */
+  it('注入出去的 CSS 不许夹带大段注释', () => {
+    const css = styleText();
+    const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    expect(
+      stripped.length / css.length,
+      '注释在仓库里有价值，在页面里只有成本 —— 解释留在源码注释里',
+    ).toBeGreaterThan(0.5);
+  });
 });
 
 /**

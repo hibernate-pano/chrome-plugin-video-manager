@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { SpeedToast, formatRate } from './speedToast';
 import { destroyLiveRegion } from './liveRegion';
 import { FULLSCREEN_OVERLAY_ID } from './runtimeStyles';
+import { FULLSCREEN_VIDEO_CLASS } from './fullscreenSession';
 import { resetExtensionDom } from './testDom';
 
 describe('formatRate', () => {
@@ -290,6 +291,21 @@ describe('SpeedToast', () => {
   };
 
   /**
+   * 模拟控制器在**进全屏**时做的事：给视频挂上「正在全屏里」的标记。
+   *
+   * ⚠️ 这个 class 才是全屏会话的**账本**（fullscreenController 的
+   * applyFullscreenLayout 加、release 摘）—— 判据看的是它，不是背板在不在。
+   */
+  const markFullscreenVideo = (target: HTMLVideoElement = video) => {
+    target.classList.add(FULLSCREEN_VIDEO_CLASS);
+  };
+
+  /** 模拟控制器在**退出全屏**时做的事：把那个标记摘掉。 */
+  const unmarkFullscreenVideo = (target: HTMLVideoElement = video) => {
+    target.classList.remove(FULLSCREEN_VIDEO_CLASS);
+  };
+
+  /**
    * 模拟控制条自己的退出按钮退出全屏。
    *
    * ⚠️ 这条路径**不经过运行时**：FullscreenController.exit() 只把全屏背板
@@ -422,12 +438,112 @@ describe('SpeedToast', () => {
     expect(pill().classList.contains('vsc-visible')).toBe(false);
 
     await exitFullscreenViaControls();
-    // 退出全屏后角标不会**立刻**回来 —— 与第一次出现时一样，要等 3 秒。
-    expect(pill().classList.contains('vsc-visible')).toBe(false);
-
-    vi.advanceTimersByTime(3000);
+    // 退出全屏后角标**立刻**回来，不等那 3 秒。
+    //
+    // ⚠️ 为什么不能「再等 3 秒」：退出全屏是用户主动做的动作，
+    // 而全屏控制条此刻正被撤掉 —— 画面上关于「我现在是几倍速」的读数
+    // 同时消失。让用户盯着一个什么读数都没有的画面等 3 秒，
+    // 等于把「退出全屏后角标没有回来」这个 bug 换了个形式。
+    // 同一判据在「暂停之后恢复播放」那条路径上已经用过了
+    // （见 restoreBadgeAfterPlay）。
     expect(pill().classList.contains('vsc-visible')).toBe(true);
     expect(pill().textContent).toBe('1.1x');
+    toast.destroy();
+  });
+
+  it('brings the badge back even when the backdrop is still in the DOM', async () => {
+    // 判据必须是**控制器的账本**（视频身上那个「正在全屏里」的 class），
+    // 而不是「全屏背板在不在 DOM 里」。
+    //
+    // 为什么：背板是我们自己的浮层，它的存续期**不一定**等于会话的存续期 ——
+    // fullscreenController.release() 在 state.video 为空时会提前返回，
+    // 那一轮会话已经结束了，背板却还赖在 DOM 里。
+    // 拿背板当判据 → 状态与事实对不上 → 角标永远回不来。
+    //
+    // 真实浏览器里的路径见 tests/e2e/zzprobe-badge-return.spec.js。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.1, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    // 进全屏：控制器给视频挂上标记，背板也挂上了。
+    await enterFullscreen();
+    markFullscreenVideo();
+    await flushMutations();
+    expect(pill().classList.contains('vsc-visible'), '全屏里不该有角标').toBe(false);
+
+    // 退出全屏：控制器摘掉标记 —— 但这一轮**背板还留在 DOM 里**。
+    unmarkFullscreenVideo();
+    await flushMutations();
+
+    expect(
+      pill().classList.contains('vsc-visible'),
+      '背板还在 DOM 里也不能挡住角标回来：判据看的是控制器的账本',
+    ).toBe(true);
+    expect(pill().textContent).toBe('1.1x');
+    toast.destroy();
+  });
+
+  it('keeps the badge out of the way while the video is marked as in fullscreen', async () => {
+    // 反过来也要守：背板被站点摘掉了，但视频身上的标记还在 ——
+    // 我们**确实**还在全屏里（控制条上就写着倍速），角标不该出现。
+    //
+    // 拿「背板在不在」当判据的话，这里会误判成「不在全屏里」，
+    // 于是在全屏里冒出一枚重复信息的角标。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.1, video);
+    vi.advanceTimersByTime(3900);
+    expect(pill().classList.contains('vsc-visible')).toBe(true);
+
+    await enterFullscreen();
+    markFullscreenVideo();
+    await flushMutations();
+
+    // 站点把背板整片摘掉了。
+    document.getElementById(FULLSCREEN_OVERLAY_ID)?.remove();
+    await flushMutations();
+
+    expect(
+      pill().classList.contains('vsc-visible'),
+      '还在全屏里（控制器标记还在）就不该出角标',
+    ).toBe(false);
+    toast.destroy();
+  });
+
+  it('does not let the site DOM churn postpone the badge timer', async () => {
+    // 页面每隔 500ms 塞一个广告节点 —— 角标的 3 秒计时**不能**被推后。
+    //
+    // ⚠️ 这条守的是「无关的 DOM 变化不许重排计时」：
+    // 全屏判据改成「控制器的账本」之后，观察到的 class 变化会更多
+    // （站点自己也改视频的 class），但状态没变时必须原样返回。
+    markPlaying();
+    const toast = new SpeedToast();
+    toast.show(1.1, video);
+
+    // 胶囊在 900ms 时淡出，角标的 3 秒计时从那一刻开始。
+    vi.advanceTimersByTime(900);
+    expect(pill().classList.contains('vsc-visible')).toBe(false);
+
+    // 站点连续改 DOM（每次改完都让观察者的回调跑一遍）。
+    // ⚠️ 还要改**视频自己的 class** —— 真实站点（YouTube 等）会往视频上
+    // 挂 playing / ended 之类的标记，而全屏判据正是看这个 class。
+    for (let i = 0; i < 6; i += 1) {
+      const ad = document.createElement('div');
+      document.body.appendChild(ad);
+      video.classList.toggle('site-marker');
+      await flushMutations();
+      vi.advanceTimersByTime(500);
+    }
+
+    // 计时从胶囊淡出那刻起算 3 秒 —— 期间有 6 次无关的 DOM 变化，
+    // 到点就该出角标。
+    vi.advanceTimersByTime(100);
+    expect(
+      pill().classList.contains('vsc-visible'),
+      '站点的无关 DOM 变化不能把角标的 3 秒计时一直推后',
+    ).toBe(true);
     toast.destroy();
   });
 

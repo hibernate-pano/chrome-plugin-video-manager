@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
+  EXTENSION_INSTALLED_MESSAGE,
   FRAME_FOCUS_MESSAGE,
   FRAME_GONE_MESSAGE,
   FRAME_PROBE_MESSAGE,
@@ -40,6 +41,8 @@ const MANIFEST_NAME = manifest.name;
 const MANIFEST_ACTION_TITLE = manifest.action.default_title;
 /** chrome.i18n 查到的 actionTitle（真实环境里跟着 UI 语言走）。 */
 const LOCALIZED_ACTION_TITLE = enMessages.actionTitle?.message ?? 'Video Speed Controller';
+/** chrome.i18n 查到的 refreshThisPage（「请刷新本页」）。 */
+const REFRESH_TITLE = enMessages.refreshThisPage?.message ?? 'Refresh this page';
 
 type MessageListener = (
   message: unknown,
@@ -47,6 +50,7 @@ type MessageListener = (
 ) => void;
 type RemovedListener = (tabId: number) => void;
 type UpdatedListener = (tabId: number, changeInfo: { status?: string; url?: string }) => void;
+type InstalledListener = (details: { reason?: string; previousVersion?: string }) => void;
 
 /**
  * 探针问某个 frame 时的答案。
@@ -63,6 +67,7 @@ interface Harness {
   messages: MessageListener[];
   removed: RemovedListener[];
   updated: UpdatedListener[];
+  installed: InstalledListener[];
   setTitle: Mock;
   storageSet: Mock;
   storageRemove: Mock;
@@ -76,6 +81,8 @@ interface Harness {
   probeAnswer: (frameId: number) => ProbeAnswer;
   /** i18n 查到的文案；改它就能模拟「UI 语言变了」。 */
   actionTitle: string;
+  /** tabs.query 返回的标签页（「装完了」那条机制要挨个问它们）。 */
+  openTabs: Array<{ id?: number; url?: string }>;
 }
 
 /**
@@ -92,6 +99,7 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
     messages: [],
     removed: [],
     updated: [],
+    installed: [],
     setTitle: vi.fn(),
     storageSet: vi.fn(async (items: Record<string, unknown>) => {
       for (const [key, value] of Object.entries(items)) {
@@ -104,6 +112,7 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
     storageGet: vi.fn(async (key: string) => (session.has(key) ? { [key]: session.get(key) } : {})),
     probeAnswer: () => ({ answered: true, payload: { ok: true, video: 'alive', rate: 1.5 } }),
     actionTitle: LOCALIZED_ACTION_TITLE,
+    openTabs: [],
   };
 
   // ⚠️ lastError 只能在**回调里**读 —— 真实的 API 就是这样：
@@ -117,9 +126,14 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
     commands: { onCommand: { addListener: () => undefined } },
     i18n: {
       // 真实的 chrome.i18n 对未知 key 返回空串，对已知 key 返回本地化文案。
-      getMessage: (key: string) => (key === 'actionTitle' ? harness.actionTitle : ''),
+      getMessage: (key: string) => {
+        if (key === 'actionTitle') return harness.actionTitle;
+        if (key === 'refreshThisPage') return REFRESH_TITLE;
+        return '';
+      },
     },
     tabs: {
+      query: vi.fn(async () => harness.openTabs),
       /**
        * tabs.sendMessage 的替身。
        *
@@ -157,6 +171,14 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
           return;
         }
 
+        if (type === EXTENSION_INSTALLED_MESSAGE) {
+          // 答不上来 = 那个标签页跑的不是当前版本（刚装：没有内容脚本）。
+          chromeStub.runtime.lastError = { message: 'No receiving end' };
+          callback(undefined);
+          chromeStub.runtime.lastError = null;
+          return;
+        }
+
         // 其它消息（广播问询）：真实环境里不回答也没有关系。
         callback(undefined);
       }),
@@ -167,9 +189,11 @@ const stubChrome = (session: SessionStore = new Map()): Harness => {
       lastError: null as { message: string } | null,
       getManifest: () => ({
         name: MANIFEST_NAME,
+        version: '6.2.0',
         action: { default_title: MANIFEST_ACTION_TITLE },
       }),
       onMessage: { addListener: (fn: MessageListener) => harness.messages.push(fn) },
+      onInstalled: { addListener: (fn: InstalledListener) => harness.installed.push(fn) },
       openOptionsPage: vi.fn(),
     },
     storage: {
@@ -881,5 +905,631 @@ describe('工具栏提示只有一个真源', () => {
   it('locale 里的 actionTitle 必须是 background 实际用的那一条', () => {
     // background 的 defaultTitle() 走 t('actionTitle', …)，两边必须同一个键。
     expect(LOCALIZED_ACTION_TITLE).toBe(enMessages.actionTitle?.message);
+  });
+});
+
+/**
+ * 「读数版本号」（tabRateRevisions）：新读数赢过旧判据。
+ *
+ * 每来一份**新的**倍速读数，background 就把这个标签页的版本号 +1
+ * （index.ts 的 applySpeed / forgetRate）。
+ *
+ * 复位标题的那几条路径都是**异步**的 —— 要等探针（一次 IO）或等读 storage.session ——
+ * 等待期间如果来了一份新读数，那份新读数必须赢：
+ * 「按旧判据清掉」就成了一步错棋（它会把用户刚看到的倍速抹掉，标题在说谎）。
+ *
+ * ⚠️ 这道闸门散落在**五个**不同的位置，触发消息各不相同：
+ *   ① 复核读数（URL 变了）
+ *   ② 焦点消息（读数是**别的** frame 报的）
+ *   ③ 「我走了」（FRAME_GONE）
+ *   ④ 不带 rate 的上报（读数是**这一层**报的）
+ *   ⑤ 不带 rate 的上报（读数是**别的** frame 报的）
+ * 少写一条用例，那条路径就没人走过 —— 改坏了不会红。
+ *
+ * ⚠️ 断言量的是**用户真正看到的结果**：工具栏图标标题上显示的倍速
+ * （chrome.action.setTitle 的实参），不是内部变量。
+ */
+describe('读数版本号：新读数赢过旧判据（五道闸门）', () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    harness = stubChrome();
+    await import('./index');
+  });
+
+  /** 排空微任务：这些复位路径都是异步的，不等它落地就断言 = 断言「还没发生」。 */
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const report = (tabId: number, rate: number, frameId = 0) => {
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE, rate },
+      { tab: { id: tabId }, frameId },
+    );
+  };
+
+  const reportFocus = (tabId: number, frameId: number, rate?: number) => {
+    harness.messages[0]?.(
+      { type: FRAME_FOCUS_MESSAGE, ...(rate === undefined ? {} : { rate }) },
+      { tab: { id: tabId }, frameId },
+    );
+  };
+
+  /**
+   * 让读数「换了一圈又换回来」。
+   *
+   * ⚠️ 为什么非要绕这一圈：
+   * 复位路径在版本号之后还有一道「读数还一样吗」的比较（比倍速与 frame）。
+   * 新读数如果只是**换了值**，那道比较也会拦住复位 —— 那样这条用例就
+   * **证明不了**版本号那道闸门的作用（把那个 `if` 删掉，测试照样绿）。
+   *
+   * 绕一圈之后：最终读数与判据**完全相同**，
+   * 只有版本号知道「等待期间有新的读数到过」——
+   * 这正是这道闸门唯一能立功的地方（真实的场景：用户在等待期间把速度
+   * 调走又调回，最终值与开始时相同）。
+   */
+  const roundTrip = (tabId: number, frameId: number, rate: number) => {
+    report(tabId, rate + 0.5, frameId);
+    report(tabId, rate, frameId);
+  };
+
+  /**
+   * ① 复核读数（URL 变了 → revalidateTabRate）。
+   *
+   * 触发：chrome.tabs.onUpdated（URL 真变了）。
+   * 竞态：复核要等探针，等待期间读数换了一圈。
+   * 期望：新读数赢 → 标题保留 1.5x，那份记录也不该被删掉。
+   */
+  it('① 复核期间读数换了一圈 → 旧判据作废，不复位（新读数赢）', async () => {
+    report(7, 1.5, 3);
+
+    harness.probeAnswer = () => {
+      // 探针还在路上（IO 没回来）→ 期间读数换了一圈又换回来。
+      roundTrip(7, 3, 1.5);
+      // 「frame 还在，但它报出去的那个视频已经被页面换掉了」。
+      return { answered: true, payload: { ok: true, video: 'gone' } };
+    };
+
+    harness.updated[0]?.(7, { url: 'https://example.com/second' });
+    await flush();
+
+    // 用户看到的：标题仍然是 1.5 倍（新读数赢），不是默认标题。
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+
+  /**
+   * ② 焦点消息（读数是**别的** frame 报的）。
+   *
+   * 触发：FRAME_FOCUS_MESSAGE（不带倍速 = 「我这一层没有受控视频」）。
+   * 读数是别的 frame 报的 → 这条路径会去问那个 frame 一句（探针）。
+   * 竞态：探针等待期间读数换了一圈。
+   */
+  it('② 焦点消息 → 探针期间读数换了一圈 → 旧判据作废，不复位（新读数赢）', async () => {
+    // 视频在嵌入框里（frame 3 报的 1.5x）。
+    report(7, 1.5, 3);
+
+    harness.probeAnswer = () => {
+      roundTrip(7, 3, 1.5);
+      return { answered: true, payload: { ok: true, video: 'gone' } };
+    };
+
+    // 顶层 frame 报焦点，但**不带倍速** = 「我这一层没有受控视频」。
+    reportFocus(7, 0);
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+
+  /**
+   * ③ 「我走了」（FRAME_GONE）。
+   *
+   * 触发：FRAME_GONE_MESSAGE（frame 自己说它要走了）。
+   * 竞态：这条消息要 await 一次读存储，等待期间新读数到了
+   * （整页导航时旧 frame 卸载、新页面的内容脚本启动 —— 两条消息可能乱序）。
+   *
+   * ⚠️ 这条路径**没有**「读数还一样吗」那道比较 —— 版本号是唯一的闸门。
+   */
+  it('③ 「我走了」→ 读存储期间来了新读数 → 旧判据作废，不清掉新读数', async () => {
+    report(7, 1.5, 3);
+
+    // 「我走了」这条消息**先**到，但它要等一次异步的读存储。
+    harness.messages[0]?.(
+      { type: FRAME_GONE_MESSAGE },
+      { tab: { id: 7 }, frameId: 3 },
+    );
+    // 那次 await 期间，新读数到了（还是这一层报的，但倍速是新的）。
+    report(7, 2, 3);
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 2x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+
+  /**
+   * ④ 不带 rate 的上报（读数是**这一层**报的）。
+   *
+   * 触发：SPEED_REPORT_MESSAGE（不带倍速 = 「我这一层没有受控视频」）。
+   * 竞态：这条消息要 await 一次读存储，等待期间新读数到了。
+   * 期望：新读数赢 → 标题保留 2x，那份记录也不该被删掉。
+   *
+   * ⚠️ 这条用例曾经是红的 —— 生产代码里这道闸门是**死的**：
+   * 版本号是在 await 读存储**之后**才记的（index.ts 的 SPEED_REPORT 分支），
+   * 所以「等待期间来了新读数」这件事它根本看不见（那段等待里没有别的 await，
+   * 版本号不可能变 → 那个 `if` 永远不成立）。
+   * 可观测后果：等待期间到达的新读数会被 `resetTabRate` 抹掉，
+   * 标题从「— 2x」退回默认的「Video Speed Controller」—— 扩展开始说一个**假**的倍速。
+   *
+   * 已修：版本号挪到进异步**之前**采样（与 FRAME_GONE 分支同一写法）。
+   * 它当时用 it.fails 钉着，产品修好后自己变红提醒改回 it —— 现在改回来了。
+   */
+  it('④ 不带 rate 的上报 → 读存储期间来了新读数 → 旧判据作废（新读数赢）', async () => {
+    report(7, 1.5, 3);
+
+    // 这一层（frame 3）说「我这儿没有受控视频」→ 读数是它报的 → 该复位。
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE },
+      { tab: { id: 7 }, frameId: 3 },
+    );
+    // 那次 await 期间，新读数到了。
+    report(7, 2, 0);
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 2x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⑤ 不带 rate 的上报（读数是**别的** frame 报的）。
+   *
+   * 触发：SPEED_REPORT_MESSAGE（不带倍速），但读数是别的 frame 报的
+   *       → 与 ② 同一个形状、**不同的触发消息**（两条路径必须分别守着）。
+   * 竞态：探针等待期间读数换了一圈。
+   */
+  it('⑤ 不带 rate 的上报 → 探针期间读数换了一圈 → 旧判据作废，不复位（新读数赢）', async () => {
+    // 视频在嵌入框里（frame 3 报的 1.5x）。
+    report(7, 1.5, 3);
+
+    harness.probeAnswer = () => {
+      roundTrip(7, 3, 1.5);
+      return { answered: true, payload: { ok: true, video: 'gone' } };
+    };
+
+    // 顶层 frame（0）说「我这一层没有受控视频」（不带 rate）。
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+    );
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 读数版本号闸门：**第 6 道与第 7 道**（焦点消息那两条支路）。
+ *
+ * ⚠️ 上一组用例守的是 ①②③④⑤ 五道闸门。这一组补上两条**当时漏掉**的：
+ *
+ * **⑥ 焦点消息里「读数就是这一层报的」那一支**（`state.frameId === frameId`）
+ * —— 它原来**压根没有版本号闸门**：`await readTabRate` 之后直接
+ * `resetTabRate(tabId)`。等待期间来了新读数（整页导航后新页面的内容脚本
+ * 启动就会报一次）→ 旧判据把新读数抹掉 → 标题从「— 2x」退回
+ * 「Video Speed Controller」，扩展开始说一个**假的**倍速。
+ *
+ * **⑦ 焦点消息里「读数是别的 frame 报的」那一支** —— 它**有**闸门，
+ * 但采样点在 `await readTabRate` **之后**：从采样点到比较点之间只剩探针那一次
+ * await，于是「读存储那一次 await 期间到达的新读数」它根本看不见
+ * （只挡住了后半截窗口）。
+ *
+ * ⚠️ 竞态必须发生在**读存储**那一次 await 期间，而不是探针期间 ——
+ * 因为「读存储」那一次 await 才是**采样点之前**的那一段窗口。
+ *
+ * ⚠️ 怎么让「读存储期间」发生一次新上报？`storage.session.get` 是个桩，
+ * 可以在它 resolve 的那一瞬间触发回调（见 harness 里的 `roundTripDuringStorageGet`）。
+ */
+describe('读数版本号：新读数赢过旧判据（补齐的第 6、7 道闸门）', () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    harness = stubChrome();
+    await import('./index');
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const flushSlow = () => new Promise((resolve) => setTimeout(resolve, 200));
+
+  const report = (tabId: number, rate: number, frameId = 0) => {
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE, rate },
+      { tab: { id: tabId }, frameId },
+    );
+  };
+
+  const reportFocus = (tabId: number, frameId: number, rate?: number) => {
+    harness.messages[0]?.(
+      { type: FRAME_FOCUS_MESSAGE, ...(rate === undefined ? {} : { rate }) },
+      { tab: { id: tabId }, frameId },
+    );
+  };
+
+  /**
+   * 让「读存储」那一次 await 期间，读数**换了一圈又换回来**。
+   *
+   * ⚠️ 「绕一圈」的必要性与上面那组一样：复位路径在版本号之后还有一道
+   * 「读数还一样吗」的比较。新读数如果只是**换了值**，那道比较也会拦住复位 ——
+   * 那样这条用例就**证明不了**版本号那道闸门的作用（把那个 `if` 删掉，测试照样绿）。
+   * 绕一圈之后最终读数与判据**完全相同**，只有版本号知道
+   * 「等待期间有新读数到过」。
+   *
+   * ⚠️ **怎么让竞态恰好落在「读存储」那一次 await 期间**：
+   * `readTabRate` 是 async 的 —— 即使命中内存、一次存储都不碰，
+   * 它也会在**第一个 await 处**挂起一个微任务。所以：
+   * 「焦点消息」处理函数跑完 → 紧接着**同步**发一条新上报 →
+   * 那条上报落在 `readTabRate` 恢复**之前**（还在 await 窗口里）。
+   *
+   * ⚠️ 这不是巧合，是**真实**的形状：service worker 被回收过之后，
+   * 焦点消息的那条路径本来就要去 storage.session 里取判据 ——
+   * 那一次跨进程往返期间，新页面的内容脚本启动并上报，是完全正常的时序。
+   */
+  const roundTripAfterTrigger = (
+    tabId: number,
+    frameId: number,
+    rate: number,
+  ) => {
+    // 同步跟在触发消息**后面** —— 落在那个 await 窗口里。
+    report(tabId, rate + 0.5, frameId);
+    report(tabId, rate, frameId);
+  };
+
+  /**
+   * ⑥ 焦点消息里「读数就是这一层报的」那一支。
+   *
+   * 触发：FRAME_FOCUS_MESSAGE（不带倍速 = 「我这一层没有受控视频」）。
+   * 读数是**这一层**报的 → 该复位。
+   * 竞态：读存储那一次 await 期间读数换了一圈。
+   * 期望：新读数赢 → 标题保留 1.5x，那份记录也不该被删掉。
+   *
+   * ⚠️ 这条分支原来**压根没有版本号闸门** ——
+   * 所以「把闸门删掉」这条变异会让它变红。
+   */
+  it('⑥ 焦点消息（读数是这一层报的）→ 读存储期间读数换了一圈 → 不复位（新读数赢）', async () => {
+    // 视频在 frame 3、调到 1.5x。
+    report(7, 1.5, 3);
+
+    // 同一个 frame 现在说「我这儿没有受控视频」→ 那个视频已经不在了 → 该复位。
+    reportFocus(7, 3);
+
+    // 那次 await 期间，读数换了一圈又换回来（最终值与判据相同）。
+    roundTripAfterTrigger(7, 3, 1.5);
+    await flush();
+
+    // 用户看到的：标题仍然是 1.5 倍（新读数赢），不是默认标题。
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⑥ 的**反向守卫**：没有新读数到达时，那条路径**必须**复位。
+   *
+   * ⚠️ 没有这一条，上面那条可能是因为「这条路径压根不复位」而绿的
+   * —— 那样它守的就不是版本号那道闸门，而是「这条路径什么都不做」。
+   */
+  it('⑥ 的反向守卫：读存储期间**没有**新读数 → 照常复位', async () => {
+    report(7, 1.5, 3);
+
+    reportFocus(7, 3);
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
+  });
+
+  /**
+   * ⑦ 焦点消息里「读数是**别的** frame 报的」那一支。
+   *
+   * 触发：FRAME_FOCUS_MESSAGE（不带倍速），读数是别的 frame 报的
+   *       → 这条路径会去问那个 frame 一句（探针）。
+   * 竞态：读存储那一次 await 期间读数换了一圈。
+   *
+   * ⚠️ 这条路径的闸门**存在**，但采样点在 `await readTabRate` **之后** ——
+   * 于是「读存储那一次 await 期间到达的新读数」它看不见（只挡住后半截窗口）。
+   */
+  it('⑦ 焦点消息（读数是别的 frame 报的）→ 读存储期间读数换了一圈 → 不复位（新读数赢）', async () => {
+    // 视频在嵌入框里（frame 3 报的 1.5x）。
+    report(7, 1.5, 3);
+
+    // ⚠️ 探针必须说「那个视频已经没了」——否则这条路径在探针那里就 early-return 了，
+    // 根本走不到复位那一步，用例就成了**恒真**的假守卫
+    // （它绿不是因为版本号闸门，而是因为「压根没复位」）。
+    harness.probeAnswer = () => ({
+      answered: true,
+      payload: { ok: true, video: 'gone' },
+    });
+
+    // 顶层 frame（0）报焦点，但**不带倍速** = 「我这一层没有受控视频」。
+    reportFocus(7, 0);
+
+    // 那次 await 期间，读数换了一圈又换回来（最终值与判据相同）。
+    roundTripAfterTrigger(7, 3, 1.5);
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⑦ 的**反向守卫**：没有新读数到达、且那个 frame 确实没了 → 照常复位。
+   */
+  it('⑦ 的反向守卫：读存储期间**没有**新读数、那个 frame 没了 → 照常复位', async () => {
+    report(7, 1.5, 3);
+    harness.probeAnswer = () => ({ answered: false });
+
+    reportFocus(7, 0);
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
+  });
+
+  /**
+   * ⑨ 复核读数（URL 变了 → revalidateTabRate）—— **读存储**那一次 await 的窗口。
+   *
+   * ⚠️ 上一组里的 ① 守的是**探针**那个窗口（读数换圈发生在探针在途时）。
+   * 这一条守的是**更早**的那个窗口：复核刚起步、还在等第一份读数时。
+   *
+   * ⚠️ 少了这一条，那道闸门就**只挡住后半截窗口** ——
+   * 把采样点挪回 `await readTabRate` 之后（原来的位置），
+   * ① 照样绿（它守的是探针窗口），而「读存储期间来的新读数」无人看守。
+   */
+  it('⑨ 复核读数（URL 变了）→ 读存储期间读数换了一圈 → 不复位（新读数赢）', async () => {
+    // 视频在嵌入框里（frame 3 报的 1.5x）。
+    report(7, 1.5, 3);
+
+    // 探针说「那个视频已经没了」→ 不复位的话就是标题在说谎。
+    harness.probeAnswer = () => ({
+      answered: true,
+      payload: { ok: true, video: 'gone' },
+    });
+
+    // URL 真变了 → 触发复核。
+    harness.updated[0]?.(7, { url: 'https://example.com/second' });
+
+    // 复核刚起步、还在等第一份读数的那一次 await 期间，读数换了一圈。
+    roundTripAfterTrigger(7, 3, 1.5);
+    await flushSlow();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+    expect(harness.storageRemove, '新读数还在，不该删掉它').not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 读数版本号闸门：**第 8 道**（「装完了」那条机制把标题还回读数的那条路）。
+ *
+ * ⚠️ 这条路径与前七条是**同一个病根**的另一副面孔：
+ * **拿着一个快照，跨过一次 await，然后按那个快照写标题。**
+ *
+ * `clearStaleMark` 的异步续段是 `readTabRate(tabId).then(stored => applyTitle(stored?.rate ?? 1))`
+ * —— 等待期间来了一份新读数（焦点消息里带着倍速时走的就是 applySpeed），
+ * 那一份已经把标题写对了；这一行随后把**旧快照**写回去，
+ * 于是标题从「— 1.5x」退回「Video Speed Controller」——
+ * 扩展开始说一个**假的**倍速。
+ *
+ * ⚠️ 这条路**不在**「读数复位」的六处里 —— 它**写**标题而不是清读数，
+ * 所以按「只查 resetTabRate」是查不出来的。**闸门要盖住的是「按旧快照改标题」**
+ * 这个动作本身，不只是「清读数」。
+ *
+ * ⚠️ 复现形状：扩展刚装好 → 那个标签页被标成「过期」（标题写着「请刷新本页」）
+ * → 用户刷新它 → 新内容脚本发焦点上报（带 1.5x）→ 标题正确地显示「— 1.5x」
+ * → 「装完了」那条机制的异步续段随后把它改回默认标题。
+ */
+describe('读数版本号：第 8 道闸门（「装完了」还回读数那条路）', () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    harness = stubChrome();
+    await import('./index');
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const reportFocus = (tabId: number, frameId: number, rate?: number) => {
+    harness.messages[0]?.(
+      { type: FRAME_FOCUS_MESSAGE, ...(rate === undefined ? {} : { rate }) },
+      { tab: { id: tabId }, frameId },
+    );
+  };
+
+  it('「装完了」的异步续段期间来了新读数 → 旧快照不许把标题写回去', async () => {
+    // 那个标签页是在扩展装好之前就开着的 → 被标成「过期」。
+    harness.openTabs = [{ id: 7, url: 'https://example.com/' }];
+    harness.installed[0]?.({ reason: 'install', previousVersion: '' });
+    await flush();
+
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: `${LOCALIZED_ACTION_TITLE} — ${REFRESH_TITLE}` },
+      expect.any(Function),
+    );
+
+    // 用户刷新了那一页 → 新内容脚本发来焦点上报，**带着**它的倍速。
+    // 这条上报让标题正确地变成「— 1.5x」。
+    reportFocus(7, 0, 1.5);
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+
+    // ⚠️ 但「装完了」那条机制的异步续段还在路上 ——
+    // 它手里那份**旧快照**（读数 1.5 / 或者根本没有读数）随后会写标题。
+    // 那一次写入必须被版本号闸门挡住，否则新读数被擦掉。
+    await flush();
+
+    expect(
+      harness.setTitle,
+      '等待期间来了新读数 → 旧快照不许把标题写回去（否则扩展开始说一个假的倍速）',
+    ).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 1.5x' },
+      expect.any(Function),
+    );
+  });
+
+  it('「装完了」的异步续段期间**没有**新读数 → 照常把标题还回读数（反向守卫）', async () => {
+    // 那个标签页是在扩展装好之前就开着的 → 被标成「过期」。
+    harness.openTabs = [{ id: 7, url: 'https://example.com/' }];
+    harness.installed[0]?.({ reason: 'install', previousVersion: '' });
+    await flush();
+
+    // 用户刷新了那一页 → 新内容脚本发来焦点上报（**不带**倍速）。
+    reportFocus(7, 0);
+    await flush();
+
+    // 标题回到读数（这里是默认标题 —— 那个标签页没有受控视频）。
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+      expect.any(Function),
+    );
+  });
+});
+
+/**
+ * 读回 storage.session 那一刻，内存里可能已经有一份**更新**的读数了。
+ *
+ * ⚠️ 这是与「版本号闸门」**同源但不同层**的一个洞。
+ *
+ * `readTabRate` 的形状是：
+ * ```
+ * const cachedRate = tabRates.get(tabId);        ← await **之前**取的快照
+ * ...
+ * const stored = await chrome.storage.session.get(key);   ← await
+ * if (cachedRate === undefined) tabRates.set(tabId, rate);  ← 用**旧快照**判断
+ * ```
+ *
+ * 等待存储期间可能来了一份**新**读数（applySpeed 已经写进内存了）——
+ * 那份比存储里这份**新**。但「要不要回填」用的却是 await **之前**取的
+ * `cachedRate`：它还是 undefined → 于是**旧**的那份被写进内存，
+ * 把等待期间到来的新读数**盖掉**了。
+ *
+ * 后果不是「标题立刻说谎」，而是更隐蔽的那个：
+ * **「这个倍速是哪个 frame 报的」也错了** ——
+ * 之后每一次判据（复位标题时「报出这个倍速的就是这个 frame 自己吗」）
+ * 都在错的基础上算。
+ *
+ * ⚠️ 为什么它值得一条专门的守卫：它**不在**「六处 resetTabRate」里，
+ * 按「只查复位路径」是查不出来的 —— 它在**读**路径上。
+ */
+describe('读回存储时不能把旧快照盖掉更新的读数', () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    harness = stubChrome();
+    await import('./index');
+  });
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const report = (tabId: number, rate: number, frameId = 0) => {
+    harness.messages[0]?.(
+      { type: SPEED_REPORT_MESSAGE, rate },
+      { tab: { id: tabId }, frameId },
+    );
+  };
+
+  it('读存储期间来了新读数 → 内存里留下的必须是**新**的那份（否则下一次判据全错）', async () => {
+    // 视频在 frame 3、调到 1.5x（先落一份进 storage.session）。
+    report(7, 1.5, 3);
+
+    // ⚠️ 模拟 service worker 被回收：内存空了，storage.session 里那份还在。
+    vi.resetModules();
+    const session = new Map<string, unknown>();
+    session.set('vsc-tab-rate:7', { rate: 1.5, frameId: 3 });
+    harness = stubChrome(session);
+    await import('./index');
+
+    // ⚠️ 读存储那一次 await 期间，新页面的内容脚本报来一份**新的**读数
+    // （2 倍，frame 0 —— 换了一个 frame）。
+    const original = harness.storageGet.getMockImplementation();
+    harness.storageGet.mockImplementation(async (key: string) => {
+      const result = original ? await original(key) : {};
+      report(7, 2, 0);
+      return result;
+    });
+
+    // 触发一次「要去 storage.session 里取判据」的路径。
+    harness.messages[0]?.(
+      { type: FRAME_FOCUS_MESSAGE },
+      { tab: { id: 7 }, frameId: 0 },
+    );
+    await flush();
+
+    // 新读数已经到了：标题应该是 2 倍。
+    expect(harness.setTitle).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 2x' },
+      expect.any(Function),
+    );
+
+    // ⚠️ **怎么从外面看内存里那份？** —— 内存是私有的，
+    // 但它会通过**下一次判据**显形：
+    // 「报出这个倍速的是哪个 frame 自己」这条判据读的就是内存。
+    //
+    // 所以：让**当初报 1.5 倍的那个 frame**（frame 3）再说一次
+    // 「我这儿没有受控视频」。
+    // - 内存里是**新**的那份（2 倍 / frame 0）→ 读数不是它报的 →
+    //   走探针分支（默认答「还在」）→ 读数留着，标题不变。
+    // - 内存里被**旧快照**盖成了 1.5 倍 / frame 3 → 读数就是它报的 →
+    //   复位！标题退回默认、那份记录也被删掉 ——
+    //   而页面上那个视频好好的、正在以 2 倍播着。
+    harness.messages[0]?.(
+      { type: FRAME_FOCUS_MESSAGE },
+      { tab: { id: 7 }, frameId: 3 },
+    );
+    await flush();
+
+    expect(
+      harness.setTitle,
+      '内存里被旧快照盖掉 → 判据会以为「1.5 倍是 frame 3 报的」→ 错误地复位',
+    ).toHaveBeenLastCalledWith(
+      { tabId: 7, title: 'Video Speed Controller — 2x' },
+      expect.any(Function),
+    );
+    expect(
+      session.get('vsc-tab-rate:7'),
+      '读数还在，不该被删掉',
+    ).toEqual({ rate: 2, frameId: 0 });
   });
 });

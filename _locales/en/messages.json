@@ -12,8 +12,8 @@
     "description": "Reset button"
   },
   "optPressKey": {
-    "message": "Press a key · Backspace clears",
-    "description": "Shortcut input placeholder"
+    "message": "Press a key · Backspace clears · Esc undoes",
+    "description": "Shortcut input placeholder: how to bind, how to clear, how to undo the current edit"
   },
   "optSaved": {
     "message": "Saved",
@@ -147,6 +147,26 @@
       }
     }
   },
+  "hintSpeedTiny": {
+    "message": "Speed · $1",
+    "description": "Tiny hint (third fallback for very small embed frames): action name squeezed to one word, keys listed bare. What is dropped is the **direction** (\"faster / slower / back to 1x\"), not \"what these three keys do\" — bare `= / - / 0` does not tell the user it is speed control. Measured: fits on one line at 166px content width",
+    "placeholders": {
+      "keys": {
+        "content": "$1",
+        "example": "= / - / 0"
+      }
+    }
+  },
+  "hintFullscreenTiny": {
+    "message": "Fullscreen · $1",
+    "description": "Tiny hint, fullscreen line (third fallback). Full version is \"Press $1 to toggle page fullscreen\" — wraps to 2 lines at 166px content width; this one fits on one line",
+    "placeholders": {
+      "key": {
+        "content": "$1",
+        "example": "f"
+      }
+    }
+  },
   "hintSpeed": {
     "message": "Speed · $1 faster / $2 slower",
     "description": "First-run hint: speed step actions",
@@ -202,8 +222,8 @@
     "description": "Browser tab title of the options page"
   },
   "optLead": {
-    "message": "Every action can be rebound. Press Backspace / Delete in the field to clear the binding and disable that action; changes apply to open tabs immediately.",
-    "description": "Options page lead paragraph"
+    "message": "Every action can be rebound. Press Backspace / Delete in the field to clear the binding and disable that action, and press Esc to undo the change you just made; changes apply to open tabs immediately. These keys only work while a video is playing in the page — pressing them on a page with no video does nothing.",
+    "description": "Options page lead paragraph: how to rebind, how to clear, how to undo, and the fact that the keys only act on videos that are playing in the page"
   },
   "optPrivacy": {
     "message": "Privacy policy",
@@ -268,8 +288,8 @@
     }
   },
   "hintToolbar": {
-    "message": "Click the extension icon to toggle page fullscreen",
-    "description": "First-run hint: the toolbar icon toggles page fullscreen"
+    "message": "In fullscreen, click the speed button for presets (0.5x–4x)",
+    "description": "First-run hint: the fullscreen control bar has a clickable speed menu. 原来写的是「点扩展图标可切换网页全屏」—— 那与同一张卡片里的第一行（按 f 切换网页全屏）说的是同一件事，等于把一行浪费在复述上"
   },
   "playbackPlaying": {
     "message": "Playing",
@@ -360,12 +380,16 @@
     "description": "Options page: error shown when clearing the first-run guide state failed"
   },
   "optDuplicateRow": {
-    "message": "Duplicates \"$1\"",
-    "description": "Inline error shown under the conflicting shortcut field",
+    "message": "Duplicates \"$1\" ($2)",
+    "description": "Inline error shown under the conflicting shortcut field: which action it clashes with, and which key",
     "placeholders": {
       "other": {
         "content": "$1",
         "example": "Slow down"
+      },
+      "key": {
+        "content": "$2",
+        "example": "="
       }
     }
   },
@@ -397,8 +421,53 @@
       }
     }
   },
-  "extensionUpdated": {
-    "message": "Extension updated — please refresh this page",
-    "description": "Shown when the extension was reloaded or updated: this page still runs the old, dead content script"
+  "extensionInactive": {
+    "message": "The extension is no longer active on this page. Refresh this page. If the extension is disabled, re-enable it from the extensions page.",
+    "description": "Shown when the extension context is invalidated (updated, reloaded, or disabled): this page still runs the old, dead content script. The wording must hold for all three causes — a page cannot tell them apart (measured: chrome.* behaves identically after an update and after a disable)."
+  },
+  "refreshThisPage": {
+    "message": "Refresh this page",
+    "description": "Suffix in the toolbar icon title: this tab was opened before the extension was installed, so it only takes effect after a refresh"
+  },
+  "noticeAmbientPreview": {
+    "message": "This is a page preview — click it, or click the extension icon, to control it"
+  },
+  "optLoadFailed": {
+    "message": "Could not read your settings — your shortcuts were left untouched. Please retry reading.",
+    "description": "Options page: reading storage failed. The page must say so instead of silently showing the defaults"
+  },
+  "optRetryLoad": {
+    "message": "Retry reading",
+    "description": "Options page: retry reading the settings after a failed read"
+  },
+  "optLoadOk": {
+    "message": "Settings reloaded",
+    "description": "Options page: the settings were read successfully after a retry"
+  },
+  "optUndoRestore": {
+    "message": "Undo restore",
+    "description": "Options page: the \"Restore defaults\" button turns into an undo for a few seconds after a restore"
+  },
+  "optRestoreUndone": {
+    "message": "Restore undone",
+    "description": "Options page: the restore-defaults was undone and the previous bindings are back"
+  },
+  "hintSpeedReset": {
+    "message": "Speed · $1 faster / $2 slower / $3 back to 1x",
+    "description": "First-run hint: speed step actions plus the reset key. 复位必须教 —— 全屏之外没有别的出口能回到 1x（胶囊与角标都是 pointer-events: none；倍速菜单只在全屏控制条里；manifest 无 contextMenus 权限）。它与快/慢并成**同一行**而不是另起一行：完整版 4 行 / 精简版 2 行是这套代码的承重不变式（阅读窗口、高度预算、测试高度桩都锁在它上面）",
+    "placeholders": {
+      "up": {
+        "content": "$1",
+        "example": "="
+      },
+      "down": {
+        "content": "$2",
+        "example": "-"
+      },
+      "reset": {
+        "content": "$3",
+        "example": "0"
+      }
+    }
   }
 }

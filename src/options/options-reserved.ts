@@ -13,20 +13,21 @@
  * 所以这里对浏览器保留键一律**拒绝保存**。
  */
 
-import { isBrowserReservedShortcut as isSharedReserved, normalizeShiftVariant } from '../shared/shortcuts';
+import {
+  isBrowserReservedShortcut as isSharedReserved,
+  MODIFIER_ALIASES,
+  normalizeShiftVariant,
+} from '../shared/shortcuts';
 
-/** 修饰键的规范名（用于把 Chrome 的写法归一）。 */
-const MODIFIER_NAMES = new Set([
-  'ctrl',
-  'control',
-  'alt',
-  'option',
-  'shift',
-  'meta',
-  'os',
-  'cmd',
-  'command',
-]);
+/**
+ * 修饰键的规范名（用于把 Chrome 的写法归一）。
+ *
+ * ⚠️ 别名（control / option / os / cmd / command）必须**折成规范名**，
+ * 而不是各自算一个「另一种修饰键」—— 否则清单里写 `ctrl+…`、
+ * 用户按 `control+…` 时就对不上，那条保留键就白写了。
+ * 别名表与 shared 那份**共用一张**（MODIFIER_ALIASES）。
+ */
+const MODIFIER_NAMES = new Set(Object.keys(MODIFIER_ALIASES));
 
 /**
  * Chrome 的 `suggested_key` 与扩展内部绑定用的键名不是一套词。
@@ -74,22 +75,44 @@ const CHROME_KEY_NAMES: Record<string, string> = {
  * 不排序就会当成两条，重复检测会漏。
  */
 export const canonicalShortcut = (value: string): string => {
-  const raw = value.trim().toLowerCase();
+  const lowered = value.toLowerCase();
+
+  // ⚠️ **空格键**必须最先处理，不能先 trim 再切。
+  //
+  // 主键是空格时，结尾那个空格会被 `trim()` 吃掉：`'alt+ '` 变成 `'alt+'`，
+  // 再被当成「结尾是分隔符」补成 `'alt+plus'` —— 于是「Alt+空格」
+  // 被归一成「Alt+加号」。两者完全是两个键，而清单里写的就是 `'alt+ '`。
+  // 症状：那条保留键**永远不触发**（这正是缺陷 2 里最难看见的一条）。
+  //
+  // 两种写法都认：`'alt+ '`（显式空格）与 `'alt+'`（历史写法，见 normalizeShortcut）。
+  let raw = lowered;
+
+  if (/\+\+$/.test(raw)) {
+    // `'ctrl++'`：结尾那个 '+' 是**主键**（加号键），不是分隔符。
+    raw = `${raw.slice(0, -1)}plus`;
+  } else if (/\+\s*$/.test(raw)) {
+    // `'alt+'` / `'alt+ '`：结尾那个 '+' 是分隔符，主键是空格。
+    raw = `${raw.replace(/\+\s*$/, '')}+space`;
+  }
+
+  raw = raw.trim();
   if (raw === '') {
     return '';
   }
 
-  // 主键就是加号时，结尾那个 '+' 是分隔符而不是键名 —— 补成 'plus' 再切。
-  const padded = raw.endsWith('+') ? `${raw}plus` : raw;
-  const parts = padded.split('+').map((part) => part.trim()).filter(Boolean);
+  const parts = raw.split('+').map((part) => part.trim()).filter(Boolean);
   if (parts.length === 0) {
     return '';
   }
 
   const mainRaw = parts[parts.length - 1] as string;
+  // ⚠️ 修饰键别名必须**折成规范名**（control → ctrl、os → meta）。
+  // 不折的话，清单里写 `ctrl+t`，用户按 `control+t` 时就对不上 ——
+  // 那条保留键等于白写。
   const modifiers = parts
     .slice(0, -1)
     .filter((part) => MODIFIER_NAMES.has(part))
+    .map((part) => MODIFIER_ALIASES[part] ?? part)
     .sort();
 
   const main = CHROME_KEY_NAMES[mainRaw] ?? mainRaw;
@@ -120,8 +143,25 @@ export const canonicalShortcut = (value: string): string => {
  *
  * ⚠️ **裸键不算保留键**：`f` / `0` / `=` / 空格 / 方向键这些都是合法的用户
  * 绑定（也正是本扩展的默认绑定）。只有**带修饰键**的组合才是保留键。
+ *
+ * ⚠️⚠️ **清单里的每一条都必须是 `canonicalShortcut` 真能产生出来的形态**
+ * （6.2.0 审计缺陷 2）。
+ *
+ * 死条目不只是「没用」—— 它们让人**误以为有防护**：
+ * 清单里写着 `alt+space`，于是作者以为「Alt+空格已经被拦住了」，
+ * 而守卫**永远不会触发**（`canonicalShortcut('alt+space')` 产出的是
+ * `alt+ ` —— 空格在规范形里是 `' '`，不是 `'space'`）。
+ * 于是用户把 Alt+空格绑上去，存得进去，按下去浏览器抢走，扩展一声不吭。
+ *
+ * 这条约束由 `options-editing.test.ts` 里的守卫盯着：
+ * **清单里每一条都必须能被产生器造出来**。
+ *
+ * ⚠️ **Shift 变体要列全**（缺陷 2 与缺陷 3）：
+ * Chrome 的缩放键是 `Ctrl+Shift+=`（放大）与 `Ctrl+Shift+-`（缩小），
+ * 不是 `Ctrl+=` / `Ctrl+-`。只列后者的话，真实缩放键存得进去。
+ * 同理 `Ctrl+1..9` / `Ctrl+0`（切标签）也要把 Shift 变体列全。
  */
-const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
+export const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   // —— 标签页 / 窗口 ——
   'ctrl+n',
   'ctrl+shift+n',
@@ -131,6 +171,7 @@ const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   'ctrl+shift+w',
   'ctrl+tab',
   'ctrl+shift+tab',
+  // ⚠️ Ctrl+1..9 / Ctrl+0 是「切到第 N 个标签页」，Shift 变体同样要拦。
   'ctrl+1',
   'ctrl+2',
   'ctrl+3',
@@ -141,6 +182,16 @@ const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   'ctrl+8',
   'ctrl+9',
   'ctrl+0',
+  'ctrl+shift+1',
+  'ctrl+shift+2',
+  'ctrl+shift+3',
+  'ctrl+shift+4',
+  'ctrl+shift+5',
+  'ctrl+shift+6',
+  'ctrl+shift+7',
+  'ctrl+shift+8',
+  'ctrl+shift+9',
+  'ctrl+shift+0',
   'ctrl+shift+delete',
   'ctrl+shift+escape',
   'ctrl+shift+q',
@@ -174,8 +225,15 @@ const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   'ctrl+shift+j',
   'ctrl+shift+c',
   'ctrl+shift+u',
+  // ⚠️ **缩放键**：Chrome 的真实缩放键是 Ctrl+Shift+= / Ctrl+Shift+-。
+  // 之前清单里只有 'ctrl+plus' / 'ctrl+-' —— 那是**没有 Shift 的那一档**，
+  // 真实缩放键存得进去，一声不吭。
+  // 'plus' 是加号键（`normalizeMainKey` 把 '+' 折成它），
+  // 于是缩放那一档在规范形里是 'ctrl+shift+plus'。
   'ctrl+plus',
+  'ctrl+shift+plus',
   'ctrl+-',
+  'ctrl+shift+-',
 
   // —— 浏览器与系统共用的导航键 ——
   'alt+arrowleft',
@@ -186,10 +244,18 @@ const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   'alt+f4',
   'alt+f3',
   'alt+enter',
-  'alt+space',
-  'ctrl+alt+delete',
-  'ctrl+space',
-  'ctrl+shift+space',
+  // ⚠️ 空格在规范形里是 ' '（一个空格字符），不是 'space'。
+  // 之前写 'alt+space' / 'ctrl+space' / 'ctrl+shift+space' / 'meta+space'
+  // 是**死条目**：canonicalShortcut 产出的是 'alt+ ' / 'ctrl+ ' / …，
+  // 与清单里的字面量永远不相等 —— 那条保留键从来没有生效过。
+  'alt+ ',
+  'ctrl+ ',
+  'ctrl+shift+ ',
+  'meta+ ',
+  // ⚠️ 修饰键在规范形里是**按字母序排**的（canonicalShortcut 排的序）。
+  // 清单里必须照那个形态写，否则这条就是死条目 ——
+  // 'ctrl+alt+delete' 归一出来是 'alt+ctrl+delete'，两者永不相等。
+  'alt+ctrl+delete',
 
   // —— 功能键 ——
   'f1',
@@ -225,6 +291,16 @@ const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   'meta+8',
   'meta+9',
   'meta+0',
+  'meta+shift+1',
+  'meta+shift+2',
+  'meta+shift+3',
+  'meta+shift+4',
+  'meta+shift+5',
+  'meta+shift+6',
+  'meta+shift+7',
+  'meta+shift+8',
+  'meta+shift+9',
+  'meta+shift+0',
   'meta+l',
   'meta+e',
   'meta+k',
@@ -246,13 +322,16 @@ const RESERVED_BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   'meta+shift+b',
   'meta+,',
   'meta+shift+,',
-  'meta+alt+l',
-  'meta+alt+f',
-  'meta+ctrl+f',
+  // ⚠️ 下面三条是**按字母序排**的规范形（`alt` < `meta`、`ctrl` < `meta`）。
+  // 写成 'meta+alt+l' / 'meta+ctrl+f' 是死条目 —— canonicalShortcut 会把
+  // 修饰键排序，产出 'alt+meta+l' / 'ctrl+meta+f'，两者永不相等。
+  'alt+meta+l',
+  'alt+meta+f',
+  'ctrl+meta+f',
   'meta+m',
   'meta+shift+m',
-  'meta+space',
-  'meta+alt+escape',
+  // ⚠️ 同样是「按字母序排」的规范形（见上面那条的说明）。
+  'alt+meta+escape',
 ]);
 
 /**

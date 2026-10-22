@@ -10,8 +10,8 @@
     "message": "恢复默认"
   },
   "optPressKey": {
-    "message": "按下要绑定的键 · Backspace 清空",
-    "description": "Shortcut input placeholder"
+    "message": "按下要绑定的键 · Backspace 清空 · Esc 撤销",
+    "description": "快捷键输入框的占位符：怎么绑定、怎么清空、怎么撤销刚才这次修改"
   },
   "optSaved": {
     "message": "已保存"
@@ -119,6 +119,26 @@
       }
     }
   },
+  "hintSpeedTiny": {
+    "message": "调速 · $1",
+    "description": "极简版引导（极小嵌入框的第三档降级）：动作名压到一个词，键只列出来。⚠️ 省掉的是「加快 / 减慢 / 回到 1x」这些**方向说明**，不是「这三个键是干什么的」—— 实测只剩 `= / - / 0` 时用户看不出那是在调速。实测 166px 内容宽下 1 行",
+    "placeholders": {
+      "keys": {
+        "content": "$1",
+        "example": "= / - / 0"
+      }
+    }
+  },
+  "hintFullscreenTiny": {
+    "message": "切换全屏 · $1",
+    "description": "极简版引导的全屏那一行（第三档降级）。完整版是「按 $1 切换网页全屏」—— 在 166px 内容宽下折成 2 行；压成「切换全屏 · $1」后 1 行",
+    "placeholders": {
+      "key": {
+        "content": "$1",
+        "example": "f"
+      }
+    }
+  },
   "hintSpeed": {
     "message": "调速 · $1 加快 / $2 减慢",
     "description": "First-run hint: speed step actions",
@@ -170,8 +190,8 @@
     "description": "设置页的浏览器标签标题"
   },
   "optLead": {
-    "message": "每个动作都可以改键。在输入框里按 Backspace / Delete 清空绑定 = 禁用该动作，保存后已打开的页面会立即生效。",
-    "description": "设置页说明段落"
+    "message": "每个动作都可以改键。在输入框里按 Backspace / Delete 清空绑定 = 禁用该动作，按 Esc 撤销刚才这次修改，保存后已打开的页面会立即生效。这些键只在页面里正在播放的视频上生效 —— 页面上没有视频时按它们不会有任何反应。",
+    "description": "设置页的说明段落：怎么改键、怎么清空、怎么撤销，以及「这些键只在页面里正在播放的视频上生效」这条范围说明"
   },
   "optPrivacy": {
     "message": "隐私政策",
@@ -233,8 +253,8 @@
     }
   },
   "hintToolbar": {
-    "message": "点扩展图标可切换网页全屏",
-    "description": "First-run hint: the toolbar icon toggles page fullscreen"
+    "message": "全屏后可用鼠标点选倍速档位（0.5x–4x）",
+    "description": "First-run hint: the fullscreen control bar has a clickable speed menu. 原来写的是「点扩展图标可切换网页全屏」—— 那与同一张卡片里的第一行（按 f 切换网页全屏）说的是同一件事，等于把一行浪费在复述上"
   },
   "playbackPlaying": {
     "message": "正在播放",
@@ -321,12 +341,16 @@
     "message": "重置失败，请重试"
   },
   "optDuplicateRow": {
-    "message": "与『$1』重复",
-    "description": "Inline error shown under the conflicting shortcut field",
+    "message": "与『$1』重复（$2）",
+    "description": "就地渲染在冲突那一行下面的错误：跟谁撞了，以及撞的是哪个键",
     "placeholders": {
       "other": {
         "content": "$1",
-        "example": "放慢播放速度"
+        "example": "减速"
+      },
+      "key": {
+        "content": "$2",
+        "example": "="
       }
     }
   },
@@ -358,8 +382,53 @@
       }
     }
   },
-  "extensionUpdated": {
-    "message": "扩展已更新，请刷新本页",
-    "description": "扩展被更新或重载后显示：这一页还在跑旧的、已经失效的内容脚本"
+  "extensionInactive": {
+    "message": "扩展在这一页已停用。请刷新本页。如果扩展已被禁用，请到扩展程序页重新启用它。",
+    "description": "扩展上下文失效时显示（被更新/重载/被禁用）：这一页还在跑旧的、已经失效的内容脚本。文案必须对三种原因都成立 —— 页面里判不出到底是哪一种（实测：更新与禁用时 chrome.* 的表现逐项相同）"
+  },
+  "refreshThisPage": {
+    "message": "请刷新本页",
+    "description": "工具栏图标标题里的后缀：这个标签页是在扩展装好之前打开的，刷新一下才生效"
+  },
+  "noticeAmbientPreview": {
+    "message": "这是页面预览 —— 点一下它，或点扩展图标，就能控制它"
+  },
+  "optLoadFailed": {
+    "message": "读取设置失败，你的快捷键没有被改动。请重试读取。",
+    "description": "设置页：读取 storage 失败。必须说出来，而不是静默地显示默认值"
+  },
+  "optRetryLoad": {
+    "message": "重试读取",
+    "description": "设置页：读取失败之后重试读取设置"
+  },
+  "optLoadOk": {
+    "message": "设置已重新读取",
+    "description": "设置页：重试之后成功读到了设置"
+  },
+  "optUndoRestore": {
+    "message": "撤销恢复默认",
+    "description": "设置页：「恢复默认」落盘后，按钮在几秒内变成「撤销」"
+  },
+  "optRestoreUndone": {
+    "message": "已撤销恢复默认",
+    "description": "设置页：撤销了「恢复默认」，之前的绑定回来了"
+  },
+  "hintSpeedReset": {
+    "message": "调速 · $1 加快 / $2 减慢 / $3 回到 1x",
+    "description": "First-run hint: speed step actions plus the reset key. 复位必须教 —— 全屏之外没有别的出口能回到 1x（胶囊与角标都是 pointer-events: none；倍速菜单只在全屏控制条里；manifest 无 contextMenus 权限）。它与快/慢并成**同一行**而不是另起一行：完整版 4 行 / 精简版 2 行是这套代码的承重不变式（阅读窗口、高度预算、测试高度桩都锁在它上面）",
+    "placeholders": {
+      "up": {
+        "content": "$1",
+        "example": "="
+      },
+      "down": {
+        "content": "$2",
+        "example": "-"
+      },
+      "reset": {
+        "content": "$3",
+        "example": "0"
+      }
+    }
   }
 }

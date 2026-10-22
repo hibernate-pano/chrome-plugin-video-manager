@@ -1,8 +1,9 @@
 import { chromium } from '@playwright/test';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findChromium } from '../../../scripts/find-chromium.mjs';
 
 /**
  * 启动「带扩展的真实 Chromium」的**唯一**入口。
@@ -42,38 +43,14 @@ if (!existsSync(join(DIST, 'manifest.json'))) {
 }
 
 /**
- * 在 Playwright 的浏览器缓存里找「支持扩展的完整 chromium」。
+ * 「这个仓库该用哪个 Chromium」。
  *
- * ⚠️ 必须同时认 macOS 与 Linux 两个缓存目录 ——
- * 只写 macOS 那条的话，在 Linux CI 上这个函数恒返回 `undefined`。
+ * ⚠️ 实现住在 `scripts/find-chromium.mjs` —— 因为**商店素材的生成脚本**
+ * 也需要同一份答案（它以前自己 `chromium.launch()`，于是去全局缓存里找，
+ * 在本项目的私有缓存里明明有浏览器却报「Executable doesn't exist」）。
+ * 抄一份的后果是两边慢慢漂移，而两边的失败信息长得**一模一样**。
  */
-export const findChromium = () => {
-  const caches = [
-    join(homedir(), 'Library/Caches/ms-playwright'), // macOS
-    join(homedir(), '.cache/ms-playwright'), // Linux
-  ];
-  const relativeCandidates = [
-    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    'chrome-linux/chrome',
-    'chrome-win/chrome.exe',
-  ];
-  for (const cache of caches) {
-    if (!existsSync(cache)) continue;
-    const versions = readdirSync(cache)
-      .filter((name) => name.startsWith('chromium-'))
-      .map((name) => name.slice('chromium-'.length))
-      .filter((version) => /^\d+$/.test(version))
-      .sort((a, b) => Number(b) - Number(a));
-    for (const version of versions) {
-      for (const relative of relativeCandidates) {
-        const candidate = join(cache, `chromium-${version}`, relative);
-        if (existsSync(candidate)) return candidate;
-      }
-    }
-  }
-  return undefined;
-};
+export { findChromium };
 
 /**
  * Chromium 的启动参数。

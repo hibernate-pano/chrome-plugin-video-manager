@@ -120,6 +120,7 @@ describe('消息协议的真源', () => {
     // 目的不是「不许改协议」，而是「改协议时必须有人看一眼清单」——
     // docs/ARCHITECTURE.md 的消息表是照着它写的，两边会一起漂。
     expect(names).toEqual([
+      'EXTENSION_INSTALLED_MESSAGE',
       'FRAME_FOCUS_MESSAGE',
       'FRAME_GONE_MESSAGE',
       'FRAME_PROBE_MESSAGE',

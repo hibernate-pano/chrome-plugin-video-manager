@@ -1,4 +1,5 @@
 import { t } from '../shared/i18n';
+import { readAmbientPreview } from './ambientPreview';
 import { topLevelRect } from './frameOffset';
 import {
   NOTICE_INSET,
@@ -45,6 +46,10 @@ export const TAKEOVER_NOTICE_STYLES: Record<string, string> = {
  * 只说「这个视频这里接管不了」，不假装知道原因：从扩展这一侧无法可靠区分
  * DRM 受保护、跨 document、无宿主这几种失败，猜一个具体原因比不说更糟。
  * 提示本身不承诺任何后续动作，只解释「不会发生什么」。
+ *
+ * ⚠️ 唯一的例外是「页面预览」：那是一个**已知**的原因（判定规则只有一份，
+ * 见 ambientPreview.ts），所以那条提示说得清楚、也给得出下一步 ——
+ * 见 textFor 的说明。
  */
 export class TakeoverNotice {
   private readonly pill = new TransientPill({
@@ -86,7 +91,7 @@ export class TakeoverNotice {
 
   /** 控制条不可见时也常驻在视频附近，所以位置每次都要跟着视频走。 */
   show(video: HTMLVideoElement | null) {
-    const text = t('noticeCannotTakeOver', '这个视频暂时控制不了');
+    const text = this.textFor(video);
     if (!this.pill.show(text)) {
       return;
     }
@@ -97,6 +102,34 @@ export class TakeoverNotice {
       this.positionNear(video);
       this.attachFollowListeners(video);
     }
+  }
+
+  /**
+   * 这条视频要说什么。
+   *
+   * ⚠️ 「页面预览」是一个**已知**的原因，所以它**可以**被说清楚 ——
+   * 与「这个视频暂时控制不了」那一句正好相反：后者是**猜不出**原因
+   * （分不清是 DRM、跨文档还是无宿主），所以只说「接管不了」。
+   *
+   * ⚠️ 措辞上有一条硬要求：**不能**说「控制不了」。
+   * 页面预览是**我们主动不接管**它（它在页面里当个预览摆着），
+   * 不是「接管不了」—— 而工具栏图标那条路径**恰恰能**接管它
+   * （显式点击是明确意图），所以「控制不了」会与事实矛盾，
+   * 用户看到的就会是「图标能、键盘不能」且自相矛盾。
+   *
+   * 所以这句话说的是**这条视频是什么**，以及**下一步做什么**：
+   * 点一下它（用户的手势一落，它就不再是「站点摆在那儿的装饰」），
+   * 或者点扩展图标（显式接管它）。
+   */
+  private textFor(video: HTMLVideoElement | null): string {
+    if (video && readAmbientPreview() === video) {
+      return t(
+        'noticeAmbientPreview',
+        '这是页面预览 —— 点一下它，或点扩展图标，就能控制它',
+      );
+    }
+
+    return t('noticeCannotTakeOver', '这个视频暂时控制不了');
   }
 
   /**

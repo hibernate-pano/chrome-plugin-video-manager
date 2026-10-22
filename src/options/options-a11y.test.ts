@@ -7,6 +7,35 @@ import { createChromeMock, flush } from './options-test-env';
  * 且保存/错误反馈要通过 live region 播报。
  */
 describe('options page accessibility', () => {
+  /**
+   * 按 accname 的**真实优先级**算出可访问名。
+   *
+   * ⚠️ 之前这里写的是 `label || referenced.join(' ')` ——
+   * 那是**反过来**的：aria-labelledby 优先于 aria-label。
+   * 两者的顺序写反了，这条断言就成了假的安全感：
+   * 实际可访问名只有「加速」，而它照样判「非空」通过。
+   *
+   * 真正的判据是 Chrome 的 AX tree（见 tests/e2e/options-page.spec.js）；
+   * 这里只是在单测里按同一套规则**近似**算一遍。
+   */
+  const accessibleName = (control: Element): string => {
+    const referenced = (control.getAttribute('aria-labelledby') ?? '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent?.trim() ?? '')
+      .filter(Boolean);
+    if (referenced.length > 0) {
+      return referenced.join(' ');
+    }
+
+    const label = control.getAttribute('aria-label')?.trim() ?? '';
+    if (label) {
+      return label;
+    }
+
+    return control.textContent?.trim() ?? '';
+  };
+
   it('gives every shortcut input a non-empty accessible name', async () => {
     const { render } = createChromeMock();
     const root = await render();
@@ -14,17 +43,37 @@ describe('options page accessibility', () => {
     const controls = Array.from(root.querySelectorAll('.vsc__key'));
     expect(controls.length).toBe(SHORTCUT_DEFINITIONS.length);
 
-    const names = controls.map((control) => {
-      const label = control.getAttribute('aria-label')?.trim() ?? '';
-      const referenced = (control.getAttribute('aria-labelledby') ?? '')
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((id) => document.getElementById(id)?.textContent?.trim() ?? '');
-
-      return label || referenced.join(' ').trim();
-    });
-
+    const names = controls.map(accessibleName);
     expect(names.filter((name) => name.length === 0)).toEqual([]);
+  });
+
+  /**
+   * 可访问名里必须带**当前绑定的键**。
+   *
+   * ⚠️ 之前 input 上同时有 aria-labelledby（指向动作名）与 aria-label
+   * （「加速: =」）—— accname 的规则是 aria-labelledby **优先**，
+   * 所以 aria-label 是**死代码**：读屏用户听到的只有「加速」，
+   * 永远不知道现在绑的是哪个键。
+   */
+  it('可访问名里带着当前绑定的键（不是只有动作名）', async () => {
+    const { render } = createChromeMock({
+      sync: {
+        'vsc-settings': { shortcuts: { ...DEFAULT_SHORTCUTS, fullscreen: 'ctrl+alt+shift+meta+pagedown' } },
+      },
+    });
+    const root = await render();
+
+    const index = SHORTCUT_DEFINITIONS.findIndex((definition) => definition.id === 'fullscreen');
+    const control = root.querySelectorAll('.vsc__key')[index]!;
+
+    const name = accessibleName(control);
+    expect(name, '可访问名里必须有当前绑定的键').toContain('PgDn');
+    // 而且**不能**靠 aria-labelledby 顶掉 aria-label ——
+    // 两者同时存在时读屏只念 aria-labelledby 指向的那一句。
+    expect(
+      control.getAttribute('aria-labelledby'),
+      '不能同时挂 aria-labelledby：它会盖掉带绑定信息的 aria-label',
+    ).toBeNull();
   });
 
   it('announces save and error feedback through a live region', async () => {
@@ -228,7 +277,7 @@ describe('设置页的冲突反馈要能定位到行', () => {
     expect(status).toContain('减速');
   });
 
-  it('校验失败时焦点挪到第一个出错的输入框', async () => {
+  it('校验失败时焦点挪到出错的输入框上', async () => {
     const { render } = createChromeMock();
     const root = await render();
 
@@ -239,9 +288,69 @@ describe('设置页的冲突反馈要能定位到行', () => {
     (root.querySelector('#save') as HTMLButtonElement).click();
     await flush();
 
-    expect(document.activeElement, '焦点必须落在第一个出错的输入框上').toBe(
-      inputOf(root, 'increaseSpeed'),
+    // ⚠️ 落点 = **用户刚改的那一行**（最后一次按的是「减速」），
+    // 不是清单里的第一行 —— 见下一条用例。
+    expect(document.activeElement, '焦点必须落在出错的输入框上').toBe(
+      inputOf(root, 'decreaseSpeed'),
     );
+  });
+
+  /**
+   * 冲突时焦点必须落在**用户刚改的那一行**。
+   *
+   * ⚠️ 之前永远落在第一行（SHORTCUT_DEFINITIONS 的顺序）：
+   * 用户改的是第 7 行（网页全屏），焦点却被送到第 1 行（加速）——
+   * 视口滚回页面顶部，他正在改的那一行滚出屏幕。
+   */
+  it('冲突时焦点落在用户刚改的那一行，不是第一行', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    // 第 7 行（网页全屏）按 '=' —— 与第 1 行「加速」的默认键相同。
+    press(inputOf(root, 'fullscreen'), '=');
+
+    (root.querySelector('#save') as HTMLButtonElement).click();
+    await flush();
+
+    expect(
+      document.activeElement,
+      '焦点必须留在用户刚改的那一行（网页全屏），而不是被送到第一行（加速）',
+    ).toBe(inputOf(root, 'fullscreen'));
+  });
+
+  /**
+   * 聚焦冲突的那一行时，框里**不能是空的**。
+   *
+   * ⚠️ 之前 focus 处理把 value 清空，于是被聚焦的那一格是空的 ——
+   * 用户看到的框里什么都没有，只有一行「与『加速』重复」。
+   */
+  it('聚焦冲突的那一行时，输入框里还看得到当前绑定的键', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'fullscreen'), '=');
+    (root.querySelector('#save') as HTMLButtonElement).click();
+    await flush();
+
+    const focused = document.activeElement as HTMLInputElement;
+    expect(focused.value, '聚焦时框里必须有值（不能被清空）').not.toBe('');
+    expect(focused.value).toBe('=');
+  });
+
+  /**
+   * 行的错误文案里要带上**撞的那个键**。
+   *
+   * ⚠️ 之前只写「与『加速』重复」：用户知道自己撞了谁，
+   * 却不知道自己按的是哪个键 —— 框里的字又被清空了，完全无从判断。
+   */
+  it('行的错误文案里带上了撞的那个键', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    press(inputOf(root, 'fullscreen'), '=');
+
+    const errorNode = document.getElementById('error-fullscreen');
+    expect(errorNode?.textContent ?? '').toContain('=');
   });
 
   it('冲突改掉之后，红框与就地错误一起消失', async () => {
@@ -321,5 +430,63 @@ describe('设置页：引导的状态要看得见', () => {
     await flush();
 
     expect(hintStateOf(root)).toBe('');
+  });
+});
+
+/**
+ * 页面上的**动作行**要各归各位。
+ *
+ * ⚠️ 「使用引导」那张卡片原来夹在快捷键表与快捷键表的「保存」按钮之间：
+ * 读完 7 行表格，视线往下一扫是「使用引导 / 重新显示使用引导」，
+ * 再往下才是「恢复默认 / 保存」—— 两件不相干的事共用一条动作行；
+ * 而且它跟快捷键表用的是同一个 .vsc__card，看上去像是快捷键表的一部分。
+ *
+ * ⚠️ 它的**位置**改过一次，改的理由跟上面那条**不是**一回事：
+ * 那条要的是「引导不与快捷键表混为一谈」（靠视觉层级解决），
+ * 而动作条要的是「保存按钮永远在视口底」（靠结构解决）。
+ * 两者一度互相打架：动作条排在最后，sticky 才吸得住底；
+ * 而动作条排在最后，「使用引导」就又落在快捷键表与「保存」之间了。
+ *
+ * 现在的解法是**两边都满足**：
+ *   - 动作条是 <main> 的**最后一个**元素 → sticky 真的吸得住底；
+ *   - 「使用引导」**不再套** .vsc__card → 它不与快捷键表混为一谈；
+ *   - 动作条本身是**吸在视口底**的一条独立操作条（不是表格的页脚）
+ *     → 视觉上它与页面内容分层，不再与「使用引导」共用一条行。
+ *
+ * ⚠️ jsdom 没有布局，量不了「离视口底几像素」——
+ * 那条**行为**守卫在 `tests/e2e/options-page.spec.js`（真浏览器）。
+ * 这里守的是它的**结构前提**：动作条必须是最后一个元素。
+ */
+describe('设置页：动作行的位置', () => {
+  it('动作条是 <main> 的最后一个元素（sticky 吸得住底的前提）', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    const main = root.querySelector('main')!;
+    const actions = root.querySelector('.vsc__actions')!;
+    const rows = root.querySelector('#rows')!;
+
+    // ⚠️ 这是硬约束，不是排版偏好：
+    // position: sticky; bottom: 0 只有在它是包含块里**最后一个**流内元素时
+    // 才吸得住底。它后面若还有元素，滚到页面底部时它会被顶离视口底边。
+    expect(
+      main.lastElementChild,
+      '动作条必须是 <main> 的最后一个元素',
+    ).toBe(actions);
+    // 快捷键表仍然在动作条之前。
+    expect(
+      rows.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+      '快捷键表必须在动作行之前',
+    ).toBeTruthy();
+  });
+
+  it('「使用引导」不再套那张跟快捷键表一样的白卡片', async () => {
+    const { render } = createChromeMock();
+    const root = await render();
+
+    // ⚠️ 同一个 .vsc__card 会让用户以为它管的是快捷键。
+    expect(root.querySelector('#hint')?.classList.contains('vsc__card')).toBe(false);
+    // 但它仍然必须**看得见**（不能被 display:none 藏起来）。
+    expect(root.querySelector('#reset-hint')).not.toBeNull();
   });
 });

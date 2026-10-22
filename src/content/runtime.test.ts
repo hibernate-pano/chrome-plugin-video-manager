@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as liveRegionModule from './liveRegion';
 import { ContentRuntime } from './runtime';
@@ -9,6 +12,8 @@ import {
   STORAGE_KEY,
   TOGGLE_FULLSCREEN_MESSAGE,
 } from '../shared/types';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** 取最近一个 ContentRuntime 注册的 onMessage 监听器（beforeEach 的实例先注册）。 */
 const lastMessageListener = () => {
@@ -206,6 +211,192 @@ describe('ContentRuntime integration', () => {
     });
     expect(response).toEqual({ ok: true, active: false });
     expect(document.getElementById('vsc-controls')).toBeNull();
+  });
+
+  /**
+   * 症状 A：从**控制条的退出钮**退出之后，点工具栏图标必须进**眼前那个**视频。
+   *
+   * ⚠️ 以前只有 Esc 那条路径会去更新注册表 —— 于是从控制条退出之后，
+   * 注册表仍把那个**已经退出全屏**的视频当成「全屏中的视频」，
+   * 而它在 getCurrentVideo() 里是**绝对优先**的分支（连「在不在视口里」
+   * 都不看）→ 点图标 → 又是那个早就滚出屏幕的视频进全屏。
+   *
+   * ⚠️ 这条用例必须**摆出真实的几何**：jsdom 没有布局引擎，
+   * 「在视口里」那条判据永远读成 0 —— 不模拟视口的话，
+   * 「off-screen 的那个不该被选中」这条根本无从谈起。
+   */
+  it('从控制条的退出钮退出后，点工具栏图标进的是眼前那个视频', async () => {
+    // 模拟一个「有布局引擎、视口 1280×720」的文档。
+    //
+    // ⚠️ 还原必须放在 finally 里：这些是 own property（不会随 body.innerHTML
+    // 一起消失），断言一失败就漏给后面的用例 —— 后面 20 多条会跟着一起红，
+    // 而红的原因与它们自己无关。
+    const restoreViewport = () => {
+      delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
+      delete (document.documentElement as unknown as Record<string, unknown>).clientHeight;
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    };
+
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      value: 1280, configurable: true,
+    });
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      value: 720, configurable: true,
+    });
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 720, configurable: true });
+
+    try {
+      // 场景：页面上**只有** gone 这一个视频，用户对它进了全屏。
+      document.body.innerHTML = '';
+      const gone = createVideo();
+      gone.id = 'gone';
+      gone.setAttribute('controls', '');
+      const goneRect = { top: 0, left: 0, right: 800, bottom: 450, width: 800, height: 450 };
+      gone.getBoundingClientRect = () => ({
+        ...goneRect, x: goneRect.left, y: goneRect.top, toJSON: () => ({}),
+      } as DOMRect);
+      document.body.appendChild(gone);
+
+      // 进全屏（页面上只有它，它就是当前目标）。
+      lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        document.getElementById('vsc-page-fullscreen-stage')?.querySelector('video')?.id,
+        '前置条件：进全屏的是 gone',
+      ).toBe('gone');
+
+      // ⚠️ 从**控制条的退出钮**退出（不是 Esc）。
+      // 它调的是控制器的 exit()，以前那条路径不会去更新注册表。
+      const exitButton = document
+        .getElementById('vsc-controls')
+        ?.shadowRoot?.querySelector<HTMLButtonElement>('[data-role="exit"]');
+      expect(exitButton, '控制条上必须有退出按钮').not.toBeNull();
+      exitButton?.click();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        document.getElementById('vsc-page-fullscreen-overlay'),
+        '前置条件：已经退出全屏',
+      ).toBeNull();
+
+      // 用户往下滚了：gone 滚出屏幕，眼前换成另一条视频 visible。
+      goneRect.top = 5000;
+      goneRect.bottom = 5450;
+      const visible = createVideo();
+      visible.id = 'visible';
+      visible.setAttribute('controls', '');
+      visible.getBoundingClientRect = () => ({
+        top: 0, left: 0, right: 800, bottom: 450, width: 800, height: 450,
+        x: 0, y: 0, toJSON: () => ({}),
+      } as DOMRect);
+      document.body.appendChild(visible);
+
+      // 用户随后点了工具栏图标。
+      lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        document.getElementById('vsc-page-fullscreen-stage')?.querySelector('video')?.id,
+        '图标路径必须进眼前那个视频，不能再进那个已经退出全屏的',
+      ).toBe('visible');
+    } finally {
+      restoreViewport();
+    }
+  });
+
+  /**
+   * 症状 B（同一个根因的另一面）：从**控制条的退出钮**退出之后，
+   * 文章页里的装饰性预览视频不该再抢走空格。
+   *
+   * ⚠️ 为什么这与症状 A 是同一个根因、却不是同一条用例：
+   * 症状 A 走的是 `getCurrentVideo()`（显式操作），症状 B 走的是
+   * `getWatchedTarget()` → `computeAmbientPreview(..., isTakenOverByUs)`。
+   * 两者都读 `fullscreenVideo` 那一个字段，但**读的位置不同** ——
+   * 修法只改一处时，很可能只修好其中一个。所以必须分别守住。
+   *
+   * ⚠️ 判据链：装饰性预览的证据 #7 是「不是我们接管着的」。
+   * 退出全屏后若注册表仍以为「我们接管着它」，这条证据就失效 →
+   * 它不再被判成装饰 → 快捷键路径接管它 → 空格被吃掉、页面翻不动。
+   */
+  it('从控制条的退出钮退出后，文章页的装饰性预览不再抢走空格', async () => {
+    const restoreViewport = () => {
+      delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
+      delete (document.documentElement as unknown as Record<string, unknown>).clientHeight;
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    };
+
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      value: 1280, configurable: true,
+    });
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      value: 720, configurable: true,
+    });
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 720, configurable: true });
+
+    try {
+      document.body.innerHTML = '';
+
+      // 站点用 JS 播起来的预览视频：900×506（视口 1280×720 的 49%），
+      // 没有 autoplay 属性、没有原生 controls —— 正是「装饰性预览」的形状。
+      // 它**不是**页面主角，所以正常状态下空格必须放行给页面。
+      const preview = createVideo();
+      preview.id = 'preview';
+      preview.muted = true;
+      // ⚠️ 「站点自己开的」这条证据用 **autoplay 属性**表达，不用派发 play 事件。
+      // 这份测试文件把 `isTrustedEvent` 放宽成恒真（jsdom 造不出可信事件），
+      // 于是这里派发的 play 会被当成「用户按了播放」→ 写进 userTouchedVideos
+      // → 它不再被判成装饰物。属性证据不受那条测试缝影响。
+      preview.setAttribute('autoplay', '');
+      Object.defineProperty(preview, 'paused', { value: false, configurable: true });
+      Object.defineProperty(preview, 'readyState', { value: 4, configurable: true });
+      preview.getBoundingClientRect = () => ({
+        top: 0, left: 0, right: 900, bottom: 506, width: 900, height: 506,
+        x: 0, y: 0, toJSON: () => ({}),
+      } as DOMRect);
+      document.body.appendChild(preview);
+
+      // 前置条件：正常情况下，空格不归我们（它是装饰性预览）。
+      expect(
+        (runtime as unknown as { registry: { getWatchedTarget: () => unknown } })
+          .registry.getWatchedTarget(),
+        '前置条件：装饰性预览不该成为快捷键目标',
+      ).toBeNull();
+
+      // 用户显式点了工具栏图标 —— 显式操作**可以**接管它（这是有意的契约）。
+      lastMessageListener()({ type: TOGGLE_FULLSCREEN_MESSAGE }, {}, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        document.getElementById('vsc-page-fullscreen-stage')?.querySelector('video')?.id,
+        '前置条件：显式点击把它拉进了全屏',
+      ).toBe('preview');
+
+      // 从**控制条的退出钮**退出。
+      const exitButton = document
+        .getElementById('vsc-controls')
+        ?.shadowRoot?.querySelector<HTMLButtonElement>('[data-role="exit"]');
+      expect(exitButton, '控制条上必须有退出按钮').not.toBeNull();
+      exitButton?.click();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        document.getElementById('vsc-page-fullscreen-overlay'),
+        '前置条件：已经退出全屏',
+      ).toBeNull();
+
+      // ⚠️ 关键断言：退出之后它必须**重新**被判成装饰性预览，
+      // 否则快捷键路径会接管它，空格被吃掉、文章翻不了页。
+      expect(
+        (runtime as unknown as { registry: { getWatchedTarget: () => unknown } })
+          .registry.getWatchedTarget(),
+        '退出全屏后，这条预览必须重新算作「页面预览」—— 空格要还给页面',
+      ).toBeNull();
+    } finally {
+      restoreViewport();
+    }
   });
 
   it('ignores unrelated messages', () => {
@@ -873,6 +1064,43 @@ describe('ContentRuntime integration', () => {
   });
 
   /**
+   * 失效提示的文案（locale 文件里的那一份）必须对**每一种**原因都成立。
+   *
+   * ⚠️ 为什么这条守卫盯的是 locale 文件而不是代码里的兜底串：
+   * 真正上线的是 locale 里那一份 —— 兜底串只在开发环境出现。
+   *
+   * ⚠️ 判据是「不能出现只在一种原因下为真的话」：
+   * 「已更新」在「被禁用」时是假的（实测：内容脚本里分不出这两种情况）。
+   */
+  it('locale 里的文案对「被更新/被重载/被禁用」都成立', () => {
+    for (const locale of ['zh_CN', 'en']) {
+      const file = join(repoRoot, '_locales', locale, 'messages.json');
+      const messages = JSON.parse(readFileSync(file, 'utf8')) as Record<
+        string,
+        { message?: string; description?: string }
+      >;
+
+      const entry = messages.extensionInactive;
+      expect(entry, `${locale} 必须有 extensionInactive 这条文案`).toBeTruthy();
+
+      const text = entry!.message ?? '';
+      expect(text, `${locale} 的文案不能说「已更新」—— 被禁用时那句话是假的`).not.toMatch(
+        /已更新|updated/i,
+      );
+      expect(text, `${locale} 的文案必须提到刷新`).toMatch(/刷新|refresh/i);
+      expect(text, `${locale} 的文案必须给出「被禁用」时该走的那条路`).toMatch(/禁用|disabled/i);
+      expect(text, `${locale} 的文案必须说清楚去哪里重新启用`).toMatch(/扩展程序|extensions page/i);
+
+      // 旧的那条（说「已更新」的那条）不许还留在文件里 ——
+      // 留着它，下一个人很可能顺手把它接回去。
+      expect(
+        messages.extensionUpdated,
+        `${locale} 里不该再有 extensionUpdated（它只对一种原因成立）`,
+      ).toBeUndefined();
+    }
+  });
+
+  /**
    * 扩展被更新/重载之后，已打开的标签页会变成**僵尸**。
    *
    * MV3 的扩展被重载时**不会**重新注入内容脚本：老的内容脚本还在跑
@@ -923,8 +1151,97 @@ describe('ContentRuntime integration', () => {
         // 而且必须给用户一句明确的话。
         const notice = document.getElementById('vsc-extension-stale-notice');
         expect(notice, '必须告诉用户发生了什么').not.toBeNull();
-        expect(notice!.textContent).toContain('扩展已更新');
         expect(notice!.textContent).toContain('刷新');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    /**
+     * 这条提示必须**真的看得见**，而且说的那句话**对「被禁用」也成立**。
+     *
+     * ⚠️ 为什么要量 computed style 而不是只看「节点还在 DOM 里」：
+     * 「节点还在」正是这个缺陷的假绿来源 —— 节点确实在，
+     * 但它的话是错的（被禁用时却说「扩展已更新」），而且它可能压根没显示出来。
+     *
+     * ⚠️ 为什么要断言**文案**而不是「有文案」：
+     * 一句错的话比没有话更糟 —— 它会让用户一直刷新、一直看到同一句假话。
+     */
+    it('提示看得见，而且那句话对「被禁用」也成立', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        invalidateContext();
+        await triggerDetection();
+
+        const notice = document.getElementById('vsc-extension-stale-notice');
+        expect(notice, '必须告诉用户发生了什么').not.toBeNull();
+
+        // 1) 用户真的看得见吗？
+        //
+        //    ⚠️ 这里断言的是**确切的期望值**，不是「不是 none 就好」：
+        //    「不等于 none」在 jsdom 返回空串时也会通过 ——
+        //    那是一条恒真的假守卫，正是这个仓库吃过亏的那种。
+        const style = getComputedStyle(notice!);
+        expect(style.display, '提示必须真的显示出来').toBe('block');
+        expect(style.visibility, '提示必须真的看得见').toBe('visible');
+        expect(style.opacity, '提示必须不透明').toBe('1');
+        expect(style.position, '提示必须固定在视口上（不是跟着文档流跑）').toBe('fixed');
+
+        // 2) 那句话对「被禁用」也成立吗？
+        //
+        //    判据：被更新/被重载/被禁用在内容脚本里**分不开**
+        //    （实测：18 项 chrome.* 信号逐项相同）——
+        //    所以文案不能说「已更新」这种只在一种原因下为真的话。
+        const text = notice!.textContent ?? '';
+        expect(text, '不能说「已更新」—— 被禁用时那句话是假的').not.toContain('已更新');
+        expect(text, '必须说「刷新本页」').toContain('刷新');
+        expect(text, '必须给出「被禁用」时该走的那条路').toContain('禁用');
+        expect(text, '必须说清楚去哪里重新启用').toContain('扩展程序');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    /**
+     * 文案必须在**上下文还活着的时候**取好。
+     *
+     * ⚠️ 上下文失效之后 `chrome.i18n.getMessage` 会抛
+     * "Extension context invalidated."，而 `t()` 会回退到**中文兜底** ——
+     * 于是英文界面上的用户看到的是一句中文（实测：失效提示显示的正是中文兜底）。
+     *
+     * 这条守卫盯的是「取文案的时机」：把 `t()` 挪回显示那一刻，它就会红。
+     */
+    it('文案取自 locale（即使显示时上下文已经死了）', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // 装上一个会说英文的 i18n，然后**重新起**一份运行时 ——
+        // 构造那一刻上下文还活着，它应该把英文那句取好。
+        (chrome as unknown as { i18n: unknown }).i18n = {
+          getMessage: (key: string) =>
+            key === 'extensionInactive' ? 'EXTENSION-INACTIVE-IN-ENGLISH' : '',
+        };
+        // ⚠️ 上一个用例留下的失效提示挂在 <html> 上（不是 <body>），
+        // 而 beforeEach 只清了 body —— 不先摘掉它，这条用例量到的
+        // 会是**上一条**用例写下的文案（一条会红的假绿的反面：假红）。
+        document.getElementById('vsc-extension-stale-notice')?.remove();
+
+        await startFreshRuntime();
+
+        // 上下文死了：此后任何 chrome.i18n 调用都会抛。
+        invalidateContext();
+        (chrome as unknown as { i18n: { getMessage: () => never } }).i18n = {
+          getMessage: () => {
+            throw new Error('Extension context invalidated.');
+          },
+        };
+        await triggerDetection();
+
+        const notice = document.getElementById('vsc-extension-stale-notice');
+        expect(notice, '必须告诉用户发生了什么').not.toBeNull();
+        expect(
+          notice!.textContent,
+          '文案必须在上下文还活着的时候取好 —— 否则英文用户看到的是中文兜底',
+        ).toBe('EXTENSION-INACTIVE-IN-ENGLISH');
       } finally {
         warn.mockRestore();
       }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TakeoverNotice } from './takeoverNotice';
+import { publishAmbientPreview } from './ambientPreview';
 
 const NOTICE_ID = 'vsc-takeover-notice';
 
@@ -52,6 +53,9 @@ describe('TakeoverNotice', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     document.body.innerHTML = '';
+    // 判定结果住在模块里（见 ambientPreview.ts）：每条用例都要从「没有页面预览」
+    // 出发，否则上一条用例的结论会漏进这一条。
+    publishAmbientPreview(null);
     notice = new TakeoverNotice();
   });
 
@@ -265,5 +269,38 @@ describe('TakeoverNotice', () => {
     expect(root.style.top).toBe('16px');
     expect(root.style.left).toBe('16px');
     expect(root.style.bottom).toBe('auto');
+  });
+
+  it('页面预览：说清楚「为什么」，并给出「下一步」', () => {
+    // ⚠️ 这条文案**不能**说「控制不了」：
+    // 工具栏图标那条路径**能**接管页面预览（显式点击是明确意图），
+    // 说「控制不了」就与事实矛盾 —— 用户看到的会是「图标能、键盘不能」。
+    const video = document.createElement('video');
+    document.body.appendChild(video);
+    publishAmbientPreview(video);
+
+    notice.show(video);
+
+    const root = document.getElementById(NOTICE_ID)!;
+    expect(root.textContent).toBe('这是页面预览 —— 点一下它，或点扩展图标，就能控制它');
+    expect(
+      root.textContent,
+      '必须给出下一步：点一下它就能用快捷键',
+    ).toContain('点一下它');
+    expect(
+      root.textContent,
+      '不能说「控制不了」—— 那与工具栏图标路径的事实矛盾',
+    ).not.toContain('控制不了');
+  });
+
+  it('不是页面预览时仍说「接管不了」（不猜原因）', () => {
+    const video = document.createElement('video');
+    document.body.appendChild(video);
+    publishAmbientPreview(null);
+
+    notice.show(video);
+
+    const root = document.getElementById(NOTICE_ID)!;
+    expect(root.textContent).toBe('这个视频暂时控制不了');
   });
 });

@@ -230,6 +230,49 @@ export const isDecorativeAutoplay = (
 };
 
 /**
+ * 「这一层把哪条视频判成了页面预览」—— 判定的**对外一格**。
+ *
+ * ⚠️ 为什么判定结果要有一格**别处能读到**的地方：
+ *
+ * 规则只有一份（本文件 + VideoRegistry 的两条私有证据），但**说这句话**的有两处：
+ * - **快捷键路径**：拿不到可接管的目标时，它只知道「这里没有目标」，
+ *   不知道「不是没有视频，是有一条被当成页面预览的视频」——
+ *   于是它只能问「别的 frame 有没有视频」，别的 frame 说没有，它就**一声不吭**。
+ * - **接管失败提示**：要说出「为什么接管不了」，就得知道这条视频是不是页面预览。
+ *
+ * 而这两处都**够不着 VideoRegistry**：快捷键控制器刻意不依赖它的实现
+ * （见 keyboardController.ts 的「只取类型，不引入运行时依赖」），
+ * 接管提示则由运行时直接 new 出来、没有接缝。
+ *
+ * 所以判定结果落在**规则所在的那个模块**里 —— 谁判的谁登记，谁要解释谁来读。
+ * ⚠️ 它是**本 frame** 的：内容脚本每个 frame 各有一份，不跨 frame
+ * （跨 frame 的「视频在哪儿」是 background 那套广播协议的事）。
+ */
+let ambientPreviewVideo: HTMLVideoElement | null = null;
+
+/**
+ * 登记「这一层把哪条视频判成了页面预览」。
+ *
+ * 由 VideoRegistry 在**判定刚做完**时调用：判出目标就登记 null
+ * （没有页面预览），判不出目标但有页面预览就登记那一条。
+ *
+ * ⚠️ 登记 null 同样重要：否则上一轮的结论会留在那里，
+ * 而「这条视频是不是页面预览」会被用来说错原因。
+ */
+export const publishAmbientPreview = (video: HTMLVideoElement | null): void => {
+  ambientPreviewVideo = video;
+};
+
+/**
+ * 读出「这一层把哪条视频判成了页面预览」（没有则 null）。
+ *
+ * ⚠️ 读到的结论是**上一次判定**的：判定由 registry 缓存
+ * （见 videoRegistry.ts 的 getWatchedTarget），命中缓存时不会重判，
+ * 所以这里读到的也是与那份缓存**同一份**结论 —— 两者不会互相矛盾。
+ */
+export const readAmbientPreview = (): HTMLVideoElement | null => ambientPreviewVideo;
+
+/**
  * 这个视频是不是「页面主角」（占视口 ≥ 60%）—— 不成立就不是装饰物。
  *
  * 无布局引擎时判不了（量出来的尺寸恒为 0）→ 返回 false，即「不豁免」。

@@ -96,12 +96,58 @@ describe('引导与设置页的文案', () => {
     expect(en.hintFullscreen?.message).not.toMatch(/\bf\b/i);
   });
 
-  it('工具栏图标在引导与设置页里说的是同一件事（切换，不是进入）', () => {
-    // 两边曾经一个说「进入」、一个说「切换」—— 同一个图标、两种说法。
-    expect(zh.hintToolbar?.message).toContain('切换');
-    expect(en.hintToolbar?.message).toMatch(/toggle/i);
+  /**
+   * 「点扩展图标 = 全屏」这句话，**只**由设置页说。
+   *
+   * ⚠️ 原来引导里也有一份（hintToolbar = 「点扩展图标可切换网页全屏」），
+   * 而引导的第一行说的是「按 f 切换网页全屏」—— **同一个动作**
+   * （同一个 TOGGLE_FULLSCREEN_MESSAGE，见 background/index.ts:22）
+   * 在同一张卡片里讲了两遍。
+   *
+   * 现在引导那一行改成「全屏控制条里能用鼠标点倍速档位」——
+   * 那是**别处没有**的事实：这个产品唯一能用鼠标**精确**选倍速的地方
+   * （按 = 只能一档一档按，要 1.5x 得按 5 次），
+   * 而倍速菜单只存在于全屏控制条里（FullscreenControls 只在 enter() 里创建、
+   * 退出时 unmount）。
+   *
+   * 设置页那一份**留着**：那里没有第一行复述，工具栏图标的用法本来就该
+   * 在设置页说清楚。
+   */
+  it('「点扩展图标 = 全屏」只在设置页说，引导不再复述它', () => {
+    // 设置页：仍然教鼠标路径。
     expect(zh.optTipsToolbar?.message).toContain('切换');
     expect(en.optTipsToolbar?.message).toMatch(/toggle/i);
+
+    // 引导：换成「鼠标点倍速档位」，且**不含**「扩展图标」那套说法。
+    expect(zh.hintToolbar?.message).toContain('倍速档位');
+    expect(en.hintToolbar?.message).toMatch(/speed/i);
+    expect(zh.hintToolbar?.message).not.toContain('扩展图标');
+    expect(en.hintToolbar?.message).not.toMatch(/toolbar|extension icon/i);
+  });
+
+  /**
+   * 「回到 1x」这条必须教，而且中英文的占位符要对得上。
+   *
+   * ⚠️ 它用的是**独立的 key**（hintSpeedReset），不是给 hintSpeed 多传一个替换值：
+   * chrome.i18n.getMessage 按位置替换，locale 里的 hintSpeed 只声明了
+   * $1/$2 —— 传三个替换值时 $3 会渲染成**空串**，
+   * 界面上留下「调速 · = 加快 / - 减慢 / 」这样的半截文案。
+   */
+  it('教「回到 1x」的那一条：占位符三个，且两语言一致', () => {
+    expect(zh.hintSpeedReset?.message).toContain('$1');
+    expect(zh.hintSpeedReset?.message).toContain('$2');
+    expect(zh.hintSpeedReset?.message).toContain('$3');
+    expect(en.hintSpeedReset?.message).toContain('$1');
+    expect(en.hintSpeedReset?.message).toContain('$2');
+    expect(en.hintSpeedReset?.message).toContain('$3');
+
+    // 三档都要说清楚：加快 / 减慢 / 回到 1x。
+    expect(zh.hintSpeedReset?.message).toContain('回到 1x');
+    expect(en.hintSpeedReset?.message).toMatch(/1x/i);
+
+    // ⚠️ 没绑定复位键时，走的是**另一个 key**（hintSpeed，两档）。
+    expect(zh.hintSpeed?.message).not.toContain('$3');
+    expect(en.hintSpeed?.message).not.toContain('$3');
   });
 
   it('中文占位符读得通，而且说清了怎么清空绑定', () => {
@@ -114,6 +160,45 @@ describe('引导与设置页的文案', () => {
     // 设置页的说明段落也要说清同一件事。
     expect(zh.optLead?.message).toMatch(/Backspace/);
     expect(en.optLead?.message).toMatch(/Backspace/);
+  });
+
+  /**
+   * Escape = 撤销这件事，页面上必须有**一个字**提到它。
+   *
+   * ⚠️ 之前 `document.body.innerText` 里没有「Esc / escape / 撤销 / 取消」
+   * 任何一个词：Backspace 的用法在 optLead 与占位符里写得很清楚，
+   * Escape 完全没有。用户想把 Escape 绑给某个动作 → 按下 Escape →
+   * 框里回到旧键并失焦，**没有任何提示** ——
+   * 他既不知道 Escape 被占用了（绑不了），
+   * 也不知道刚才那次修改被撤销了。
+   *
+   * 断言用的是 locale 值本身（不是写死中英文），
+   * 这样两条文案只要有一边漏了就红。
+   */
+  it('Escape 撤销这件事写在页面文案里', () => {
+    // 占位符（聚焦时用户真正看到的那句话）里要有。
+    expect(zh.optPressKey?.message).toMatch(/Esc/);
+    expect(en.optPressKey?.message).toMatch(/Esc/);
+    // 说明段落里也要有。
+    expect(zh.optLead?.message).toMatch(/Esc/);
+    expect(en.optLead?.message).toMatch(/Esc/);
+  });
+
+  /**
+   * 页面必须说清「这些键只在网页里的视频上生效」。
+   *
+   * ⚠️ 之前整个页面上没有这句话：新用户看到 7 个键，
+   * 在任意网页上按 '=' 什么都没发生，页面从头到尾没说
+   * 「只有页面里正在播放的视频才会响应」——
+   * 而这正是「为什么我按了键没反应」。
+   */
+  it('说明段落说清了「只在页面里正在播放的视频上生效」', () => {
+    // 中英各说各的，但都要有这句范围说明。
+    expect(zh.optLead?.message).toMatch(/视频/);
+    expect(en.optLead?.message).toMatch(/video/i);
+    // 而且说的是「正在播放」这个条件，不是笼统的「视频」。
+    expect(zh.optLead?.message).toMatch(/播放/);
+    expect(en.optLead?.message).toMatch(/playing/i);
   });
 
   it('设置页那两条提示在两个 locale 里都存在，且占位符对应', () => {

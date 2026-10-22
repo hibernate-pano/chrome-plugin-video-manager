@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { findChromium } from './find-chromium.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -75,6 +76,52 @@ const outPath = (base, locale) =>
   resolve(outDir, locale === 'en' ? `${base}.png` : `${base}.${locale.replace('_', '-')}.png`);
 
 const label = (base, locale) => `${base}${locale === 'en' ? '' : `.${locale.replace('_', '-')}`}.png`;
+
+/**
+ * 把演示视频调到 1.5x，并且让画面角落**干净**。
+ *
+ * ⚠️ 为什么必须走**真实按键**而不是直接设 `video.playbackRate`：
+ * 控制条的倍速读数来自扩展自己的状态，直接改视频属性的话，
+ * 读数与真实倍速会对不上 —— 截图里就会出现「读数 1x、画面 1.5x」这种自相矛盾。
+ *
+ * ⚠️ 为什么还要等角落干净：调速胶囊（`#vsc-speed-toast`）在 900ms 后淡出、
+ * 3900ms 后变成「很淡的小角标」。两者是**同一个元素**。
+ * 我们要的是**胶囊已淡出、角标还没出现**的那段窗口 ——
+ * 角标很淡，但在门面图上仍是一个浮在黑边上的小药丸，看着像渲染瑕疵。
+ *
+ * ⚠️ 顺带定下「这几张图讲的是同一场演示」：所有全屏图都用 1.5x，
+ * 免得一张 1.5x、一张 1x、一张 1.1x —— 审图的人会看出这是三场不同的演示。
+ */
+const setDemoRateTo15x = async (page) => {
+  for (let i = 0; i < 5; i += 1) {
+    await page.keyboard.press('=');
+  }
+  await page.waitForTimeout(150);
+  const rate = await page.evaluate(
+    () => document.getElementById('demo-video')?.playbackRate ?? 0,
+  );
+  if (Math.abs(rate - 1.5) > 0.01) {
+    throw new Error(`demo video rate should be 1.5x, got ${rate}`);
+  }
+  // 等胶囊淡出。
+  await page.waitForFunction(
+    () => !document.getElementById('vsc-speed-toast')?.classList.contains('vsc-visible'),
+    undefined,
+    { timeout: 3000 },
+  );
+  // 多等一会儿，让淡出动画走完（截图里不能有半透明的残影）。
+  await page.waitForTimeout(400);
+};
+
+/** 截图前的最后一道断言：角落不能有胶囊/角标。 */
+const assertCornerClean = async (page, what) => {
+  const clean = await page.evaluate(
+    () => !document.getElementById('vsc-speed-toast')?.classList.contains('vsc-visible'),
+  );
+  if (!clean) {
+    throw new Error(`corner toast/badge is visible in ${what}`);
+  }
+};
 
 const CAPTION_ID = 'vsc-store-caption';
 
@@ -211,7 +258,18 @@ const demoHtml = readFileSync(resolve(root, 'store-assets', 'demo.html'), 'utf8'
 const demoPath = resolve(distDir, 'demo.html');
 writeFileSync(demoPath, demoHtml);
 
-const browser = await chromium.launch();
+// ⚠️ 必须**指名**用哪个浏览器：`chromium.launch()` 不带参数时走的是
+// Playwright 的**全局**缓存（`~/Library/Caches/ms-playwright`）——
+// 而那个缓存是这台机器上所有项目共享的，别的项目跑一次 install 就能把它清空
+// （实测：本项目的浏览器被清空了 4 次，素材生成直接失败）。
+// 本项目的浏览器装在**私有的** `.cache/ms-playwright` 里（见 find-chromium.mjs）。
+const executablePath = findChromium();
+if (!executablePath) {
+  throw new Error(
+    '找不到可用的 Chromium —— 先跑 `pnpm setup:browsers`（装进项目内的私有缓存）。',
+  );
+}
+const browser = await chromium.launch({ executablePath });
 
 try {
   await waitForServer();
@@ -228,6 +286,12 @@ try {
         await page.goto(`${BASE}/demo.html?lang=${locale}`, { waitUntil: 'networkidle' });
         await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
         await page.mouse.click(640, 300);
+        // ⚠️ 先调速再进全屏 —— 控制条上的倍速读数要显示**真实的** 1.5x。
+        //
+        // 之前这张首图上写着「1x」：整个产品是关于倍速的，而门面图上
+        // 倍速是 1x，读起来像「这扩展不改速度」。
+        await setDemoRateTo15x(page);
+
         await page.keyboard.press('f');
         await page.waitForTimeout(300);
         const active = await page.evaluate(
@@ -249,6 +313,7 @@ try {
           },
         );
         if (!ctlVisible) throw new Error('fullscreen controls not visible');
+        await assertCornerClean(page, 'the hero screenshot');
         await addCaption(page, captions.fullscreen, 'top-center');
         await assertCaptionDoesNotCover(page, 'store-fullscreen');
         await page.screenshot({ path: outPath('store-fullscreen', locale) });
@@ -269,6 +334,9 @@ try {
         await page.goto(`${BASE}/demo.html?lang=${locale}`, { waitUntil: 'networkidle' });
         await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
         await page.mouse.click(320, 200);
+        // ⚠️ 与首图同一场演示：同样调到 1.5x。
+        // 否则两张图一张 1.5x、一张 1x —— 审图的人会看出这是两场不同的演示。
+        await setDemoRateTo15x(page);
         await page.keyboard.press('f');
         await page.waitForTimeout(300);
         const active = await page.evaluate(
@@ -405,6 +473,10 @@ try {
         await page.goto(`${BASE}/demo.html?lang=${locale}`, { waitUntil: 'networkidle' });
         await page.waitForSelector('#vsc-runtime-styles', { state: 'attached' });
         await page.mouse.click(320, 200);
+        // ⚠️ 与首图、控制条特写**同一场演示**：同样 1.5x。
+        // 菜单里高亮的是**当前倍速** —— 高亮 1x 的话，
+        // 这张图就与另外两张讲的不是同一件事（一张 1.5x、一张 1x、一张 1.1x）。
+        await setDemoRateTo15x(page);
         await page.keyboard.press('f');
         // ⚠️ 不能等 `#vsc-controls` 的 visible 状态：控制条搬进 shadow root 之后，
         // **宿主元素**自己就是 visibility:hidden（可见性由影子树里的 bar 元素
@@ -434,6 +506,7 @@ try {
         // 移动鼠标让控制条保持可见（3 秒不动会淡出，菜单跟着一起消失）。
         await page.mouse.move(320, 385);
         await page.waitForTimeout(150);
+        await assertCornerClean(page, 'the speed menu screenshot');
         await addCaption(page, captions.speedMenu, 'top-center');
         await assertCaptionDoesNotCover(page, 'store-speed-menu');
         await page.screenshot({ path: outPath('store-speed-menu', locale) });

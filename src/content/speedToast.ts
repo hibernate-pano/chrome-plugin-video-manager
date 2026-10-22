@@ -14,6 +14,10 @@ import {
   showNotice,
 } from './runtimeStyles';
 import { mountViewportRoot } from './viewportRoot';
+import { observeBody } from './bodyObserver';
+import type { BodyObserver } from './bodyObserver';
+import { watchFullscreenSession } from './fullscreenSession';
+import type { FullscreenSession } from './fullscreenSession';
 
 const TOAST_ID = 'vsc-speed-toast';
 const HIDE_DELAY = 900;
@@ -175,19 +179,21 @@ export class SpeedToast {
    */
   private badgeSuspendedBy: 'viewport' | 'paused' | null = null;
   /**
-   * 观察全屏背板增删的观察者（背板挂在浮层层，见 viewportRoot.ts）。
+   * 盯着「网页全屏会话」的那个观察者。
    *
    * 退出全屏时角标要自己回来，而控制条的退出按钮不经过运行时 ——
    * 没有别的通知渠道，只能自己观察（见 observeFullscreenSurface）。
+   *
+   * ⚠️ 判据与信号源都在 fullscreenSession.ts 里（与首次引导共用一份），
+   * 这里不自己判断「是不是在全屏里」。
    */
-  private fullscreenWatcher: MutationObserver | null = null;
-  /** 观察者当前挂在哪个 body 上（body 被换掉时要重新挂）。 */
-  private watchedBody: HTMLElement | null = null;
+  private fullscreenSession: FullscreenSession | null = null;
   /**
    * 上一次观察到的全屏状态。
    *
-   * 用来只对「进出全屏」这个**变化**做反应：页面自己往 body 里塞东西
-   * 也会触发观察者回调，那些与角标无关。
+   * ⚠️ 这份状态由 fullscreenSession 持有（它是唯一的事实来源）；
+   * 这里只留一份镜像，用来在「观察者还没挂上」时也答得出
+   * 「此刻是不是在全屏里」。
    */
   private fullscreenActive = false;
   /** 位置监听是否已挂上（胶囊或角标活着的时候要跟着滚动走）。 */
@@ -228,9 +234,7 @@ export class SpeedToast {
    * （视频跟着祖先一起消失，它自己的父节点根本没变）。
    * 只盯着父节点会漏掉后一种，而那恰恰是 SPA 换页时的常见形态。
    */
-  private targetWatcher: MutationObserver | null = null;
-  /** 目标观察者当前挂在哪个 body 上（body 被换掉时要重新挂）。 */
-  private watchedTargetBody: HTMLElement | null = null;
+  private targetWatcher: BodyObserver | null = null;
   private readonly onRateChange: SpeedToastOptions['onRateChange'];
   private readonly boundUpdatePosition = () => this.updatePosition();
   private readonly boundHandleVideoPause = () => this.suspendBadge('paused');
@@ -492,38 +496,43 @@ export class SpeedToast {
       return;
     }
 
-    const watcher = new MutationObserver(() => {
-      // body 被整个换掉时（SPA 重建页面），观察者还挂在旧 body 上，
-      // 对新 body 里的增删一概看不见 —— 重新挂一次。
-      if (document.body && this.watchedTargetBody !== document.body) {
-        this.watchedTargetBody = document.body;
-        watcher.observe(document.body, { childList: true, subtree: true });
-      }
-
-      const target = this.badgeTarget;
-      if (!target) {
-        // 意图已经没了（abandonBadge 清掉了）—— 收摊，别再白跑观察者。
-        this.stopTargetWatcher();
-        return;
-      }
-
-      // 视频被站点从页面里拿走了（重建播放器、SPA 换页、切清晰度）：
-      // 「想知道这个视频是几倍速」这个意图已经没有对象了 ——
-      // 连意图一起清掉，角标自己撤掉。
-      if (!target.isConnected) {
-        this.abandonBadge();
-      }
+    this.targetWatcher = observeBody({
+      // ⚠️ 必须观察 body 的**整棵子树**：视频被摘掉的方式有两种 ——
+      // 站点直接 video.remove()（父节点变了），或者整个播放器容器被换掉
+      // （视频跟着祖先一起消失，它自己的父节点根本没变）。
+      bodyInit: { childList: true, subtree: true },
+      onBodyMutation: () => this.reconcileBadgeTarget(),
+      // body 被整个换掉时（SPA 重建页面），旧 body 里的目标视频已经
+      // 「不在页面上了」，而观察者再也收不到任何通知 —— 只能在这里主动查一次。
+      onBodyReplaced: () => this.reconcileBadgeTarget(),
     });
+  }
 
-    this.watchedTargetBody = document.body;
-    watcher.observe(document.body, { childList: true, subtree: true });
-    this.targetWatcher = watcher;
+  /**
+   * 「角标指向的那个视频还在不在页面里」。
+   *
+   * 两条路都会走到这里：body 内部发生了变化（视频被摘掉），
+   * 或者 body 本身被换掉了（旧 body 里的视频随之消失）。
+   */
+  private reconcileBadgeTarget() {
+    const target = this.badgeTarget;
+    if (!target) {
+      // 意图已经没了（abandonBadge 清掉了）—— 收摊，别再白跑观察者。
+      this.stopTargetWatcher();
+      return;
+    }
+
+    // 视频被站点从页面里拿走了（重建播放器、SPA 换页、切清晰度）：
+    // 「想知道这个视频是几倍速」这个意图已经没有对象了 ——
+    // 连意图一起清掉，角标自己撤掉。
+    if (!target.isConnected) {
+      this.abandonBadge();
+    }
   }
 
   private stopTargetWatcher() {
     this.targetWatcher?.disconnect();
     this.targetWatcher = null;
-    this.watchedTargetBody = null;
   }
 
   private clearBadgeTimer() {
@@ -546,6 +555,8 @@ export class SpeedToast {
     // 它被从页面里摘掉时角标要自己撤掉。
     this.attachVideoListeners(video);
     this.observeBadgeTarget();
+    // 意图换了一个视频 → 全屏判据要跟着换（观察器得盯上新视频）。
+    this.fullscreenSession?.refresh();
 
     // 倍速只有**一条**写入路径（applyRate）。
     //
@@ -803,6 +814,8 @@ export class SpeedToast {
     this.hideBadge();
     this.detachVideoListeners();
     this.stopTargetWatcher();
+    // 意图没了 → 全屏判据没有目标视频了，观察者得把 class 观察器摘掉。
+    this.fullscreenSession?.refresh();
   }
 
   /**
@@ -901,80 +914,68 @@ export class SpeedToast {
   /**
    * 此刻是否处于网页全屏。
    *
-   * ⚠️ 这里看的是**全屏背板**（#vsc-page-fullscreen-overlay）在不在 DOM 里，
-   * 而不是控制条（#vsc-controls）在不在。
+   * ⚠️ 判据不在这里 —— 它住在 fullscreenSession.ts 里（与首次引导共用一份），
+   * 因为「网页全屏会话还活着吗」这件事只有一个答案，
+   * 两个订阅方各判一次迟早会对不上。
    *
-   * 为什么不能拿「控制条在不在 DOM 里」当信号，有两条硬理由：
+   * 判据本身是**控制器的账本**：全屏时控制器会在视频身上挂一个 class
+   * （FULLSCREEN_VIDEO_CLASS），退出时摘掉。
+   * 它的存续期与「全屏会话」的存续期完全重合，
+   * 而且它是**属性**变化 —— 盯它不会漏，也不会被站点的无关 DOM 变化带偏。
    *
-   * 1. 它是**间接**信号。控制条是全屏 UI 的一个零件，它在不在，
-   *    取决于 controls 模块有没有成功挂上宿主 —— 而挂宿主是有失败路径的
-   *    （没有可挂载的 body 时 mount() 直接返回）。零件缺席不等于功能缺席，
-   *    拿零件当状态，状态就是假的。
-   *
-   * 2. 它**只会被查询一次**。旧代码只在 scheduleBadge 的计时回调里查一次，
-   *    而进全屏时运行时调 dismissBadge() 把计时器整个清掉了 —— 于是
-   *    「退出全屏」这件事之后，再没有任何地方会重新查一次，
-   *    角标就再也回不来了（6.0.9 实测：退出全屏后角标永远不再出现）。
-   *
-   * 全屏背板才是事实：enter() 时创建、exit() 时被摘掉，
-   * 且它的增删是 body 的直接子节点变化 —— 可以订阅。
+   * 为什么不能拿「控制条（#vsc-controls）在不在 DOM 里」当信号：
+   * 它是**间接**信号。控制条是全屏 UI 的一个零件，它在不在，
+   * 取决于 controls 模块有没有成功挂上宿主 —— 而挂宿主是有失败路径的
+   * （没有可挂载的 body 时 mount() 直接返回）。零件缺席不等于功能缺席，
+   * 拿零件当状态，状态就是假的。
    */
   private isFullscreenActive(): boolean {
-    return document.getElementById(FULLSCREEN_OVERLAY_ID) !== null;
+    if (!this.fullscreenSession) {
+      // 观察者还没挂上（还没调过速）：只能退回旧判据。
+      return document.getElementById(FULLSCREEN_OVERLAY_ID) !== null;
+    }
+
+    return this.fullscreenSession.isActive();
   }
 
   /**
-   * 订阅全屏背板的增删。
+   * 订阅「网页全屏会话」的开始与结束。
    *
    * ⚠️ 这条订阅是**必需**的，不是锦上添花：
    *
    * 退出全屏有三条路径 —— 键盘 Esc、控制条自己的退出按钮、工具栏图标 ——
    * 其中**只有**键盘那条会经过运行时，而控制条的退出按钮走的是
    * FullscreenController.exit()，运行时根本不知道「全屏结束了」。
-   * 所以角标不能靠别人通知，必须自己观察到「背板被摘掉」这件事。
+   * 所以角标不能靠别人通知，必须自己观察到「会话结束了」这件事。
    */
   private observeFullscreenSurface() {
-    if (this.fullscreenWatcher || !document.body || !document.documentElement) {
+    if (this.fullscreenSession || !document.body || !document.documentElement) {
       return;
     }
 
-    const watcher = new MutationObserver(() => {
-      // body 被整个换掉时（少见，但 SPA 重建页面时会发生），观察者还挂在
-      // 旧 body 上，对新 body 里的背板增删一概看不见 —— 重新挂一次。
-      if (document.body && this.watchedBody !== document.body) {
-        this.watchedBody = document.body;
-        watcher.observe(document.body, { childList: true });
-      }
-
-      this.reconcileBadge();
+    this.fullscreenSession = watchFullscreenSession({
+      // 判据问的是「**意图指向的**这个视频是不是在全屏里」。
+      getVideo: () => this.badgeTarget,
+      onChange: (fullscreen) => this.reconcileBadge(fullscreen),
     });
-
-    this.watchedBody = document.body;
-    // 只看 body 的**直接子节点**：全屏背板是 body 的直接子节点，
-    // 而 body 上的其它增删（站点自己塞个广告位）与全屏无关。
-    watcher.observe(document.body, { childList: true });
-    // documentElement 这一层只为盯住「body 被换掉」这一种情况。
-    watcher.observe(document.documentElement, { childList: true });
-    this.fullscreenWatcher = watcher;
 
     // 起点必须与事实对齐：观察者可能是在用户**已经**进了全屏之后才挂上的
     // （比如进全屏后才第一次调速），此时真实状态已经是「在全屏里」。
     // 若这里留成 false，等到退出全屏时「false → false」不算变化，
     // 角标就永远等不到那次「回来」的信号。
-    this.fullscreenActive = this.isFullscreenActive();
+    this.fullscreenActive = this.fullscreenSession.active;
   }
 
   /**
    * 把「角标该显示还是该收起」对齐到当前事实。
    *
-   * 每次观察到 DOM 变化（尤其是全屏背板的增删）都走这里。
+   * @param fullscreen 观察者告诉我们的会话状态（进/出各一次）。
+   *
    * 它是**幂等**的：同一个状态反复调用不会来回抖。
    */
-  private reconcileBadge() {
-    const fullscreen = this.isFullscreenActive();
-
+  private reconcileBadge(fullscreen: boolean) {
     if (fullscreen === this.fullscreenActive) {
-      // 全屏状态没变 —— 这次变化与全屏无关（页面自己改了 body 的子节点）。
+      // 全屏状态没变 —— 这次变化与全屏无关（页面自己改了 DOM）。
       // ⚠️ 这里**不能**重排角标的计时：否则页面每隔一秒塞一个广告节点，
       // 角标的 3 秒计时就会被一直推后，永远出不来。
       return;
@@ -1004,7 +1005,7 @@ export class SpeedToast {
       return;
     }
 
-    this.resumeBadge();
+    this.resumeBadge({ immediate: true });
   }
 
   /**
@@ -1012,9 +1013,14 @@ export class SpeedToast {
    *
    * 这条路径**不经过运行时**：控制条自带的退出按钮走的是
    * FullscreenController.exit()，运行时根本收不到「全屏结束了」的信号。
-   * 所以角标只能自己观察到背板被摘掉，然后自己把计时排上。
+   * 所以角标只能自己观察到会话结束，然后自己把角标放回来。
+   *
+   * @param immediate 是不是「刚退出全屏」这一种回来。
+   *   - true：**立刻**回来（见下面的理由）；
+   *   - false：排 3 秒的计时（视频滚出视口又滚回来时走这条 ——
+   *     别在用户正滚动的时候把界面拽回来）。
    */
-  private resumeBadge() {
+  private resumeBadge(options: { immediate?: boolean } = {}) {
     const video = this.badgeTarget;
     this.badgeSuspendedBy = null;
     if (!video) {
@@ -1039,6 +1045,27 @@ export class SpeedToast {
       return;
     }
 
+    if (options.immediate) {
+      // 刚退出全屏：角标**立刻**回来，不等那 3 秒。
+      //
+      // ⚠️ 为什么不是「再等 3 秒」：退出全屏是用户**主动**做的动作，
+      // 而全屏控制条此刻正被撤掉 —— 画面上关于「我现在是几倍速」的
+      // 读数**同时**消失。让用户盯着一个什么读数都没有的画面等 3 秒，
+      // 等于把「退出全屏后角标没有回来」这个 bug 换了个形式。
+      // 同一判据在「暂停之后恢复播放」那条路径上已经用过了
+      // （见 restoreBadgeAfterPlay）。
+      //
+      // 视频滚出视口时不能这么干：那时用户正在滚动，
+      // 把界面拽回来是打扰（那种情况走 3 秒计时那条）。
+      if (!this.isInViewport(video)) {
+        this.suspendBadge('viewport');
+        return;
+      }
+
+      this.showBadge();
+      return;
+    }
+
     this.scheduleBadge();
   }
 
@@ -1049,9 +1076,8 @@ export class SpeedToast {
     }
 
     this.clearBadgeTimer();
-    this.fullscreenWatcher?.disconnect();
-    this.fullscreenWatcher = null;
-    this.watchedBody = null;
+    this.fullscreenSession?.dispose();
+    this.fullscreenSession = null;
     this.detachListeners();
     this.detachVideoListeners();
     this.stopTargetWatcher();

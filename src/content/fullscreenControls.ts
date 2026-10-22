@@ -197,6 +197,25 @@ export interface FullscreenControlsOptions {
    * 避免同一个动作触发两次反馈（两遍 toast、两遍读屏播报）。
    */
   onSpeedChange?: (rate: number) => void;
+  /**
+   * 焦点的「休息位」：控制条不持有焦点时，焦点该待在哪里。
+   *
+   * 键盘进全屏时它必须是**播放器表面**（我们自己的 stage），原因有两条：
+   *
+   * 1. 焦点停在控制条里 →「焦点在里面就别藏控制条」那条守卫恒真 →
+   *    控制条**永远不消失**（屏幕上永远留着一整条控制条，挡住字幕与画面）。
+   *    而键盘进全屏时焦点是**我们自动放进去的**，用户并没有选它 ——
+   *    这条守卫本来是给「用户正在操作控制条」的人准备的，不该替他做主。
+   * 2. 扩展的键盘拦截按**事件路径**判定：路径里只要有 #vsc-controls，
+   *    空格与方向键就让给自己的控件。焦点停在控制条里 → 键盘用户的
+   *    「空格播放/暂停」「方向键快进」在进全屏后全废（焦点在播放键上时，
+   *    按方向键什么也不会发生）。
+   *
+   * 舞台在 `#vsc-controls` **之外**（它是 overlay 里的元素），
+   * 两条毛病都不成立；而且它与控制条宿主在 `<html>` 里前后相邻，
+   * 一次 Tab 就能落到「永远在的退出入口」。
+   */
+  restingTarget?: HTMLElement;
 }
 
 /**
@@ -259,11 +278,39 @@ export class FullscreenControls {
   private collapsedExitShown: boolean | null = null;
   /** 指针此刻是不是压在收起态的退出钮上（hover 时恢复正常不透明度）。 */
   private collapsedExitHovered = false;
+  /**
+   * 焦点的休息位（播放器表面）。
+   *
+   * 控制条不持有焦点时，焦点就待在这里：可见、且在控制条宿主之外。
+   */
+  private readonly restingTarget: HTMLElement | null;
   /** 「降低动效」的媒体查询：变了要重算过渡。 */
   private reducedMotionQuery: MediaQueryList | null = null;
   private readonly boundPointerMove = () => this.show();
-  /** 任何按键都唤醒控制条 —— 纯键盘用户没有鼠标可动。 */
-  private readonly boundHandleKeyWake = () => this.show();
+  /**
+   * 任何按键都唤醒控制条 —— 纯键盘用户没有鼠标可动。
+   *
+   * ⚠️ **Tab 是唯一的例外**，而且这个例外是修缺陷的关键，不是风格选择：
+   *
+   * 这个监听跑在 **window 的捕获阶段**，而浏览器计算「下一个 Tab 停靠点」
+   * 发生在 keydown 的**默认动作**阶段 —— 也就是我们这个 handler **之后**。
+   * 唤醒控制条会把收起态的退出钮移出焦点序列（tabIndex = -1），
+   * 于是浏览器算停靠点时那枚「永远在的退出入口」已经不在序列里了 ——
+   * 它**永远 Tab 不到**，键盘用户只能靠 Esc（而「按 Esc 能退」从没在界面上告诉过他）。
+   *
+   * 换句话说：**「唤醒」与「焦点序列」必须解耦** —— 按键唤醒可以随时发生，
+   * 但它不能顺手把用户正要 Tab 到的那个出口踢出焦点序列。
+   *
+   * Tab 是**导航键**：用户按它要的是「焦点往哪儿走」，不是「把控制条叫出来」。
+   * 所以 Tab 只重置闲置计时（它确实是「用户在动」），不碰显隐与焦点序列。
+   */
+  private readonly boundHandleKeyWake = (event: KeyboardEvent) => {
+    if (event.key === 'Tab') {
+      this.scheduleHide();
+      return;
+    }
+    this.show();
+  };
   private readonly boundScheduleHide = () => this.scheduleHide();
   /**
    * 指针移入控制条：**重新计时**，不是取消计时。
@@ -297,6 +344,7 @@ export class FullscreenControls {
     this.video = video;
     this.onExit = options.onExit;
     this.onSpeedChange = options.onSpeedChange;
+    this.restingTarget = options.restingTarget ?? null;
     // 直接构造（不经 FullscreenController）时默认认为表面归我们：
     // 控制条存在本身就意味着视频已被接管。
     this.ownsVideoSurface = options.ownsVideoSurface ?? (() => true);
@@ -1436,19 +1484,40 @@ export class FullscreenControls {
   }
 
   /**
-   * 焦点是否在控制条里。
+   * 焦点是否在**控制条本体**（.bar 子树）里。
    *
-   * 焦点在 shadow tree 内部时，document.activeElement 会被重定向成宿主节点，
-   * 所以判宿主就够了（Node.contains 包含自身）。
+   * ⚠️ 不能拿宿主（#vsc-controls）判：宿主里还有收起态的退出钮，
+   * 而它**不在** .bar 子树里 —— 控制条藏起来时它照样可见可聚焦。
+   * 拿宿主判会把「焦点在收起态退出钮上」也当成「焦点在控制条里」，
+   * 于是控制条永远藏不下去。
+   *
+   * 焦点在 shadow tree 内部时 document.activeElement 会被重定向成宿主节点，
+   * 所以要问 shadowRoot 要**真正**拿到焦点的那个元素。
    */
-  private hasFocusInside(): boolean {
+  private hasFocusInsideBar(): boolean {
     const elements = this.elements;
     if (!elements) {
       return false;
     }
 
-    const active = document.activeElement;
-    return active !== null && elements.host.contains(active);
+    const inner = elements.host.shadowRoot?.activeElement;
+    return inner instanceof HTMLElement && elements.root.contains(inner);
+  }
+
+  /**
+   * 把焦点交还到休息位（播放器表面）。
+   *
+   * 交出去之后焦点既不会落在「马上要看不见的元素」上，
+   * 也不会落进 `#vsc-controls`（落进去会让扩展的键盘拦截把空格与方向键
+   * 让给自己的控件，键盘用户的播放/暂停与快进就全废了）。
+   */
+  private focusRestingTarget(): void {
+    const target = this.restingTarget;
+    if (!target || !target.isConnected) {
+      return;
+    }
+
+    target.focus({ preventScroll: true });
   }
 
   private scheduleHide() {
@@ -1468,12 +1537,32 @@ export class FullscreenControls {
         return;
       }
 
-      // 焦点在控制条里时不隐藏。
-      // opacity: 0 + visibility: hidden 的元素如果还拿着焦点，
-      // 键盘用户盯着屏幕什么也看不到，只能盲按。
-      if (this.hasFocusInside()) {
-        this.scheduleHide();
-        return;
+      // 焦点在控制条里时：**先把焦点交出去**，再把控制条藏起来。
+      //
+      // ⚠️ 为什么不能就这么藏着：opacity: 0 + visibility: hidden 的元素
+      // 如果还拿着焦点，键盘用户盯着屏幕什么也看不到，只能盲按。
+      //
+      // ⚠️ 为什么不能像以前那样「焦点在里面就一直不藏」：
+      // 键盘进全屏时焦点是**我们自动放进去的**，用户并没有选它 ——
+      // 那条守卫于是让控制条**永远**霸占着屏幕（挡住字幕与画面），
+      // 而「收起态的退出入口」也就永远不出现，键盘用户连出口都看不见。
+      //
+      // 现在改成「交出去 → 再藏」：焦点落在看得见的地方（播放器表面），
+      // 控制条也就能像对鼠标用户那样按承诺自动隐藏。
+      //
+      // ⚠️ 「正在操作控制条」的人不会被抢走焦点：闲置计时器由每一次
+      // 按键/指针/滑块操作重置，只有彻底闲置 3 秒才会走到这里 ——
+      // 那时候用户已经不在操作了。
+      if (this.hasFocusInsideBar()) {
+        this.focusRestingTarget();
+        // 交不出去（没有休息位）→ 控制条不能藏：
+        // 藏了 = 焦点还留在看不见的元素上；而且样式表里的
+        // `:focus-within` 会继续把控制条按在屏幕上，
+        // 收起态的退出钮再顶上来就变成**两个退出钮同时在屏幕上**。
+        if (this.hasFocusInsideBar()) {
+          this.scheduleHide();
+          return;
+        }
       }
 
       this.elements?.root.classList.remove('bar--visible');
@@ -1489,12 +1578,18 @@ export class FullscreenControls {
   }
 
   /**
-   * 把焦点送进控制条。
+   * 把焦点送进全屏的「落点」。
    *
-   * ⚠️ 只在「用户明确要用键盘操作控制条」时调用。
-   * 不要在每次进入全屏时无条件调用：焦点一旦落在控制条里，
-   * scheduleHide() 就会一直把它算作「用户正在操作」，控制条将不再自动隐藏
-   * （这正是本方法存在的意义，但也是无条件调用会踩的坑）。
+   * ⚠️ 只在「用户明确要用键盘操作全屏」时调用（键盘进全屏时）。
+   *
+   * 落点是**休息位**（播放器表面），不是控制条里的播放键 —— 原因见
+   * `FullscreenControlsOptions.restingTarget`：焦点停在控制条里会让
+   * 「焦点在里面就别藏」那条守卫恒真（控制条永远霸占屏幕），
+   * 还会让扩展的键盘拦截把空格与方向键让给自己的控件
+   * （键盘用户的播放/暂停与快进全废）。
+   *
+   * 没有休息位时（直接构造控制条而不经 FullscreenController），
+   * 退回控制条里的播放键 —— 至少焦点是在看得见的东西上。
    */
   focusFirst() {
     const elements = this.elements;
@@ -1508,7 +1603,8 @@ export class FullscreenControls {
       this.previousFocus = active;
     }
 
-    elements.playButton.focus({ preventScroll: true });
+    const target = this.restingTarget ?? elements.playButton;
+    target.focus({ preventScroll: true });
   }
 
   unmount() {
@@ -1540,11 +1636,17 @@ export class FullscreenControls {
     // 否则退出全屏后站点自己的点击监听器会和这个残留监听器双重切换。
     this.video.removeEventListener('click', this.boundHandleVideoClick);
 
-    // 宿主移除后焦点会掉到 body：如果焦点本来在控制条里，
+    // 宿主移除后焦点会掉到 body：如果焦点本来在控制条里（或在休息位上），
     // 还回 focusFirst() 之前的位置，键盘用户不至于凭空丢失位置。
+    //
+    // ⚠️ 休息位也要算：键盘进全屏时焦点停在播放器表面上，
+    // 而舞台是 overlay 里的元素 —— 它被摘掉时焦点也会掉到 body。
     const restoreTarget = this.previousFocus;
     this.previousFocus = null;
-    if (restoreTarget?.isConnected && this.elements?.host.contains(document.activeElement)) {
+    const active = document.activeElement;
+    const focusIsOurs =
+      (active !== null && this.elements?.host.contains(active)) || active === this.restingTarget;
+    if (restoreTarget?.isConnected && focusIsOurs) {
       restoreTarget.focus({ preventScroll: true });
     }
 
