@@ -188,14 +188,22 @@ pnpm test:e2e:ext    # 真加载 dist 的 E2E（会先 build）
 > 于是**别的项目**跑一次 `playwright install`，就能把本项目的浏览器清空。
 > 症状是「Executable doesn't exist」，而它与「产品坏了」长得一模一样。
 > 所以本项目用 `PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright` 装一份私有的，
-> 跑 e2e 时也带上这个环境变量：
->
-> ```bash
-> PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright pnpm test:e2e:ext
-> ```
+> **跑 e2e 时也自动指向它**（`test:e2e` / `test:e2e:ext` 里已经带上了，
+> 不用手打这个环境变量）——
+> 「装的是哪一个，就用哪一个」，免得静默地换了个浏览器在跑。
 >
 > 找浏览器的逻辑只有一份（`scripts/find-chromium.mjs`），
 > e2e 与商店素材脚本共用；它**按版本号**挑，不拿缓存里最新的那个凑合。
+
+> ⚠️ **e2e 失败时会告诉你「是产品坏了，还是机器忙」**
+>
+> 这套用例里有大量与时序有关的断言，而机器一忙它们就会**随机**失败。
+> 所以跑完会附一段宿主负载快照（CPU 核数、load average、并发度），
+> 并且在机器确实忙的时候直接给出**对照复跑**的命令。
+> 并发度也跟着负载走：机器忙就只开 1 个 worker（而不是硬撑两个 Chromium 互抢 CPU）。
+>
+> 一句话判据：**失败位置每次都不一样 → 环境；位置固定 → 产品。**
+> 细节见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) 判据 15。
 
 CI 会在 push / PR 上跑 `test`、`build` 和 `e2e` 三个 job（`build` 依赖 `test`，`e2e` 独立）。出包不再走 CI，改由本地 `pnpm build:ext` 完成。
 

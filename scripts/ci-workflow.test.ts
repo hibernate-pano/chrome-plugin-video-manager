@@ -271,9 +271,12 @@ describe('CI 工作流：job 依赖图', () => {
     //
     // 反过来也危险：E2E 真加载 dist/，dist 过期等于在测一个不存在的版本。
     // 这里钉死"先 build 再 playwright"，让这条契约不能被无声改掉。
+    //
+    // ⚠️ 中间允许夹**环境变量前缀**（`PLAYWRIGHT_BROWSERS_PATH=… playwright test`）——
+    // 契约是「build 在前、playwright test 在后」，不是「两者必须紧挨着」。
     for (const script of ['test:e2e', 'test:e2e:ext']) {
       expect(pkg.scripts[script], `${script} 必须先构建再跑 playwright`).toMatch(
-        /pnpm\s+build\s*&&\s*playwright\s+test/,
+        /pnpm\s+build\s*&&\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*playwright\s+test/,
       );
     }
   });
@@ -366,6 +369,37 @@ describe('CI 工作流：e2e 真的装了浏览器并跑起来', () => {
       jobs['e2e'],
       'CI 的 e2e job 必须把浏览器装进私有缓存',
     ).toMatch(/PLAYWRIGHT_BROWSERS_PATH=\.cache\/ms-playwright[^\n]*playwright install[^\n]*chromium/);
+  });
+
+  /**
+   * **装在哪，就用哪** —— 跑 e2e 用的浏览器必须是 `setup:browsers` 装的那一个。
+   *
+   * ⚠️ 实测（2026-10-22）：这台机器上别的项目把**全局**缓存清空了，
+   * 于是 `playwright test` 走全局注册表时直接报
+   * 「Executable doesn't exist at …/Library/Caches/ms-playwright/chromium-1217/…」。
+   *
+   * ⚠️ 更隐蔽的一种：全局缓存里若恰好有**另一个版本**的 Chromium，
+   * 跑测试用的就不是本仓库锁定的那个版本了 ——
+   * 行为不一致、失败时更难往根因上想（「这个 bug 只在某个 Chrome 版本上出现」）。
+   *
+   * 所以 `test:e2e` / `test:e2e:ext` 必须**自己**带上
+   * `PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright` ——
+   * 不能指望开发者记得手打这个环境变量（README 里写一遍是不够的：
+   * 忘了就静默地换了个浏览器跑）。
+   */
+  it('跑 e2e 用的浏览器，就是 setup:browsers 装的那一个', () => {
+    for (const script of ['test:e2e', 'test:e2e:ext']) {
+      expect(
+        pkg.scripts[script],
+        `package.json 缺少 ${script}`,
+      ).toBeTruthy();
+      expect(
+        pkg.scripts[script],
+        `${script} 必须把浏览器指到项目内的私有缓存 —— ` +
+          '不指的话，它会走全局注册表：那边可能被别的项目清空，' +
+          '也可能躺着另一个版本，于是「装的是 A、跑的是 B」',
+      ).toMatch(/PLAYWRIGHT_BROWSERS_PATH=\.cache\/ms-playwright/);
+    }
   });
 
   /**
@@ -956,5 +990,170 @@ describe('仓库卫生：被 .gitignore 忽略的文件不应还被 git 跟踪',
 
     // 防呆：确保上面那条命令真的跑出了东西，否则这条断言是空转的。
     expect(tracked.length, 'git ls-files 应当列出仓库里的文件').toBeGreaterThan(0);
+  });
+});
+
+/**
+ * e2e 的**宿主负载契约**。
+ *
+ * ⚠️ 这组守卫守的不是「产品行为」，是「**测试环境会不会撒谎**」。
+ *
+ * 背景（实测 2026-10-22）：这台机器同时跑着好几个项目，
+ * load average 一度到 96。于是同一套代码连着两次全量跑，
+ * 失败集合**完全不同**（一次 3 条、一次 7 条，分布在 5 个互不相干的 spec 里），
+ * 而这 5 个 spec 单独串行重跑 —— 24/24 全绿。
+ *
+ * 那种失败长这样：
+ *
+ *     Error: Test timeout of 30000ms exceeded.
+ *
+ * 没有断言差异、没有堆栈。**和「产品坏了」长得一模一样。**
+ * 于是每一次分诊都要从头挣一遍，而挣错一次就可能去改产品 ——
+ * 那是比测试慢得多的浪费。
+ *
+ * 所以契约有三条：
+ * 1. 并发度由**宿主负载**决定（机器忙就别硬撑两个 Chromium）；
+ * 2. 失败时必须**带上负载快照**（下次分诊不用从头猜）；
+ * 3. CI 里**钉死**并发度（CI 的并发度必须可复现，不能随机器漂移）。
+ */
+describe('e2e 的宿主负载契约', () => {
+  const configFile = 'playwright.config.js';
+  const configSource = readFileSync(resolve(repoRoot, configFile), 'utf8');
+
+  /** 从 defineConfig({...}) 里取出某个顶层属性的初始化表达式。 */
+  const configProperty = (name: string): ts.Expression | undefined => {
+    const sourceFile = ts.createSourceFile(
+      configFile,
+      configSource,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    let object: ts.ObjectLiteralExpression | undefined;
+    const visit = (node: ts.Node): void => {
+      if (object) return;
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'defineConfig'
+      ) {
+        const arg = node.arguments[0];
+        if (arg && ts.isObjectLiteralExpression(arg)) {
+          object = arg;
+          return;
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    if (!object) return undefined;
+    for (const property of object.properties) {
+      if (ts.isPropertyAssignment(property) && ts.getTextOfPropertyName(property.name) === name) {
+        return property.initializer;
+      }
+    }
+    return undefined;
+  };
+
+  /** 收集一个 JS 文件里所有 `timeout: <数字>` 属性的值（毫秒）。 */
+  const collectTimeouts = (relativePath: string): number[] => {
+    const sourceFile = ts.createSourceFile(
+      relativePath,
+      readFileSync(resolve(repoRoot, relativePath), 'utf8'),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    const values: number[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isPropertyAssignment(node) && ts.getTextOfPropertyName(node.name) === 'timeout') {
+        const initializer = node.initializer;
+        // 数字字面量里的下划线分隔符（60_000）在 TS AST 里仍是 NumericLiteral，
+        // 但 getText() 拿到的是原文，必须去掉下划线才能 Number()。
+        if (ts.isNumericLiteral(initializer)) {
+          values.push(Number(initializer.getText().replace(/_/g, '')));
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    return values;
+  };
+
+  it('worker 数由宿主负载决定（不许写死数字）', () => {
+    const workers = configProperty('workers');
+    expect(workers, 'playwright.config.js 缺少 workers').toBeDefined();
+
+    const isCall = workers !== undefined && ts.isCallExpression(workers);
+    expect(
+      isCall,
+      'workers 必须写成 suggestWorkers() —— 写死数字等于假设「机器是安静的」，' +
+        '而这台机器经常不是（实测 load average 到过 96），' +
+        '于是失败会随机出现在不相关的用例里，且长得和「产品坏了」一模一样',
+    ).toBe(true);
+
+    if (isCall) {
+      const callee = (workers as ts.CallExpression).expression;
+      expect(
+        ts.isIdentifier(callee) && callee.text === 'suggestWorkers',
+        'workers 必须由 scripts/host-load.mjs 的 suggestWorkers() 决定',
+      ).toBe(true);
+    }
+
+    expect(
+      configSource,
+      'playwright.config.js 必须真的 import 那份实现（否则 suggestWorkers 只是个名字）',
+    ).toContain("from './scripts/host-load.mjs'");
+    expect(
+      existsSync(resolve(repoRoot, 'scripts/host-load.mjs')),
+      'scripts/host-load.mjs 不存在 —— worker 数就没有来源',
+    ).toBe(true);
+  });
+
+  it('配了宿主负载 reporter（失败时必须能一眼看出是产品坏了还是机器忙）', () => {
+    const reporter = configProperty('reporter');
+    expect(reporter, 'playwright.config.js 缺少 reporter').toBeDefined();
+    expect(
+      reporter?.getText(),
+      'reporter 必须挂上 scripts/host-load-reporter.js —— ' +
+        '没有它，失败时只有一句「Test timeout of 30000ms exceeded」，分诊只能从头来',
+    ).toContain('host-load-reporter');
+    expect(existsSync(resolve(repoRoot, 'scripts/host-load-reporter.js'))).toBe(true);
+  });
+
+  it('单条用例的兜底超时 ≥ 内层轮询超时的 2 倍（兜底不能抢在断言前面说话）', () => {
+    const timeout = configProperty('timeout');
+    expect(timeout, 'playwright.config.js 缺少 timeout').toBeDefined();
+    const outer = timeout !== undefined && ts.isNumericLiteral(timeout)
+      ? Number(timeout.getText().replace(/_/g, ''))
+      : Number.NaN;
+    expect(Number.isFinite(outer), 'timeout 必须是一个数字（毫秒）').toBe(true);
+
+    const e2eFiles = readdirSync(resolve(repoRoot, 'tests/e2e'), {
+      recursive: true,
+      encoding: 'utf8',
+    })
+      .filter((entry) => entry.endsWith('.js'))
+      .map((entry) => `tests/e2e/${entry}`);
+
+    const innerTimeouts = e2eFiles.flatMap(collectTimeouts);
+    expect(innerTimeouts.length, '一条内层超时都没扫到 —— 扫法坏了，这条守卫是空转的').toBeGreaterThan(0);
+
+    const maxInner = Math.max(...innerTimeouts);
+    expect(
+      outer,
+      `外层兜底 ${outer}ms 必须 ≥ 内层最大轮询 ${maxInner}ms 的 2 倍 —— ` +
+        '否则机器一忙，「准备工作」就把兜底用光，报出来的是没有信息量的「超时了」，' +
+        '而不是「到底在等什么没等到」',
+    ).toBeGreaterThanOrEqual(maxInner * 2);
+  });
+
+  it('CI 的 e2e job 显式钉死 worker 数（CI 的并发度必须可复现）', () => {
+    expect(
+      jobs['e2e'],
+      'CI 的 e2e job 必须设 VSC_E2E_WORKERS —— 不钉死的话，' +
+        'CI 的并发度会随「跑测那一刻的机器负载」漂移，' +
+        '于是「昨天绿今天红」永远说不清是谁变了',
+    ).toMatch(/VSC_E2E_WORKERS/);
   });
 });

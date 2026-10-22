@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { suggestWorkers } from './scripts/host-load.mjs';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -35,8 +36,32 @@ export default defineConfig({
   //
   // 2 个 worker 是「够快又不打架」的值：全量跑约 3 分钟，而 CI（4 核）
   // 上也是 2 个。
-  workers: 2,
-  reporter: 'line',
+  //
+  // ⚠️ 但那个 2 是在「一台**安静**的机器」上试出来的。
+  // 这台机器同时跑着好几个项目（实测 2026-10-22：load average 一度到 96），
+  // 同一个 2 就变成「两个 Chromium 抢一份已经不够用的 CPU」——
+  // 失败以「Test timeout of 30000ms exceeded」出现，**位置每次都不一样**，
+  // 长得和「产品坏了」一模一样。
+  //
+  // 所以并发度由**当前负载**决定：忙就降到 1（scripts/host-load.mjs）。
+  // `VSC_E2E_WORKERS` 可以显式覆盖（CI 里钉死成 2，让 CI 的并发度可复现）。
+  workers: suggestWorkers(),
+  // 单条用例的**兜底**上限。
+  //
+  // ⚠️ 为什么是 60 秒而不是 30：每条用例里真正的断言都自带轮询超时
+  // （5~20 秒），这个数字只负责「用例整体卡死了」时的兜底。
+  // 机器忙的时候，**准备工作**（起浏览器、等 service worker、加载扩展）
+  // 本身就会花掉二三十秒 —— 兜底先于断言触发的话，报出来的是
+  // 「Test timeout of 30000ms exceeded」这种**没有信息量**的话，
+  // 而轮询超时至少会告诉你「到底在等什么没等到」。
+  //
+  // 换句话说：把兜底放宽，是为了让**真正的断言**先开口说话。
+  // 契约（外层兜底 ≥ 内层轮询超时的 2 倍）由 scripts/ci-workflow.test.ts 守着。
+  timeout: 60_000,
+  // ⚠️ 第二个 reporter 专门负责**失败时的宿主负载快照** ——
+  // 「产品坏了」与「机器被压垮了」长得一模一样，而这台机器经常被压垮。
+  // 详见 scripts/host-load-reporter.js。
+  reporter: [['line'], ['./scripts/host-load-reporter.js']],
   use: {
     baseURL: 'http://127.0.0.1:4173',
     headless: true,

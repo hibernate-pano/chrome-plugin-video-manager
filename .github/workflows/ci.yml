@@ -87,6 +87,16 @@ jobs:
   e2e:
     name: Real Extension E2E
     runs-on: ubuntu-latest
+    # ⚠️ 并发度在这里**钉死**成 2，不让 playwright.config.js 按机器负载去猜。
+    #
+    # 本地跑 e2e 时，worker 数由**当前负载**决定（scripts/host-load.mjs）：
+    # 机器忙就降到 1 个，否则两个 Chromium 会互相抢 CPU，失败以
+    # 「Test timeout」的形式随机出现在不相关的用例里。
+    # 但 CI 必须**可复现** —— 同一份代码、同一个 commit，每次跑的并发度
+    # 应该一样，否则「昨天绿今天红」就永远说不清是谁变了。
+    # GitHub 托管的 runner 每个 job 都是独占的，2 个 worker 是这里验证过的值。
+    env:
+      VSC_E2E_WORKERS: 2
     # 单元测试跑的是 jsdom + chrome mock，覆盖不到 content-loader 的 document_start
     # 桥接、隔离世界和真实的 chrome.storage。这套用例真加载 dist/ 跑浏览器，
     # 它挂掉就说明扩展在真浏览器里已经不能用了，所以必须挡住。
