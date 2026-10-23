@@ -127,7 +127,7 @@ const isCssHidden = (style: CSSStyleDeclaration | null | undefined) =>
  * 接管它等于抢走用户的按键。10% 也正好与 isProminent 的相对线一致，
  * 两条判据用同一个尺度，不至于互相打架。
  */
-const MIN_VISIBLE_FRACTION = 0.1;
+export const MIN_VISIBLE_FRACTION = 0.1;
 
 const visibleFraction = (video: HTMLVideoElement, rect: VideoRect): number => {
   // iframe 内 video 的 rect 相对 iframe 自己的视口，拿顶层窗口的尺寸去比会判错。
@@ -196,7 +196,7 @@ const RECENT_CHOICE_MS = 10_000;
  * 60 秒覆盖的是「点开一条短视频，认认真真看完这一段」。
  * 再长就不合理了 —— 那时用户多半早就划到下一条了。
  */
-const EXPLICIT_CHOICE_MS = 60_000;
+export const EXPLICIT_CHOICE_MS = 60_000;
 
 /**
  * 「用户刚在页面上动过手」与随后的 play 事件之间的关联窗口。
@@ -218,7 +218,7 @@ const GESTURE_TO_PLAY_MS = 2000;
  * 30 秒覆盖的是「用户正在连续操作这个视频」这一串动作；
  * 再长就变成「粘住不放」，用户想换目标却换不掉。
  */
-const KEYBOARD_TARGET_MS = 30_000;
+export const KEYBOARD_TARGET_MS = 30_000;
 
 /**
  * 快捷键路径的缓存，非 null 结果的最长有效期。

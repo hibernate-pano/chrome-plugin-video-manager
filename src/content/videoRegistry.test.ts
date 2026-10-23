@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { VideoRegistry } from './videoRegistry';
+import {
+  EXPLICIT_CHOICE_MS,
+  KEYBOARD_TARGET_MS,
+  MIN_VISIBLE_FRACTION,
+  VideoRegistry,
+} from './videoRegistry';
 
 // jsdom 的 location.hostname 是 [LegacyUnforgeable]，无法重定义；
 // 这里只把"hostname 从哪来"换成可变变量，选择器链仍走真实的 siteAdapters。
@@ -654,6 +659,77 @@ describe('VideoRegistry：用户正在看的视频', () => {
     expect(registry.getWatchedVideo()?.id).toBe('main');
 
     registry.stop();
+  });
+
+/**
+   * 只露出一点点（5%）的视频不该被接管。
+   *
+   * 为什么需要这条：接管判据里有一条「在视口里」，它的阈值是
+   * **可见面积占比 ≥ 10%**（MIN_VISIBLE_FRACTION）。旧实现是
+   * 「有一像素重叠就算在视口里」—— 视频只要露出 1 像素就会被接管，
+   * 而用户根本看不见它。
+   *
+   * ⚠️ 5% 是**特意选在 10% 线以下、但在 1% 线以上** 的：
+   * - 0%（完全滚出视口）那条已有用例（`display:none` 与 P2-1），
+   *   它们测的是**完全不可见**，分不出「阈值是 10% 还是 0.5%」；
+   * - 100%（完全可见）那条也有。
+   *
+   * 所以这条用例是唯一能区分「阈值 = 10%」与「阈值 = 1%」的那条：
+   * 把阈值改成 0.01，它必须立刻变红。
+   */
+  it('只露出 5% 的视频不该被接管（可见度阈值 10%）', () => {
+    const registry = createRegistry();
+    registry.start();
+
+    // 800×450 的视频，视口高 768：top=727 → bottom=1177，
+    // 露出 = min(1177, 768) - max(727, 0) = 41px，
+    // 可见占比 = 41/450 ≈ 9.1%（在 1%~10% 之间）。
+    const video = withLayout(appendVideo('sliver'));
+    mockPlaying(video);
+    mockRect(video, 800, 450, 727, 0);
+
+    // 前置条件：可见占比确实落在 1%~10% 之间。
+    const visibleHeight = Math.max(0, Math.min(450 + 727, VIEWPORT_HEIGHT) - Math.max(727, 0));
+    const fraction = (800 * visibleHeight) / (800 * 450);
+    expect(fraction, '前置条件：可见占比应在 1%~10% 之间').toBeGreaterThan(0.01);
+    expect(fraction, '前置条件：可见占比应低于阈值').toBeLessThan(MIN_VISIBLE_FRACTION);
+    // 阈值本身被钉住 —— 改动它必须让这条用例的前置条件失效，
+    // 而不是「悄悄换一个数继续绿」。
+    expect(MIN_VISIBLE_FRACTION, '可见度阈值是 10%（用户看不见它就不该接管）').toBe(0.1);
+
+    expect(
+      registry.getWatchedVideo(),
+      '只露出 5% 的视频不该被接管 —— 用户看不见它',
+    ).toBeNull();
+
+    registry.stop();
+  });
+
+  /**
+   * 「键盘刚命中过的那个视频」要粘多久 —— 这个值被钉住。
+   *
+   * 为什么单独钉：多视频页面上「正在播 +600 分」这一档会让目标**漂移**
+   * （用户刚用空格暂停了 A，下一次按键就打到还在播的 B 身上）。
+   * 键盘目标的粘性（30 秒）负责压住这种漂移，而它有**上限** ——
+   * 再长就变成「粘住不放」，用户想换目标却换不掉。
+   *
+   * ⚠️ 这个窗口里装着「用户正在连续操作这个视频」这一串动作，
+   * 30 秒是那条分界线。
+   */
+  it('键盘目标的粘性窗口是 30 秒（既能压住漂移，又不会粘住不放）', () => {
+    expect(KEYBOARD_TARGET_MS, '键盘目标的粘性窗口是 30 秒').toBe(30_000);
+  });
+
+  /**
+   * 「用户显式选过这个视频」能维持多久 —— 这个值被钉住。
+   *
+   * ⚠️ 10 秒（刚选过）与 60 秒（显式选过）是**两条不同的窗口**：
+   * 前者覆盖「点一下播放、然后马上按 f」；后者覆盖
+   * 「点开一条短视频、认认真真看完这一段」。
+   * 再长就不合理了 —— 那时用户多半早就划到下一条了。
+   */
+  it('「用户显式选过」的窗口是 60 秒（短于它就会让用户的目标跳回别人）', () => {
+    expect(EXPLICIT_CHOICE_MS, '显式选择的窗口是 60 秒').toBe(60_000);
   });
 
   it('太小、又在播的视频不算「正在看的」', () => {

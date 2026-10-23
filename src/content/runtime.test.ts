@@ -3,13 +3,18 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as liveRegionModule from './liveRegion';
-import { ContentRuntime } from './runtime';
+import {
+  ContentRuntime,
+  FOCUS_WATCH_INTERVAL_MS,
+  NO_VIDEO_HINT_INTERVAL_MS,
+} from './runtime';
 import {
   FRAME_FOCUS_MESSAGE,
   FRAME_GONE_MESSAGE,
   FRAME_PROBE_MESSAGE,
   SPEED_REPORT_MESSAGE,
   STORAGE_KEY,
+  VIDEO_OWNER_QUERY_MESSAGE,
   TOGGLE_FULLSCREEN_MESSAGE,
 } from '../shared/types';
 
@@ -991,6 +996,57 @@ describe('ContentRuntime integration', () => {
    * 所以判据从「有没有超过限流窗口」换成了「**状态是不是真的变了**」：
    * 焦点归属没变、这一层的内容也没变 → 一个字都不写。
    */
+  /**
+   * 「视频在嵌入框里」这条提示的**节流**。
+   *
+   * 为什么需要节流：同一句话一分钟之内不重复说 ——
+   * 答案在一分钟之内不会变，而重复的提示会盖住别的提示（胶囊、控制条）。
+   *
+   * ⚠️ 判据是「第二次按同一个键时，提示**没有**再冒出来」。
+   * 这条只有把节流窗口**调到很短**才测得出来：
+   * 窗口是 60 秒时，第二次按鍵在测试里必然落在窗口内 ——
+   * 而把窗口改成 0（= 不节流）时，提示就会冒第二次。
+   */
+  it('「视频在嵌入框里」一分钟之内不重复说', async () => {
+    // 这一层没有视频 → 快捷键会问一圈「别的 frame 有吗」。
+    video.remove();
+    await startFreshRuntime();
+
+    // background 回答「frame 3 那边有视频」。
+    (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockImplementation(
+      (message: unknown) => {
+        if ((message as { type?: string } | undefined)?.type === VIDEO_OWNER_QUERY_MESSAGE) {
+          return Promise.resolve({ frameId: 3, playing: true });
+        }
+        return Promise.resolve({});
+      },
+    );
+
+    const pressKey = async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'f' }));
+      await vi.advanceTimersByTimeAsync(0);
+    };
+
+    await pressKey();
+    const first = document.getElementById('vsc-takeover-notice');
+    expect(first, '第一次按就该说出「视频在嵌入框里」').not.toBeNull();
+
+    // 等提示自己消失（NOTICE_DURATION = 2600ms），再按一次。
+    await vi.advanceTimersByTimeAsync(3000);
+    document.getElementById('vsc-takeover-notice')?.remove();
+
+    await pressKey();
+    const second = document.getElementById('vsc-takeover-notice');
+    expect(
+      second,
+      '一分钟之内不该重复说同一句话（重复的提示会盖住别的提示）',
+    ).toBeNull();
+
+    // 节流窗口本身被钉住 —— 60 秒。
+    expect(NO_VIDEO_HINT_INTERVAL_MS, '「视频在别处」的节流窗口是 60 秒').toBe(60_000);
+  });
+
   describe('焦点记录的降频', () => {
     const focusReports = () =>
       (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock.calls
@@ -1108,17 +1164,68 @@ describe('ContentRuntime integration', () => {
    * 于是 background 往这个 frame 发消息无人应答，用户看到的是
    * 「点了图标毫无反应」—— 而扩展其实好好的，只是这一页没刷新。
    */
-  describe('扩展上下文失效（扩展被更新/重载）', () => {
-    const invalidateContext = () => {
-      // 扩展被重载之后，老内容脚本里的 chrome.runtime.id 变成 undefined，
-      // 而所有 chrome.* 调用都会抛 "Extension context invalidated."。
-      (chrome.runtime as unknown as { id?: string }).id = undefined;
-      (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>)
-        .mockImplementation(() => {
-          throw new Error('Extension context invalidated.');
-        });
-    };
+  /**
+   * 让这一层的扩展上下文失效（扩展被更新/重载/被禁用）。
+   *
+   * ⚠️ 真实情况：扩展被重载之后，老内容脚本里的 chrome.runtime.id 变成 undefined，
+   * 而所有 chrome.* 调用都会抛 "Extension context invalidated."。
+   */
+  const invalidateContext = () => {
+    (chrome.runtime as unknown as { id?: string }).id = undefined;
+    (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>)
+      .mockImplementation(() => {
+        throw new Error('Extension context invalidated.');
+      });
+  };
 
+  /**
+   * 巡检是「上下文已失效」这条检查**唯一**的周期性发现途径。
+   *
+   * 为什么需要它：那条检查挂在两处 —— 焦点事件（focusin / blur）
+   * 与巡检定时器。焦点事件那条路**只在焦点移动时才走**：
+   * 用户盯着一个页面不动（正在看网课）时，它一次都不会触发。
+   * 于是「扩展被更新/重载了，但这一页还没被注意到」这个窗口，
+   * 全靠巡检兜着。
+   *
+   * ⚠️ 巡检停摆（周期调大）或巡检压根不跑，
+   * 那一页就会变成「界面还在动、但消息发不出去」的僵尸 ——
+   * 用户按什么键都不会有反应，而他能得出的唯一结论是「扩展坏了」。
+   *
+   * ⚠️ 判据是「**没有任何焦点事件**的情况下，巡检也要发现」——
+   * 这正是巡检与焦点事件那条路的分工。
+   */
+  it('用户不动焦点时，巡检也要发现「上下文已失效」', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // 先让这一页显示出我们的界面（胶囊 + 读屏镜像 + live region）。
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '=' }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: '=' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(document.getElementById('vsc-speed-toast')).not.toBeNull();
+
+      invalidateContext();
+
+      // ⚠️ **不触发任何焦点事件** —— 用户只是盯着页面不动。
+      //   焦点事件那条路此时不会跑，发现只能来自巡检。
+      await vi.advanceTimersByTimeAsync(FOCUS_WATCH_INTERVAL_MS + 200);
+
+      expect(
+        document.getElementById('vsc-speed-toast'),
+        '上下文失效后界面必须撤掉（僵尸 UI 比没有扩展更糟）',
+      ).toBeNull();
+      expect(
+        document.getElementById('vsc-extension-stale-notice'),
+        '必须告诉用户发生了什么',
+      ).not.toBeNull();
+
+      // 巡检周期本身被钉住 —— 它是这条链路唯一的周期性发现途径。
+      expect(FOCUS_WATCH_INTERVAL_MS, '巡检周期是 1 秒').toBe(1000);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  describe('扩展上下文失效（扩展被更新/重载）', () => {
     /**
      * 触发一次「这一层已经发不出消息了」的检测。
      *

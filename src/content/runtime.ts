@@ -50,16 +50,36 @@ const createDefaultSettings = (): PersistedSettings => ({
 /**
  * 焦点归属的巡检间隔（毫秒）。
  *
- * 为什么需要巡检：焦点移进**子 iframe** 时，顶层文档收不到 focusout ——
- * 它只是发现自己的 activeElement 变成了那个 <iframe> 元素。于是顶层会一直
- * 以为「焦点还在我这儿」，等焦点回到顶层时就不再上报，
- * background 记着的仍是那个 iframe —— 点工具栏图标就会打到一个
- * 用户根本没在看的 frame 上（「图标点了没反应」）。
+ * ## 巡检真正在防什么
+ *
+ * ⚠️ **原来的注释说的是错的**（2026-10-23 实测纠正）：
+ * 它写着「焦点移进子 iframe 时，顶层文档收不到 focusout」——
+ * 真实 Chromium（Playwright，聚焦一个 iframe 元素）实测：
+ *
+ *     顶层收到的事件序列：blur:INPUT → focusout:INPUT → focus:IFRAME → focusin:IFRAME
+ *
+ * 顶层**收得到** `focusin:IFRAME`（捕获阶段监听器会拿到），
+ * 而 `reportFocus()` 那时判 `ownsUserFocus()` 为 false → 主动 `releaseFocus()`。
+ * 也就是说：「顶层一直以为焦点在我这儿」这个故障，在**这个**场景里
+ * 不会发生 —— 焦点事件已经把它挡住了。
+ *
+ * 那巡检为什么还在？两个理由：
+ *
+ * 1. **兜底**：焦点事件是**逐场景**的。总有某个场景下顶层收不到任何焦点
+ *    事件，却已经改变了 activeElement —— 巡检是那种「不依赖事件」的兜底。
+ * 2. **它还管另一件事**：`checkContextAlive()` ——
+ *    巡检是「上下文是不是还活着」这条检查**唯一**的周期性触发点
+ *    （焦点事件那条路只在焦点移动时才走；用户盯着一个页面不动时，
+ *    那条路一次都不会触发）。
  *
  * 巡检只读 document.hasFocus() 与 document.activeElement（不触发布局），
  * 一秒一次的开销可以忽略；而它只在我们**以为自己拥有焦点**的时候才跑。
+ *
+ * ⚠️ 周期不能太长：巡检停摆的那段时间里，「上下文已失效」这件事
+ * 就没有任何发现途径了 —— 那一页会变成「界面还在动、但消息发不出去」的僵尸，
+ * 而用户按什么键都不会有反应。
  */
-const FOCUS_WATCH_INTERVAL_MS = 1000;
+export const FOCUS_WATCH_INTERVAL_MS = 1000;
 
 /**
  * 「扩展已更新，请刷新本页」这条提示的外观。
@@ -111,7 +131,7 @@ const NO_VIDEO_QUERY_INTERVAL_MS = 2_000;
  * 同一句话一分钟之内不重复说：答案在一分钟之内不会变，
  * 而重复的提示会盖住别的提示（胶囊、控制条）。
  */
-const NO_VIDEO_HINT_INTERVAL_MS = 60_000;
+export const NO_VIDEO_HINT_INTERVAL_MS = 60_000;
 
 /**
  * 把「当前在第几秒」写成一句人能听懂的话。

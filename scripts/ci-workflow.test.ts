@@ -17,6 +17,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import ts from 'typescript';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // vitest 的 cwd 就是仓库根（本文件由 vitest.config.ts 收集，配置里没改 root）。
 const repoRoot = process.cwd();
@@ -816,6 +817,110 @@ describe('版本号单一来源', () => {
 });
 
 describe('类型检查覆盖面', () => {
+  /**
+   * 「有含义的常量」必须被**测试**引用到。
+   *
+   * ## 为什么需要这条
+   *
+   * 有一类缺陷是**单测抓不到、只有改坏实现才看得见**的：
+   * 一个阈值常量（可见度 10%、巡检周期 1 秒、探针重试间隔 80ms…）
+   * 写错了或被改成另一个值，**没有任何一条测试会红** ——
+   * 因为那些测试压根没提到这个常量。
+   *
+   * 实测（2026-10-23 审计）：
+   * - 把「在视口里」的可见度阈值从 10% 改成 1% → 1084 条单测**全绿**，
+   *   33 条相关 E2E 也**全绿**（E2E 测的是 0% 与 100% 两个极端，
+   *   分不出「阈值是 10% 还是 1%」）；
+   * - 把探针的重试去掉（问一次扑空就当 frame 没了）→ 1084 条单测**全绿**。
+   *
+   * 两条都是**真盲区**：前者会让几乎看不见的视频抢走按键，
+   * 后者会在页面刚打开的那几十毫秒里把「这个标签页的倍速读数」清掉
+   * （扩展开始说一个假的倍速）。
+   *
+   * ## 判据
+   *
+   * 源码里每个「有含义的数值常量」都必须在**某个测试文件**里出现过
+   * （按名字搜）。没出现 = 没有任何测试知道它的存在 = 改坏它没人拦。
+   *
+   * ⚠️ 这条守卫**不是**要覆盖所有数字（那不可能）——
+   * 它只盯「阈值 / 周期 / 间隔 / 上限」这一类**调错了就有行为差别**的常量。
+   * 列表是显式的：加一个常量进来，就该加一条测试。
+   */
+  it('有行为后果的阈值常量必须被测试引用（否则改坏了没人拦）', () => {
+    // 常量名 → 它住在哪个文件里。
+    const meaningfulConstants: Record<string, string> = {
+      // 视频「在视口里」的可见度阈值（videoRegistry.ts）。
+      // 10% 这条线是「用户实际上看不见它」的判据；1% 与 10% 的区别
+      // 只有一条专门的测试才分得出来。
+      MIN_VISIBLE_FRACTION: 'src/content/videoRegistry.ts',
+      // 快捷键目标的粘性窗口（videoRegistry.ts）：多视频页面上
+      // 「刚用键盘命中过谁」要记多久。
+      KEYBOARD_TARGET_MS: 'src/content/videoRegistry.ts',
+      // 「用户显式选过它」的窗口（videoRegistry.ts）。
+      EXPLICIT_CHOICE_MS: 'src/content/videoRegistry.ts',
+      // 焦点归属的巡检周期（runtime.ts）。
+      FOCUS_WATCH_INTERVAL_MS: 'src/content/runtime.ts',
+      // 「视频在嵌入框里」提示的节流窗口（runtime.ts）。
+      NO_VIDEO_HINT_INTERVAL_MS: 'src/content/runtime.ts',
+      // 探针扑空后的重试间隔（background/index.ts）：
+      // 去掉重试 = 「第一次没答上就当 frame 没了」。
+      FRAME_PROBE_RETRY_DELAY_MS: 'src/background/index.ts',
+    };
+
+    // 收集所有测试文件的内容。
+    const testFiles: string[] = [];
+    for (const root of ['src', 'scripts']) {
+      const rootDir = resolve(repoRoot, root);
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(rootDir, { recursive: true });
+      } catch {
+        continue;
+      }
+      for (const file of entries) {
+        if (!String(file).endsWith('.test.ts')) continue;
+        testFiles.push(resolve(rootDir, String(file)));
+      }
+    }
+    expect(testFiles.length, '一个测试文件都没扫到，扫描逻辑本身可能坏了').toBeGreaterThan(0);
+
+    // ⚠️ **必须剥掉注释再搜**：
+    // 注释里提到一个常量名，不等于有测试**依赖**它 ——
+    // 而「依赖」正是这条守卫要问的事。
+    // （第一版没剥注释，于是「在注释里写一句『阈值是 MIN_VISIBLE_FRACTION』」
+    //   就足以让守卫通过 —— 那条守卫等于没有。）
+    const stripComments = (source: string): string =>
+      source
+        // 块注释
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        // 行注释
+        .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+    // ⚠️ **必须排除本文件自己**：这份清单里就写着所有常量的名字，
+    // 把自己算进去 = 守卫永远通过（自证陷阱）。
+    const selfPath = fileURLToPath(import.meta.url);
+    const testContents = testFiles
+      .filter((file) => file !== selfPath)
+      .map((file) => stripComments(readFileSync(file, 'utf8')))
+      .join('\n');
+
+    for (const [name, sourceFile] of Object.entries(meaningfulConstants)) {
+      // 先确认这个常量真的存在于源码里（改错了名字会误报）。
+      const source = readFileSync(resolve(repoRoot, sourceFile), 'utf8');
+      expect(
+        source.includes(name),
+        `${sourceFile} 里找不到常量 ${name} —— 守卫的清单可能已经过期`,
+      ).toBe(true);
+
+      expect(
+        testContents.includes(name),
+        `常量 ${name}（${sourceFile}）没有被任何测试引用 —— ` +
+          '改坏它不会有任何测试变红，它就是一条活的盲区。' +
+          '要么给它补一条专门的测试，要么从这份清单里删掉它（并说明为什么无害）',
+      ).toBe(true);
+    }
+  });
+
   it('tsconfig 的 include 覆盖 src 下每一个含有 TS 源码的子目录', () => {
     // tsconfig 曾经只列了 content / options / shared，popup 和 background 整整
     // ~900 行代码从来没被 tsc 看过 —— 那里有 10 个类型错误在 CI 全绿的情况下

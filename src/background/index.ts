@@ -476,7 +476,7 @@ interface FrameProbe {
  * 扑空与「frame 没了」在回调里长得一模一样（都有 lastError），
  * 所以宁可多问一次 —— 多试一次的代价只是一次失败的回调。
  */
-const FRAME_PROBE_RETRY_DELAY_MS = 80;
+export const FRAME_PROBE_RETRY_DELAY_MS = 80;
 
 /**
  * 问某个 frame：「你还在吗？你报出去的那个视频还在吗？」

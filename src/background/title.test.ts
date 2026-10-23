@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+
 import {
   EXTENSION_INSTALLED_MESSAGE,
   FRAME_FOCUS_MESSAGE,
@@ -19,6 +20,21 @@ import {
  */
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/**
+ * 探针的重试间隔 —— **从源码里读**，不 import background。
+ *
+ * ⚠️ 为什么不能 import：background/index.ts 的顶层代码会立刻注册
+ * chrome.action.onClicked 之类的监听器，而 import 发生在 chrome 替身
+ * 装好之前 → 「chrome is not defined」，整个测试文件起不来。
+ * （这条链路的常量由 scripts/ci-workflow.test.ts 的「阈值常量必须被测试引用」
+ *  守着，源码改了这里会红。）
+ */
+const FRAME_PROBE_RETRY_DELAY_MS = Number(
+  /export const FRAME_PROBE_RETRY_DELAY_MS = (\d+);/.exec(
+    readFileSync(resolve(repoRoot, 'src/background/index.ts'), 'utf8'),
+  )?.[1] ?? -1,
+);
 
 const readJson = (relativePath: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(repoRoot, relativePath), 'utf8')) as Record<string, unknown>;
@@ -555,6 +571,49 @@ describe('background 工具栏标题', () => {
     );
     expect(harness.storageRemove).toHaveBeenCalledWith('vsc-tab-rate:7');
   });
+
+/**
+ * 探针扑空一次、重试后成功 —— 这时读数**必须留着**。
+ *
+ * 为什么需要这条：内容脚本是 document_start 时**动态 import** 的
+ * （见 content-loader.js），于是 frame 已经在、监听器还没注册上的那几十毫秒里，
+ * 探针会扑空。扑空与「frame 没了」在回调里长得一模一样（都有 lastError）——
+ * 所以 probeFrame 重试一次。
+ *
+ * ⚠️ 没有这条时，去掉重试会让扩展在**每一次**页面刚打开的瞬间
+ * 把「这个标签页的倍速读数」清掉 —— 标题从「— 1.5x」退回默认，
+ * 扩展开始说一个**假的**倍速。
+ */
+it('探针第一次扑空、重试后成功 → 读数必须留着（不许误判成 frame 没了）', async () => {
+  report(7, 1.5, 3);
+
+  // 第一次问：没人应答（内容脚本还没注册上监听器）。
+  // 第二次问：答了（它准备好了）。
+  let calls = 0;
+  harness.probeAnswer = () => {
+    calls += 1;
+    if (calls === 1) {
+      return { answered: false };
+    }
+    return { answered: true, payload: { ok: true, video: 'alive', rate: 1.5 } };
+  };
+
+  reportFocus(7, 0);
+  await flushSlow();
+
+  expect(calls, '探针必须重试一次（第一次扑空不等于 frame 没了）').toBeGreaterThanOrEqual(2);
+  // 重试间隔被钉住：它必须给内容脚本「注册上监听器」留出时间，
+  // 又不能长到让用户等着标题复位。80ms 是实测出来的那个窗口。
+  expect(FRAME_PROBE_RETRY_DELAY_MS, '探针重试间隔是 80ms').toBe(80);
+  expect(
+    harness.setTitle,
+    '重试成功后读数必须留着 —— 标题不许退回默认',
+  ).not.toHaveBeenCalledWith(
+    { tabId: 7, title: LOCALIZED_ACTION_TITLE },
+    expect.any(Function),
+  );
+  expect(harness.storageRemove, '读数没作废就不该删掉那份记录').not.toHaveBeenCalled();
+});
 
   it('读数指向的 frame 还在 → 不复位（反向守卫）', async () => {
     // 上一条的**反向守卫**：视频在 iframe 里、那个 iframe 好好地在那儿，
