@@ -217,6 +217,44 @@ const findLatestZip = () => {
   return candidates[0].file;
 };
 
+/**
+ * 从 zip 文件名里读版本号（`video-speed-controller-v6.2.0.zip` → `6.2.0`）。
+ *
+ * ⚠️ 为什么从**文件名**读而不是从 zip 里的 manifest.json 读：
+ * 文件名是打包脚本定的，与 manifest 的版本号同源；读 zip 内容要多一层解压，
+ * 而这个检查的价值恰恰在于「上传前一眼看出要发什么版本」。
+ */
+const versionOfZip = (zipPath) => {
+  const m = String(zipPath).match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
+};
+
+/** 比较两个 x.y.z 版本号：a>b → 正数，a<b → 负数，相等 → 0。 */
+const compareVersions = (a, b) => {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+};
+
+/**
+ * 从 fetchStatus 的返回值里取「线上正在跑」的版本号。
+ *
+ * v2：`publishedItemRevisionStatus.distributionChannels[].crxVersion`。
+ * v1.1 没有这个结构（DRAFT projection 里字段不同），返回 null —— 调用方据此
+ * 走「核不到就人工核对」那条路，而不是假装通过。
+ */
+const liveVersionOf = (body) => {
+  const rev = body?.publishedItemRevisionStatus;
+  const channels = Array.isArray(rev?.distributionChannels) ? rev.distributionChannels : [];
+  const found = channels.find((c) => typeof c?.crxVersion === 'string');
+  if (found) return found.crxVersion;
+  // v1.1：只有 crxVersion 这一个可用字段时也认。
+  return typeof body?.crxVersion === 'string' ? body.crxVersion : null;
+};
+
 /** v2 fetchStatus 返回值里 ItemRevisionStatus 的状态描述。 */
 const describeRevision = (label, rev) => {
   if (!rev) { console.log(`  ${label}: 无`); return; }
@@ -300,6 +338,9 @@ if (dryRun) {
   console.log('itemId:', itemId);
   if (!isV1) console.log('publisherId:', creds.PUBLISHER_ID);
   console.log('zip:', zipPath);
+  console.log('包版本号:', versionOfZip(zipPath) || '⚠️ 读不出来（文件名里没有 x.y.z）');
+  console.log('⚠️ dry-run 不联网，**核不到线上版本** → 版本号闸门（包版本必须严格高于线上版本）');
+  console.log('   只在真实运行时生效（那一步会先做一次只读的 fetchStatus）。');
   if (cancelOnly) {
     if (!endpoints.cancel) {
       console.error('v1.1 不支持 cancelSubmission，请用 --api=v2 --cancel');
@@ -349,12 +390,53 @@ if (cancelOnly) {
   process.exit(0);
 }
 
-console.log('\n1/5 获取 access token…');
+console.log('\n1/6 获取 access token…');
 const token = await getAccessToken();
 
-console.log('2/5 使用 item:', itemId, isV1 ? '' : `（publisher: ${creds.PUBLISHER_ID}）`);
+console.log('2/6 使用 item:', itemId, isV1 ? '' : `（publisher: ${creds.PUBLISHER_ID}）`);
 
-console.log('3/5 上传新版本 zip（curl -T 文件直传）…');
+// ---- 版本号闸门：包的版本必须**严格高于**线上版本 ----------------------
+// CWS 拒绝 version ≤ 已发布版本。与其让 CWS 用一句含糊的报错拒绝，
+// 不如在上传前用只读的 fetchStatus 把真实线上版本查出来比一次。
+//
+// ⚠️ 为什么这道闸门在**脚本**里而不是只在文档守卫里：
+// 文档守卫（scripts/store-version.test.ts）只能证明「文档说法一致」，
+// 证明不了「线上到底是几」—— 那要联网查。而上传是不可逆的对外动作，
+// 闸门必须落在最后一步之前，用真实的线上版本做判据。
+const zipVersion = versionOfZip(zipPath);
+if (!zipVersion) {
+  console.error(`读不出这个包的版本号（从文件名解析）：${zipPath}`);
+  console.error('CWS 要求版本号形如 x.y.z —— 打包产物的文件名里必须有。');
+  process.exit(1);
+}
+
+console.log('3/6 查询线上版本（fetchStatus，只读）…');
+const preflight = await request(endpoints.status.url, {
+  method: endpoints.status.method,
+  headers: { Authorization: 'Bearer ' + token },
+});
+if (preflight.status !== 200 || preflight.body?.error) {
+  console.error('查询状态失败 (' + preflight.status + '):', JSON.stringify(preflight.body).slice(0, 600));
+  process.exit(1);
+}
+const liveVersion = liveVersionOf(preflight.body);
+if (!liveVersion) {
+  console.log('  线上还没有已发布版本（publishedItemRevisionStatus 不存在）→ 跳过版本号闸门');
+} else {
+  console.log('  线上版本:', liveVersion, '｜ 本包版本:', zipVersion);
+  if (compareVersions(zipVersion, liveVersion) <= 0) {
+    console.error(
+      `\n❌ 本包版本 ${zipVersion} 不高于线上版本 ${liveVersion} —— CWS 会拒绝上传。\n` +
+        '   先 bump 版本号（manifest.json / package.json / CHANGELOG.md 三处要一致），再打包。\n' +
+        '   ⚠️ 如果你确实要重发同一个版本号 —— 那是错的：CWS 不允许降级安装，\n' +
+        '      线上用户不会收到这个包。',
+    );
+    process.exit(1);
+  }
+  console.log('  ✅ 版本号闸门通过（' + zipVersion + ' > ' + liveVersion + '）');
+}
+
+console.log('4/6 上传新版本 zip（curl -T 文件直传）…');
 const upload = await httpUpload(endpoints.upload.method, endpoints.upload.url, zipPath, {
   headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/zip' },
 });
@@ -372,7 +454,7 @@ console.log(
   (upload.body?.uploadState ? ' uploadState=' + upload.body.uploadState : ''),
 );
 
-console.log('4/5 查询审核/发布状态…');
+console.log('5/6 查询审核/发布状态…');
 const status = await request(endpoints.status.url, {
   method: endpoints.status.method,
   headers: { Authorization: 'Bearer ' + token },
@@ -392,7 +474,7 @@ if (isV1) {
   describeRevision('publishedItemRevisionStatus（线上）', s.publishedItemRevisionStatus);
 }
 
-console.log('5/5 发布（default 渠道）…');
+console.log('6/6 发布（default 渠道）…');
 const publish = await request(endpoints.publish.url, {
   method: endpoints.publish.method,
   headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },

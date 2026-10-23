@@ -200,7 +200,7 @@
 
 **结论三：23 用户不能作为"产品没优势"的证据。**
 
-商店页实读：`23 users` / `0 out of 5` / `No ratings` / v6.0.8 / 2 languages / Tools 分类；
+商店页实读：`23 users` / `0 out of 5` / `No ratings` / v6.2.0 / 87.83KiB / 2 languages / Tools 分类；
 页底的 "You might also like…" 推的正是四个有评分的竞品。
 **但阶段 0 的三项动作（看 Dashboard 曲线 / 发 V2EX+少数派+Reddit / 回复评论）至今一项未做**，
 `docs/LAUNCH.md` 的三套文案在抽屉里放了 17 天。15 个月 23 用户、0 评分，

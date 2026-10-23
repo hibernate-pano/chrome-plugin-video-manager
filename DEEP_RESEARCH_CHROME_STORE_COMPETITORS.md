@@ -47,7 +47,14 @@
 | HTML5 Video Speed Control | Cool Apps | 40,000 | 4.4 (1.3K) | 3.0.0 | **2022-03-17（弃养）** | — | 否 |
 | Video Speed Controller (dup) | — | 20,000 | 4.6 (29) | 1.0.2 | 2025-03-19 | — | — |
 | Video Speed Controller Pro | tinyflash.org | 20,000 | 4.8 (93) | 1.0.6 | 2026-06-01 | Functionality & UI | 是 |
-| **我们（Video Speed Controller — Fullscreen & Keys）** | **Jasper Pan** | **23** | **0（0 条）** | **6.0.8** | **2026-10-08** | **Tools** | **否** |
+| **我们（Video Speed Controller — Fullscreen & Keys）** | **Jasper Pan** | **23** | **0（0 条）** | **6.2.0** | **2026-10-23** | **Tools** | **否** |
+
+> ⚠️ **2026-10-23 17:00 复核**：本报告初稿（16:00）读到的还是 `6.0.8 / 2026-10-08 / 40.14KiB` ——
+> 6.2.0 在那之后审核通过并上线了（`publishedItemRevisionStatus.state = PUBLISHED`、
+> `deployPercentage=100`、`crxVersion=6.2.0`；商店页实读「版本 6.2.0 · 上次更新日期 2026年10月23日 ·
+> 87.83KiB」）。**用户数（23）与评分（0）没变** —— 所以本报告其余结论不受影响。
+> 但同一时刻补查到一件更糟的事：**中文 Detailed Description 比英文那份还旧两档**，
+> 而且写着能控制**音频**（见 §2.2 与 `CHROMEWEBSTORE.md`）。
 
 数据来源：[1][2][9][10][11][12][3][102]（全部直读商店页 DOM）
 
@@ -124,6 +131,7 @@ Tools
 23 users
 0 out of 5 · No ratings
 Version 6.0.8 · Updated October 8, 2026
+（⚠️ 16:00 的读数。17:00 复核已切到 6.2.0 · Updated October 23, 2026 · 87.83KiB）
 Offered by Jasper Pan · Size 40.14KiB · 2 languages (English, 中文（中国）)
 Non-trader · The developer has disclosed that it will not collect or use your data.
 Privacy Policy → PRIVACY.md
@@ -149,6 +157,28 @@ You might also like…
 
 这是本次研究里**最便宜、也最直接**的一个可执行发现：改文案是 0 成本，而它在下载前 5 秒生效。
 
+> 🔴 **2026-10-23 17:00 补记（同一轮会话的后续发现）：中文那份比英文这份还旧两档，
+> 而且有一句是反的。**
+>
+> 本节最初只读了 `?hl=en` 的页面 —— **漏了一半**。中文用户看到的是中文那一份，
+> 实读是：
+>
+> > Video & Audio Speed Controller 是一款简单易用的浏览器扩展，让您能够轻松控制网页上任何**视频和音频**的播放速度。
+> > • 适用于所有 HTML5 **视频和音频**元素
+> > • 自定义播放速度范围
+>
+> | 中文线上写的 | 实际是 | 严重度 |
+> |---|---|---|
+> | `适用于所有HTML5视频和音频元素` | **我们只控制视频，不控制纯音频** —— 对外承诺的核心（README / PRIVACY / 商店简介一致） | 🔴 与行为**相反** |
+> | `Video & Audio Speed Controller`（旧名 + 中英混排） | 6.0.0 起叫 `Video Speed Controller — Fullscreen & Keys` | 🔴 `INCONSISTENT_LOCALE_METADATA` |
+> | `自定义播放速度范围` | 6.0.0 大减法砍掉了最大速度上限 | 🟡 描述了不存在的能力 |
+> | 全文没提网页全屏 / 可改绑键 /「任何视频都从 1.0x 开始」 | 那是我们 6.x 的主功能与差异化 | 🟡 |
+>
+> **Short Description 中英两份都是新的** ✅（与 `_locales/*/messages.json` 一字不差）——
+> 漂的只有 Detailed Description，两份都漂，中文那份漂得更远。
+>
+> **方法论教训**：商店页要**逐个 locale** 读。拿一份当"线上现状"是不完整的。
+
 ### 2.3 排序机制把我们排除在算法之外
 
 Chrome 官方文档明说商店排序的输入包含：
@@ -171,7 +201,7 @@ PRODUCT.md 阶段 0 是"拿到真实用户信号"，其下的三项动作**至�
 
 `docs/LAUNCH.md`（12KB）里 V2EX / 少数派 / Reddit 三套文案**已经写好了**，标题候选、正文、"刻意没做的"说明、已知边界（只控制视频不控制纯音频、iframe 的焦点规则）全都齐备，最后还有一节"什么算信号、什么不算"。**它写了 17 天，一次没发。**
 
-商店首次提交是 2025-07-14，线上仍是 6.0.8 [88][3] —— 约 15 个月 23 用户、0 评分，**与"从没让人知道过"完全一致**。
+商店首次提交是 2025-07-14，线上版本已迭代到 6.2.0（2026-10-23 上线；16:00 读数时还是 6.0.8）[88][3] —— 约 15 个月 23 用户、0 评分，**与"从没让人知道过"完全一致**。
 
 对照社区里"换掉头部扩展"的动因，有一条非常直白：
 
@@ -316,7 +346,7 @@ PRODUCT.md 阶段 0 是"拿到真实用户信号"，其下的三项动作**至�
 
 - [ ] **拿到 Dashboard 的展示量 → 安装转化率**（零开发，最高信息量）。23 个用户背后可能是 300 次展示（转化率 7.7%，是文案/页面问题）也可能是 50,000 次展示（0.05%，是排序问题）。**这两种病有两种药，不看这个数字就无法判断"凭什么使用我们"。** 顺带把 PRODUCT.md 阶段 0 第一项打勾。
 - [ ] **把 `docs/LAUNCH.md` 的三套文案发出去**（V2EX / 少数派 / Reddit）。它已经写好了三套目标平台文案 + "刻意没做的"说明 + 已知边界 + "什么算信号"。**这是 15 个月 0 评分的直接原因**，而且成本是几小时。
-- [ ] **改商店页简介**（Dashboard 内，0 成本）：去掉 "Customize four shortcuts"（实际 7 个）与 "Cross-origin iframe videos may not be directly controllable"（实际 6.1.0 起完全支持）。**这段话现在在主动劝退用户。**
+- [ ] **改商店页简介**（Dashboard 内，0 成本）：**中英两份都要换**。英文份去掉 "Customize four shortcuts"（实际 7 个）与 "Cross-origin iframe videos may not be directly controllable"（实际 6.1.0 起完全支持）；**中文份漂得更远** —— 还写着能控制**音频**（我们不控制）、旧名 `Video & Audio Speed Controller`、"自定义播放速度范围"（已砍掉），且没提网页全屏。**这段话现在在主动劝退用户，而且中文那份还在教用户一个我们没有的能力。**
 - [ ] **把分类从 Tools 改到 Functionality & UI**（Dashboard 内，免费）：榜首在这个分类，排序吃分类 [6][1]。
 - [ ] **向现有 23 位用户请求评分**（商店内 + 邮件式引导）。目标是**先拿到 10 条** —— 这是排序信号的唯一来源，也是打破冷启动死锁的最小单位 [6][11]。
 - [x] ~~**加"站点级默认速度"（手动设、用户自己设，不是自动记）**~~ → ✅ **Jasper 2026-10-23 拍板：不做。** 原则是「让用户从默认速度开始，自行调整」。回读代码后确认**现状已经就是这样**（零改动），接受的代价是这一项明确缺。**不要在后续版本重新提起。**
@@ -345,7 +375,8 @@ PRODUCT.md 阶段 0 是"拿到真实用户信号"，其下的三项动作**至�
 
 - **深度**：standard（按 skill 默认）。
 - **子代理**：3 个检索代理（倍速类全景+市场结构 / 全屏播放器增强类 / 差评痛点+信任合规）+ 1 个补缺代理（在线学习者人群）+ 领衔代理亲自直读 4 个商店页（我们自己的、iglupo 的 overview、iglupo 的差评、Video Maximizer 的差评）。**差评证据由两个独立路径取得**：领衔代理用 Playwright + "Lowest to highest rating" 排序读商店评论；C 代理独立用同一方法读出 iglupo 与 Global Speed 的评论，**两份结论在关键条目的原话上一致**（例如"速度复位回 1.00"这条，两个来源都读到）。
-- **取证方法**：Chrome Web Store 商品页与搜索页均为 JS 渲染，WebFetch / curl 只能拿到空壳。实际使用三条路径交叉验证：(a) 官方站内搜索 RPC `QcU9bc`；(b) 商品页首屏 SSR HTML 正则提取 users / rating / Version / Updated / Size / Languages；(c) Playwright 真实浏览器读 DOM 与评论。**领衔代理对自己商店页的数字做了第二次独立复核，与代理 A 的读数一致**（23 / 0 / 6.0.8 / 40.14KiB / 2 languages / Tools）。
+- **取证方法**：Chrome Web Store 商品页与搜索页均为 JS 渲染，WebFetch / curl 只能拿到空壳。实际使用三条路径交叉验证：(a) 官方站内搜索 RPC `QcU9bc`；(b) 商品页首屏 SSR HTML 正则提取 users / rating / Version / Updated / Size / Languages；(c) Playwright 真实浏览器读 DOM 与评论。**领衔代理对自己商店页的数字做了第二次独立复核，与代理 A 的读数一致**（23 / 0 / 6.0.8 / 40.14KiB / 2 languages / Tools；⚠️ 17:00 复核时 6.2.0 已上线 → 6.2.0 / 87.83KiB，用户数与评分未变）。
+- ⚠️ **商店页必须逐个 locale 读**：首轮只读了 `?hl=en` 的页面，漏掉了漂得更远的**中文** Detailed Description（详见 §2.2）。**读一份 locale 的商店页 ≠ 读到线上现状。**
 - **引用核验**：无独立 Verification 子代理（工具预算已用于取证）。作为替代，所有 Tier 1 数字均由**至少两个独立路径**取得（不同代理 / 不同渲染方式 / 第三方 shields.io 镜像 [14]），并在正文中标注了单一来源项。
 - **编号**：检索代理 A [1]–[15]、B [20]–[32]、C [40]–[70]、补缺代理 [60]–[88] 存在重叠，合并后统一重编为 [60]–[88] → **[71]–[99]**，C 的 [40]–[70] 保持不变；领衔代理自采 [100]–[104]。
 - **降级说明**：本环境 WebSearch 返回 "web-search access isn't available"、exa 免费额度超限；多个代理改用 CWS 官方 RPC + 商品页直取 + Bing/浏览器取得。**代价是缺少 Tier 2 媒体评测与 2026 年对比评测**；收益是全部规模/评分数字均为 Tier 1 一手数据，无二手转述。
@@ -454,7 +485,7 @@ PRODUCT.md 阶段 0 是"拿到真实用户信号"，其下的三项动作**至�
 **领衔代理自采**
 [100] 我们自己的商店页（Playwright 直读，2026-10-23 15:10）· Tier 1
 [101] Video Speed Controller 商品页 overview（Playwright 直读，含完整功能清单）· Tier 1
-[102] 我们商店页全文（23 users / 0 out of 5 / No ratings / v6.0.8 / 40.14KiB / 2 languages / Tools / "You might also like…" 四条竞品 / 过时简介原文）· Tier 1
+[102] 我们商店页全文（16:00 读数：23 users / 0 out of 5 / No ratings / v6.0.8 / 40.14KiB / 2 languages / Tools / "You might also like…" 四条竞品 / 过时简介原文；**17:00 复核：v6.2.0 / 87.83KiB / 2026-10-23，用户数与评分未变，并补读到漂得更远的中文 Detailed Description**）· Tier 1
 [103] Video Speed Controller 评论页（"Lowest to highest rating" 排序，读到 2026 年 1 星评论全文）· Tier 1
 [104] Video Maximizer 评论页（同法，读到 1–5 星评论全文）· Tier 1
 
@@ -469,6 +500,7 @@ PRODUCT.md 阶段 0 是"拿到真实用户信号"，其下的三项动作**至�
 
 ### [3][102] 我们自己的商品页 — 基线
 - **摘要**：23 users / 0 out of 5 / No ratings / v6.0.8 / Updated Oct 8 2026 / 40.14KiB / 2 languages / Tools / Non-trader / 不收集数据 / "You might also like…" → Video Speed Controller 4.0、Video Speed Controller – Playback Speed for Any Video 4.7、Video Speed Control 4.8、HTML5 Speed Controller 4.7。
+- **17:00 复核（同一日）**：`publishedItemRevisionStatus.state = PUBLISHED`、`deployPercentage=100`、`crxVersion=6.2.0` → 线上已切 6.2.0（商店页实读「版本 6.2.0 · 上次更新日期 2026年10月23日 · 87.83KiB」）。**23 users / 0 评分未变。** 同一时刻补读到**中文** Detailed Description —— 旧名 `Video & Audio Speed Controller`、"适用于所有HTML5视频和**音频**元素"、"自定义播放速度范围"、全文无网页全屏（详见 §2.2）。
 - **关键引句（过时简介）**："Customize **four** shortcuts from the options page"；"**Cross-origin iframe videos may not be directly controllable**"
 - **来源类型**：商店页本体 + Playwright 独立复核 / Tier 1
 

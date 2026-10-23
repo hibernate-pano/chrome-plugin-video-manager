@@ -230,7 +230,14 @@
       → **已上传并发布到 default 渠道**：
       `uploadState=SUCCEEDED`、`crxVersion=6.2.0`、
       `submittedItemRevisionStatus.state = PENDING_REVIEW`（deployPercentage 100）
-      → ⚠️ **线上仍是 6.0.8** —— 审核通过后才切换
+      → ✅ **2026-10-23 17:00 复核：审核已通过，线上已切到 6.2.0。**
+      `fetchStatus` 返回
+      `publishedItemRevisionStatus = { state: PUBLISHED, deployPercentage: 100, crxVersion: 6.2.0 }`
+      （`submittedItemRevisionStatus` 已消失 —— 没有待审版本了）。
+      商店页实读一致：版本 6.2.0 · 上次更新日期 2026年10月23日 · 87.83KiB
+      → ⚠️ **但商店页文案没跟着走** —— 中英两份 Detailed Description 都还是旧版，
+      中文那份尤其旧（还写着能控制音频、旧名、自定义速度范围，且没提网页全屏）。
+      详见 `CHROMEWEBSTORE.md` 的「商店页当前线上简介实读」
       → ⚠️ 发布响应带一条 warning：`INCONSISTENT_LOCALE_METADATA`
       （商店文案与截图在两种语言之间不一致）。API **没有**改 listing 的能力 ——
       文案与截图只能到 Dashboard 手动改。这条 warning 是**提交前就有的**
