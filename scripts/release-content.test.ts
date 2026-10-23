@@ -29,6 +29,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { resolve } from 'node:path';
+import { SHORTCUT_DEFINITIONS } from '../src/shared/types';
 
 const repoRoot = process.cwd();
 
@@ -326,20 +327,15 @@ describe('发布包承诺：商店文案与真实行为对得上', () => {
     // （Detailed Description 与 Version History），
     // 不覆盖本文件其余部分 —— 那里的 `**` 是给维护者看的标记，不会被贴出去。
     const storeDoc = readFileSync(resolve(repoRoot, 'CHROMEWEBSTORE.md'), 'utf8');
-    const lines = storeDoc.split('\n');
 
     // 详细描述正文：从「Video Speed Controller 把网页里的视频」起，
     // 到「**Category** [REQUIRED]」之前 —— 那之后是别的元数据小节，
     // 它们的 `**` 是给维护者看的标记，不会被贴进商店。
-    const descStart = lines.findIndex((line) =>
-      line.startsWith('Video Speed Controller 把网页里的视频'),
-    );
+    const { start: descStart, end: descEnd, lines: description } =
+      locateDetailedDescription(storeDoc);
+
     expect(descStart, '找不到详细描述正文的起点').toBeGreaterThan(-1);
-    const descEnd = lines.findIndex(
-      (line, index) => index > descStart && line.startsWith('**Category**'),
-    );
     expect(descEnd, '找不到详细描述正文的终点（**Category** 那行不见了？）').toBeGreaterThan(descStart);
-    const description = lines.slice(descStart, descEnd);
 
     // Version History 的两个代码块（中文段与英文段）。
     const versionHistory = extractVersionHistoryBlocks(storeDoc);
@@ -417,6 +413,158 @@ describe('发布包承诺：商店文案与真实行为对得上', () => {
     ).toBe(false);
   });
 });
+
+/**
+ * 商店简介与真实能力对得上（2026-10-23 竞品分析后追加）。
+ *
+ * ## 背景：一个真实发生过的漂移
+ *
+ * 2026-10-23 用真实浏览器打开商店页逐字读了线上的简介，发现它是一段
+ * **上架当时直接写进 Dashboard、从来没更新过**的英文（`git log -S` 全历史为空，
+ * 说明它在本仓库的任何版本里都不存在）。其中两句与产品**相反**：
+ *
+ *   - `Customize four shortcuts from the options page`
+ *     —— 实际是 **7 个动作**全部可改绑（`SHORTCUT_DEFINITIONS`）
+ *   - `Cross-origin iframe videos may not be directly controllable`
+ *     —— 实际**完全支持**（6.1.0 起；`manifest.content_scripts[0].all_frames`）
+ *
+ * ## 为什么这类漂移会长期存在
+ *
+ * **商店文案是手工粘贴的，粘贴那一刻没有任何东西会检查它。**
+ * 仓库里有守卫，但它们守的是「本文件里的文案 ↔ 真实行为」；
+ * 而真正挂在线上的是 Dashboard 里那份**副本** —— 那份没有任何守卫看得见。
+ *
+ * ⚠️ 所以下面这几条**不能**证明线上那份是对的：
+ * 它们守的是「以后要贴进 Dashboard 的那份文本不许再跑偏」。
+ * 贴之前仍然要人逐字核（见 CHROMEWEBSTORE.md 的「商店页要改的完整清单」）。
+ */
+describe('商店简介 ↔ 真实能力：文案不许再跑偏', () => {
+  const storeDoc = readFileSync(resolve(repoRoot, 'CHROMEWEBSTORE.md'), 'utf8');
+  const { start, end, lines } = locateDetailedDescription(storeDoc);
+  const zhHalf = lines.slice(0, lines.findIndex((line) => line.trim() === '---')).join('\n');
+  const enHalf = lines.slice(lines.findIndex((line) => line.trim() === '---') + 1).join('\n');
+
+  it('详细描述正文找得到（起点与终点都还在）', () => {
+    expect(start, '找不到详细描述正文的起点').toBeGreaterThan(-1);
+    expect(end, '找不到详细描述正文的终点（**Category** 那行不见了？）').toBeGreaterThan(start);
+    expect(zhHalf.length, '详细描述的中文段是空的').toBeGreaterThan(100);
+    expect(enHalf.length, '详细描述的英文段是空的').toBeGreaterThan(100);
+  });
+
+  it('详细描述里说的「可改绑动作数」必须等于代码里的条数', () => {
+    // 中文侧：「全部 7 个动作都能在设置页改绑」
+    const zh = zhHalf.match(/(\d+)\s*个动作/);
+    // 英文侧：「all seven actions can be rebound」
+    const en = enHalf.match(/all\s+([a-z]+|\d+)\s+actions/i);
+
+    expect(zh, '详细描述（中文）里找不到「N 个动作」这句话').not.toBeNull();
+    expect(en, '详细描述（英文）里找不到「all N actions」这句话').not.toBeNull();
+
+    const englishNumbers: Record<string, number> = {
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+      five: 5,
+      six: 6,
+      seven: 7,
+      eight: 8,
+      nine: 9,
+      ten: 10,
+    };
+    const enValue = /^\d+$/.test(en![1]!) ? Number(en![1]) : englishNumbers[en![1]!.toLowerCase()];
+    const zhValue = Number(zh![1]);
+
+    expect(
+      zhValue,
+      `详细描述（中文）说「${zhValue} 个动作」，而代码里是 ${SHORTCUT_DEFINITIONS.length} 个` +
+        '（SHORTCUT_DEFINITIONS）—— 商店文案要跟着改。',
+    ).toBe(SHORTCUT_DEFINITIONS.length);
+    expect(
+      enValue,
+      `详细描述（英文）说「all ${en![1]} actions」，而代码里是 ${SHORTCUT_DEFINITIONS.length} 个` +
+        '（SHORTCUT_DEFINITIONS）—— 商店文案要跟着改。',
+    ).toBe(SHORTCUT_DEFINITIONS.length);
+  });
+
+  it('详细描述里不许出现「跨域 iframe 管不了」这类已经过时的说法', () => {
+    // 这句话是**线上那份**里原样存在的（2026-10-23 实读）。
+    // 它在 6.1.0 之后就与产品相反了 —— 而且它会让用户以为
+    // 「B 站/YouTube 的嵌入视频我管不了」，而那恰恰是我们最拿得出手的能力。
+    const stalePatterns: Array<{ pattern: RegExp; why: string }> = [
+      {
+        pattern: /may not be directly controllable/i,
+        why: '跨域 iframe 现在完全支持接管与网页全屏（6.1.0 起）',
+      },
+      {
+        pattern: /customize four shortcuts/i,
+        why: '可改绑的动作是 7 个，不是 4 个',
+      },
+      {
+        pattern: /iframe[^.\n]{0,80}(cannot|can not|can’t|is not|are not)[^.\n]{0,40}control/i,
+        why: '嵌入框里的视频现在会被接管',
+      },
+      {
+        // 中文侧必须**单独**一条：上面那条英文模式对中文无效，
+        // 而线上那段旧文案里的对应说法正是中文写的（「跨域 iframe 我们管不了」类）。
+        pattern: /(?:嵌入框|iframe)[^。\n]{0,30}(?:管不了|不支持|无法接管|不能接管|不接管)/,
+        why: '嵌入框里的视频现在会被接管',
+      },
+    ];
+
+    const offenders = stalePatterns
+      .filter(({ pattern }) => pattern.test(zhHalf) || pattern.test(enHalf))
+      .map(({ pattern, why }) => `${pattern} —— ${why}`);
+
+    expect(
+      offenders,
+      `详细描述里出现了已经过时的说法：\n${offenders.join('\n')}\n` +
+        '它现在挂在线上（2026-10-23 实读），是上一轮上架时直接写进 Dashboard 的，从没更新过。',
+    ).toEqual([]);
+  });
+
+  it('描述里承诺了跨域 iframe 支持 → manifest 必须真的注入到所有 frame', () => {
+    // 反向守卫：描述是**给用户看的承诺**，manifest 是**实现**。
+    // 两边对不上时，承诺先过期（因为它不会跟着代码改）。
+    const m = JSON.parse(readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8')) as {
+      content_scripts?: Array<{ all_frames?: boolean; matches?: string[] }>;
+    };
+    const script = m.content_scripts?.[0];
+
+    const claimsCrossOriginIframe =
+      /cross-origin[^.\n]{0,160}iframe|iframe[^.\n]{0,160}cross-origin/i.test(enHalf);
+
+    if (claimsCrossOriginIframe) {
+      expect(
+        script?.all_frames,
+        '详细描述承诺了跨域 iframe 的视频会被接管，但 manifest 不再注入到所有 frame',
+      ).toBe(true);
+    }
+  });
+});
+
+/**
+ * 找出 Detailed Description 那一栏在文档里的位置与正文行。
+ *
+ * 起点：「Video Speed Controller 把网页里的视频……」那行；
+ * 终点：「**Category**」那行之前 —— 之后是别的元数据小节，
+ * 它们的 `**` 是给维护者看的标记，不会被贴进商店。
+ *
+ * ⚠️ 找不到起点或终点时 **不抛异常** —— 返回 start/end = -1，
+ * 让调用方自己的断言去报「标记不见了」，
+ * 那样失败信息说的是**哪一行不见了**，而不是一个栈。
+ */
+const locateDetailedDescription = (doc: string): { start: number; end: number; lines: string[] } => {
+  const allLines = doc.split('\n');
+  const start = allLines.findIndex((line) =>
+    line.startsWith('Video Speed Controller 把网页里的视频'),
+  );
+  const end = allLines.findIndex(
+    (line, index) => index > start && line.startsWith('**Category**'),
+  );
+  const lines = start < 0 || end < 0 ? [] : allLines.slice(start, end);
+  return { start, end, lines };
+};
 
 /**
  * 取出 Version History 那一栏里「要贴进 Dashboard 的两段」。
