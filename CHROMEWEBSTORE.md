@@ -879,6 +879,83 @@ upload / fetchStatus / publish / cancelSubmission），所以只能人工在 Das
 
 ---
 
+## ⚠️ 商店页当前线上简介实读（2026-10-23）—— 里面有两句是**反的**
+
+> 这一节是 2026-10-23 竞品分析时**用真实浏览器打开商店页逐字读出来的**，
+> 不是从本文件推的。它纠正了上面那句「Dashboard 里贴的仍是旧文案（6.0.8 那版）」——
+> **比那更糟**：线上那段英文**在本仓库的任何一个版本里都不存在**
+> （`git log -S "Hot-reload updated shortcuts" --all` 全历史为空），
+> 它是上架当时直接写在 Dashboard 里的，**从来没更新过**。
+
+线上商店页今天显示的简介（原文）：
+
+```
+Minimal keyboard shortcuts and a clean page-fullscreen player for any HTML5 video
+
+Video Speed Controller is a lightweight Chrome extension for controlling HTML5 video with keyboard shortcuts.
+
+Core features:
+- Increase, decrease, and reset playback speed
+- Toggle page fullscreen for the active video
+- Customize four shortcuts from the options page
+- Hot-reload updated shortcuts in already open tabs
+- In page fullscreen: Esc exits, Space toggles play/pause, Left/Right seek 5 seconds
+
+Notes:
+- Works with most standard HTML5 video sites
+- Controls video only, not audio
+- Cross-origin iframe videos may not be directly controllable
+
+Privacy:
+- No personal data collection
+- Settings are stored locally in chrome.storage
+```
+
+⚠️ **其中两句在 6.2.0 过审后就是反的**：
+
+| 线上写的 | 实际是 | 依据 |
+|---|---|---|
+| `Customize four shortcuts from the options page` | **7 个动作**全部可改绑 | `src/shared/types.ts` 的 `SHORTCUT_DEFINITIONS`（7 条） |
+| `Cross-origin iframe videos may not be directly controllable` | **跨域 iframe 完全支持**接管与网页全屏 | 6.1.0 起；`manifest.content_scripts[0].all_frames = true` |
+
+⚠️ 还有一句也是旧的：`for any HTML5 video` ——「any」在 CWS 的拒审清单上。
+`_locales/en/messages.json` 的 `extensionDescription` 早就改掉了，
+**但这段线上文案里还留着**。
+
+⚠️ 也就是说：6.2.0 审核通过后，**用户看到的还是这段英文**——
+除非把本文件的 Detailed Description 真的贴进去。
+这一条已经发生过一次（「6.0.9 与 6.1.0 从未单独发布过」是版本问题，
+这一条是**文案从来没贴过**的问题，两者后果一样：商店上摆着的不等于我们做的东西）。
+
+### 商店页要改的完整清单（2026-10-23 竞品分析后追加）
+
+> 背景与数据见仓库根目录 `DEEP_RESEARCH_CHROME_STORE_COMPETITORS.md`。
+> 那一节把商店页的每个可改字段都对照了一遍，下面是结论。
+
+- [ ] **Description 字段**：把本文件 Detailed Description 的中英两段贴进去，替换掉上面那段旧英文
+- [ ] **Category**：`Tools` → **`Functionality & UI`**（竞品榜首在这个分类；
+      商店排序吃分类与评分 —— Chrome 官方文档：「ranked based on a number of criteria」，
+      含 "ratings from users as well as usage statistics"）
+- [ ] **Short Description**：已是 115 字符的当前版本，**不需要改**
+- [ ] **向现有用户请求评分**（详见下节，这是排序信号的唯一来源）
+- [ ] **取 Dashboard 的展示量 → 安装转化率**（零开发，最优先）
+
+### 关于「0 评分」这件事（2026-10-23 实读）
+
+**我们商店页今天显示的是 `23 users` / `0 out of 5` / `No ratings`**（领衔代理用真实浏览器直读，
+与 shields.io 第三方镜像一致）。同一屏的竞品卡片写着 4.0 / 4.7 / 4.8 / 4.7。
+
+更糟的一条：**我们商店页底部的 "You might also like…" 推荐的正是这四个竞品**
+（Video Speed Controller 300 万用户 / Video Speed Controller – Playback Speed for Any Video /
+Video Speed Control / HTML5 Speed Controller）。
+**我们仅有的 23 个用户，被商店的推荐算法直接送去了竞品。**
+
+⚠️ 这不是文案问题，是**冷启动死锁**：0 评分 → 搜索卡片上没有评分信号 →
+排在同名竞品之后 → 没人点 → 没人装 → 还是 0 评分。
+**破口是「先拿到 10 条评分」**，不在代码里。
+
+---
+
 ## 6.0.9 文案对齐记录（2026-10-20）
 
 **背景**：6.0.9 要送审，而 6.0.6 与 6.0.8 两次发布都被
