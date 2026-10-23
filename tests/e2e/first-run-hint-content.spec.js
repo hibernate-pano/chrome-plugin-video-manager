@@ -276,16 +276,36 @@ test.describe('首次引导：内容与可达性', () => {
       await playByHand(page);
       const hint = await waitForHint(page);
 
-      // ⚠️ 完整版 = 4 行（调速 / 全屏 / 工具栏 / 去哪儿改绑）。
-      expect(hint.renderedLines, '完整版必须恰好 4 行').toBe(4);
-
-      // ⚠️ 而且每一行都**不许折行** —— 折行会让渲染行数变多，
-      // 而阅读窗口是按源码行数算的（那就又对不上了）。
-      const folded = hint.segments.filter((segment) => segment.lines > 1);
+      // ⚠️ 完整版 = **4 段**（调速 / 全屏 / 工具栏 / 去哪儿改绑）。
+      //
+      // ⚠️ 判据是**源码行数**（`text.split('\n').length`），
+      // **不是**渲染行数 —— 因为阅读窗口 `readWindowMs` 正是按源码行数算的
+      // （见 firstRunHint.ts 的 READ_DELAY_PER_LINE）。
+      //
+      // ⚠️ 之前这条断言写的是「渲染恰好 4 行，且每段都不许折行」——
+      // 那在**中文 locale** 下成立，在**英文 locale** 下**必然不成立**：
+      // `hintMore` 的英文是 97 字符
+      // （"All shortcuts can be rebound in the extension settings
+      //   (right-click the extension icon → Options)"），
+      // 而卡片 max-width 只有 560px —— 它**必然**折成 2 行。
+      // 于是 CI（英文环境）上这条必红，而本地（中文系统）刚好绿 ——
+      // 典型的「断言绑死了语言」。
+      const sourceLines = hint.text.split('\n');
       expect(
-        folded,
-        `这些行在真实渲染里折行了：${JSON.stringify(folded)}`,
-      ).toEqual([]);
+        sourceLines.length,
+        '完整版必须恰好 4 段（源码行数 —— 阅读窗口按它算）',
+      ).toBe(4);
+
+      // ⚠️ 折行本身不是错误（英文长文案必然折行），
+      // 但**折得太厉害**说明文案失控了：引导是「一屏能读完」的东西。
+      // 判据定在「任何一段最多折成 3 行」—— 留出余量，
+      // 让「翻译变长了」这种真实情况能过，但拦住「文案写成了一段长文」。
+      const worstFold = Math.max(...hint.segments.map((segment) => segment.lines));
+      expect(
+        worstFold,
+        `有段落折成了 ${worstFold} 行 —— 引导应当是「一屏能读完」的东西：` +
+          JSON.stringify(hint.segments),
+      ).toBeLessThanOrEqual(3);
 
       // 完整版该有的两条补充信息都在。
       expect(hint.text).toMatch(anyLocaleFragment('hintToolbar'));

@@ -360,13 +360,28 @@ test.describe('设置页：保存按钮与未保存提示永远看得见', () =>
 
       await changeFirstShortcut(page);
 
-      // 把 lead 与「使用引导」的说明撑长三倍 —— 模拟「翻译变长了」。
+      // 把 lead 与「使用引导」的说明撑长 —— 模拟「翻译变长了」。
+      //
+      // ⚠️ **加长的必须是原语言**，不能是一段中文：
+      // `chrome.i18n` 挑哪个 locale 目录跟的是**系统 locale**（不是界面语言），
+      // 开发机是中文系统、CI 容器是英文环境 —— 于是「中文加长三倍」
+      // 在英文环境里**根本不成比例**（原英文文案本来就长），
+      // 页面可能压根没被撑高 → 这条用例在 CI 上必然失败
+      // （实测：scrollHeight 800 == clientHeight 800）。
+      //
+      // 所以这里用**原 locale 的文案**重复若干遍：
+      // 无论哪种语言，重复 N 遍都必然撑高。
       const before = await page.evaluate(() => {
         const lead = document.querySelector('.vsc__lead');
         const desc = document.querySelector('.vsc__hint .vsc__row-desc');
-        const long = '这是一段刻意加长到足以把页面顶出一屏的说明文字，用来模拟未来某次翻译改长之后的设置页。';
-        lead.textContent = long.repeat(3);
-        if (desc) desc.textContent = long.repeat(3);
+        const repeat = (node) => {
+          if (!node) return;
+          const original = node.textContent ?? '';
+          // 重复到明显超过一屏为止（每份原文至少 10 个字符，重复 40 遍足够撑高）。
+          node.textContent = original.repeat(40);
+        };
+        repeat(lead);
+        repeat(desc);
         return {
           scrollHeight: document.documentElement.scrollHeight,
           clientHeight: document.documentElement.clientHeight,

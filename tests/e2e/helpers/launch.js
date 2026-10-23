@@ -36,11 +36,36 @@ export const DIST = process.env.VSC_EXTENSION_DIR
   ? resolve(process.env.VSC_EXTENSION_DIR)
   : resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist');
 
-if (!existsSync(join(DIST, 'manifest.json'))) {
-  throw new Error(
-    `扩展构建产物不在 ${DIST}（或里面没有 manifest.json）——先跑 pnpm build。`,
-  );
-}
+/**
+ * 「扩展构建产物在不在」——**用的时候再问**，不是模块一加载就问。
+ *
+ * ⚠️ 为什么不能放在模块顶层（这正是 2026-10-22 起 CI 连续 8 次全红的原因）：
+ *
+ * 本文件被 **所有** e2e spec import。而 `scripts/ci-workflow.test.ts` 有一条
+ * 守卫要跑 `playwright test --list`（用来核实「登记进 test:e2e:ext 的 spec」
+ * 与「Playwright 真会跑的 spec」是不是同一份）——
+ * 那条守卫活在 **Unit Tests** job 里，而那个 job **不跑 build**。
+ *
+ * 于是：模块一加载就检查 `dist/manifest.json` → CI 上 `dist/` 不存在 →
+ * 抛错 → `--list` 收集用例时报错 → 守卫炸掉 → **整个 Unit Tests job 红**。
+ *
+ * ⚠️ 症状极具误导性：报错信息说的是「扩展构建产物不在 …——先跑 pnpm build」，
+ * 而 Unit Tests job 里**根本没有 build 这一步**（build 是另一个 job）——
+ * 于是读起来像「CI 配置漏了一步」，实际上是这条检查放错了位置。
+ *
+ * ⚠️ 而 `--list` **根本不需要**扩展产物：它只要知道有哪些 spec 文件。
+ * 把「需要产物」的条件绑在「加载这个模块」上，就是绑错了地方。
+ *
+ * 所以这里改成**惰性检查**：真正要启动浏览器时才验，
+ * 而那时缺产物是**真的**该报错（症状也准确）。
+ */
+const assertDistReady = () => {
+  if (!existsSync(join(DIST, 'manifest.json'))) {
+    throw new Error(
+      `扩展构建产物不在 ${DIST}（或里面没有 manifest.json）——先跑 pnpm build。`,
+    );
+  }
+};
 
 /**
  * 「这个仓库该用哪个 Chromium」。
@@ -85,6 +110,9 @@ export const launchArgs = (extra = []) => [
  *   所以文案断言要用 `anyLocale` / `anyLocaleFragment`，而不是写死中文。
  */
 export const launchExtension = async ({ extraArgs = [], profilePrefix = 'vsc-e2e-' } = {}) => {
+  // 产物检查放在这里（而不是模块顶层）：见 assertDistReady 的说明。
+  assertDistReady();
+
   const executablePath = findChromium();
   const candidates = [
     { label: 'channel:chromium', options: { channel: 'chromium', headless: true, args: launchArgs(extraArgs) } },

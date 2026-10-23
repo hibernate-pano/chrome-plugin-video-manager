@@ -610,14 +610,13 @@ test.describe('设置页：读屏用户能听到「现在绑的是哪个键」',
         '可访问名里必须带当前绑定的键（之前只有「网页全屏」，键是死代码）',
       ).toContain('f');
       // 动作名也还在（WCAG 2.5.3：标签在名字里）。
-      expect(name).toContain(
-        // 动作名的具体文案随语言变，用「有一个非空的动作名」来断言更稳：
-        // 名字里除了键之外还有别的字。
-        (() => {
-          const withoutKey = name.replace(/f/g, '').trim();
-          return withoutKey.length > 0 ? withoutKey : 'x';
-        })(),
-      );
+      //
+      // ⚠️ 这里**不能**用「把 f 删掉，看剩下什么」来反推动作名 ——
+      // 英文 locale 下动作名是 "Page fullscreen"，删掉所有 f 会变成
+      // "Page ullscree: "，于是这条断言在 CI（英文环境）上必然失败，
+      // 而本地（中文系统）刚好通过。
+      // 动作名随语言变，**只能**从 locale 文件里取。
+      expect(name).toMatch(anyLocaleFragment('actionFullscreen'));
     } finally {
       await ext.close();
     }
