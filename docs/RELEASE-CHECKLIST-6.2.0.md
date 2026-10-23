@@ -217,11 +217,27 @@
       第九轮（引导）→ 第十轮（复审）→ 第十一轮（设置页）→ 第十二轮（会话生命周期）
       → 第十三轮（引导的补记）、第十四轮（宿主负载），并把「前面九轮」改成「前面十轮」
 - [x] `pnpm build && node scripts/package-extension.js` 出
-      `release/video-speed-controller-v6.2.0.zip` → **已出**（2026-10-22 17:00，86.8K）
+      `release/video-speed-controller-v6.2.0.zip` → **已出**（2026-10-23 19:51，84.8K，
+      15 个真实文件 / 228 195 字节 / manifest 版本 6.2.0）
 - [x] 跑 `npx vitest run scripts/`
       → **5 文件 / 73 条全绿**（`ci-workflow` 43、`host-load` 7、`async-race` 3、
       `store-version`、`release-content`）
-- [ ] **报告发布就绪状态给 Jasper —— 不要自己上传商店**（对外发布是不可逆动作，要他明确同意）
+- [x] **报告发布就绪状态给 Jasper —— 不要自己上传商店**
+      （对外发布是不可逆动作，要他明确同意）
+      → 2026-10-23 19:5x 已报告就绪；Jasper 明确说「发」，
+      并确认了目的地是 **Chrome Web Store**（item `mennablgjphikgaiahngapedibccmei`，
+      publisher `19d9e44e-…`，v2 API）
+      → **已上传并发布到 default 渠道**：
+      `uploadState=SUCCEEDED`、`crxVersion=6.2.0`、
+      `submittedItemRevisionStatus.state = PENDING_REVIEW`（deployPercentage 100）
+      → ⚠️ **线上仍是 6.0.8** —— 审核通过后才切换
+      → ⚠️ 发布响应带一条 warning：`INCONSISTENT_LOCALE_METADATA`
+      （商店文案与截图在两种语言之间不一致）。API **没有**改 listing 的能力 ——
+      文案与截图只能到 Dashboard 手动改。这条 warning 是**提交前就有的**
+      （6.2.0 的中英文文案长度差得比较多），不影响本次送审
+      → 凭证来源：`~/.config/mcp/mcp.json` → `mcpServers["cws-mcp"].env`
+      （`CWS_CLIENT_ID` / `CWS_CLIENT_SECRET` / `CWS_REFRESH_TOKEN` / `CWS_PUBLISHER_ID`）；
+      日志只打印来源与键名
 
 ## 四之二、全量 e2e 里翻出来的两条**用例**缺陷（产品是对的）
 
