@@ -224,7 +224,25 @@
 **唯一剩下的真缺口**：**站点级默认速度（用户自己设，不是自动记）**。
 竞品都有（iglupo 的 per-site rules、Global Speed 的 URL rules、Pro 的 per-site memory），
 而用户骂的是"**自动**开始 2.1x"这件事本身 —— 那正是我们 6.0.7 砍掉的。
-⚠️ 但它要动"设置页至今零偏好项"这条设计原则，**这是产品决策，等 Jasper 定**。
+
+✅ **Jasper 已拍板（2026-10-23）：不做。**
+原则是「**让用户从默认速度开始，自行调整**」——
+扩展不替用户决定"这个站该多快"，用户在当下自己调。
+**这不是"还没排上"，是定了不做**，后续版本不要重新提起。
+
+**实现上零改动 —— 现状已经就是这样**（已逐条核实）：
+
+| 环节 | 现状 |
+|---|---|
+| 倍速写入 | 只写 `video.playbackRate`（`src/content/playback.ts`），**只在用户按键时**写；接管新视频时不写 |
+| 持久化 | `storage.sync` 只有 `vsc-settings`（按键绑定与主题）；`storage.local` 只有首次引导标记；**没有任何一处存过倍速** |
+| `storage.session` | 存的是"这个标签页当前是几倍速"，**只喂工具栏提示**，不会写回任何视频（`src/background/index.ts` 的 `tabRates`） |
+| 6.0.7 的残留 | `vsc-site-speeds` 仍在启动时清理（`src/shared/settings.ts`） |
+
+**接受的代价**：对 iglupo / Global Speed / Pro 的"按站点记住"这一项，
+我们**明确缺**。⚠️ 别把它写进任何优势清单 ——
+但商店文案里那句「Unlike some extensions that keep your last rate:
+every video starts at 1.0x」是**成立的**，而且正好打的就是这一点。
 
 **因此接下来做什么（顺序有意义）**
 
