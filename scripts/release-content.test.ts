@@ -590,10 +590,10 @@ const extractVersionHistoryBlocks = (doc: string): string[] => {
 };
 
 /** 从 `_locales/<locale>/messages.json` 里取 `__MSG_key__` 对应的文案。 */
-const readLocaleMessage = (description: string): string => {
+const readLocaleMessage = (description: string, locale = 'en'): string => {
   const key = description.slice('__MSG_'.length, -2);
   const messages = JSON.parse(
-    readFileSync(resolve(repoRoot, '_locales', 'en', 'messages.json'), 'utf8'),
+    readFileSync(resolve(repoRoot, '_locales', locale, 'messages.json'), 'utf8'),
   ) as Record<string, { message?: string }>;
   return messages[key]?.message ?? description;
 };
@@ -656,6 +656,41 @@ describe('商店文案：粘贴件不许跑偏', () => {
       [...shortEn].length,
       `英文短描述 ${[...shortEn].length} 字符，超出 CWS 的 ${LIMITS.shortDescription}`,
     ).toBeLessThanOrEqual(LIMITS.shortDescription);
+  });
+
+  it('短描述必须与 manifest 的 description 一致 —— 它随包走，不是 listing 字段', () => {
+    // ⚠️ 这条守的是一个**判断错误**（2026-10-27 在真实 Dashboard 里被推翻）：
+    //
+    //   Dashboard 的商品详情页把短描述标成「软件包中的摘要」，渲染成一个
+    //   **只读段落**（旁边没有输入框）。它的值来自 manifest 的 `description`
+    //   （即 `_locales/*/messages.json` 的 `extensionDescription`）。
+    //
+    //   也就是说：**短描述跟着包走**，Dashboard 里改不了。
+    //   曾以为「线上短描述是旧版、要贴仓库那 115 字符版」——
+    //   线上那份与 `_locales` 一致**本来就是对的**，那不是漂移。
+    //
+    // 这条守卫的作用：以后有人改了 `_locales` 却没意识到「短描述要出新包才生效」，
+    // 或者反过来以为短描述能在 Dashboard 里改 —— 都会在这里被拦住。
+    const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'manifest.json'), 'utf8')) as {
+      description?: string;
+    };
+    expect(manifest.description, 'manifest 的 description 不是 __MSG_ 占位符').toBe(
+      '__MSG_extensionDescription__',
+    );
+
+    const shortZh = files['short-description-zh_CN.txt']!.replace(/\n$/, '');
+    const shortEn = files['short-description-en.txt']!.replace(/\n$/, '');
+
+    expect(
+      readLocaleMessage(manifest.description!, 'zh_CN'),
+      'CHROMEWEBSTORE.md 里的中文短描述与 _locales/zh_CN 的 extensionDescription 不一致 —— ' +
+        '短描述随包发布，两边不一致意味着下一版发出去的文案会和商店页对不上',
+    ).toBe(shortZh);
+
+    expect(
+      readLocaleMessage(manifest.description!, 'en'),
+      'CHROMEWEBSTORE.md 里的英文短描述与 _locales/en 的 extensionDescription 不一致',
+    ).toBe(shortEn);
   });
 
   it('详细描述：中英两份都在 CWS 上限内', () => {

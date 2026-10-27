@@ -1,1 +1,1 @@
-Fullscreen for web video: subtitles follow, clickable speed presets, rebindable keys.
+Minimal keyboard shortcuts and a clean page-fullscreen player that only controls the video you are watching

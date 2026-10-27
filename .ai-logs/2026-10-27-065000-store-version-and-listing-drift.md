@@ -74,32 +74,49 @@ Dashboard 里中英是**两个独立输入框**，而仓库里那一份是中英
 - 新增 `scripts/listing-files.mjs` —— 把 `CHROMEWEBSTORE.md` 拆成
   **四个按 locale 分好的粘贴件**（`store-assets/listing/*.txt`）。
   唯一来源仍是 `CHROMEWEBSTORE.md`；粘贴件由它生成。
+  ⚠️ 后来在真实 Dashboard 里核实：**四个里只有两个真能贴**（两份详细描述）。
+  短描述是只读的「软件包中的摘要」，随包走 —— 见下面第七节。
 - 新增守卫（`scripts/release-content.test.ts` 的「商店文案：粘贴件不许跑偏」）：
   ① 粘贴件与来源逐字一致；② 短描述中英**各自** ≤132
   （只核拼接后的长度会漏掉「英文那半超了」）；③ 详细描述中英**逐段对齐**
   （段落数 + 标题位置 —— `INCONSISTENT_LOCALE_METADATA` 的直接成因）；
-  ④ 粘贴件里没有 markdown 星号。
-  **变异验证过**：改粘贴件一个字 → 红；中英段落数对不上 → 红；复原 → 绿。
+  ④ 粘贴件里没有 markdown 星号；⑤ 短描述必须与 `_locales` 的
+  `extensionDescription` 逐字一致（它随包走，不是 listing 字段）。
+  **变异验证过**：改粘贴件一个字 → 红；改本文件短描述 → 红；
+  两行合成一行 → 直接报「应该是中文一行 + 英文一行」；复原 → 绿。
 - `CHROMEWEBSTORE.md` 补了「2026-10-27 复核」一节（版本四判据 + 文案对照表 +
   两条错误的订正）；`PRODUCT.md` 的商店页实读换成带日期的快照
   （⚠️ 用户数在动：10-23 是 23，10-27 是 21）。
 
-## 六、留给 Jasper 的（API 改不了，只能人工）
+## 六、已提交审核（2026-10-27，经 Jasper 授权代为操作）
 
-见 `store-assets/listing/README.md`：四个粘贴件各自贴进对应的一栏，
-Save → **Publish** 提交审核（**只改文案不需要出新包**，版本号仍是 6.2.0），
-过审后回商店页**逐个 locale 读一遍**核实，再把结果记回
-`CHROMEWEBSTORE.md`。
+Jasper 授权「我替你贴并提交」。在**他自己的 Chrome**（已登录）里完成：
 
-⚠️ 商店条目**一进审核就整体只读** —— 素材（截图/宣传图）与文案要在
-**同一次提交前**补齐，否则就得等这一轮审核结束才能再改。
-截图是 2026-10-22 那一轮重拍的，与当前 UI 一致（`src/options` 在那之后没动过），
-所以这一次不需要重拍。
+| 字段 | 改成了 |
+|---|---|
+| 说明（English） | 5,199 字符，取自 `description-en.txt` |
+| 说明（简体中文） | 1,700 字符，取自 `description-zh_CN.txt` |
+| 类别 | 工具 → **功能与界面** |
+| 首页网址 / 支持信息页面网址 | 本仓库 GitHub / issues |
+
+保存草稿 → 提请审核 → 提交审核（**自动发布已勾选**）。
+
+证据（不靠 UI 提示，靠 API 复核）：
+
+```
+published: {"state":"PUBLISHED","distributionChannels":[{"deployPercentage":100,"crxVersion":"6.2.0"}]}
+submitted: {"state":"PENDING_REVIEW","distributionChannels":[{"deployPercentage":100,"crxVersion":"6.2.0"}]}
+```
+
+⚠️ **「已提交审核」≠「已上线」**。过审后要回商店页**逐个 locale 读一遍**核实，
+再把结果记回 `CHROMEWEBSTORE.md`。
 
 ## 七、这次没做的事（以及为什么）
 
 - **没有上传任何东西到商店** —— 没有新的包；而且版本号闸门也会挡。
-- **没有替 Jasper 点 Dashboard 的 Publish** —— 那是他账号上的对外发布动作，
-  本轮只把「贴什么、贴到哪、怎么贴」准备到位。
 - **没有重发/补发 6.0.9 / 6.1.0** —— 它们从未单独发布过，
   内容已随 6.2.0 一起上线（见 CHANGELOG 头部）。
+- **短描述没动** —— 不是漏了，是**改不了**：Dashboard 里它是只读段落，
+  值来自 `_locales`（现为 zh_CN 32 / en 107）。要换文案只能改 `_locales`
+  + 升版本 + 出新包。此前「短描述漂了、要贴 115 字符版」的判断是**错的**，
+  已在 `CHROMEWEBSTORE.md` 与 `store-assets/listing/README.md` 里订正。

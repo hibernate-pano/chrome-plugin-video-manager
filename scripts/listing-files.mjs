@@ -10,8 +10,8 @@
  *
  * - 2026-10-23 实读：线上中文那份还写着能控制**音频**（与事实相反），
  *   英文那份还写着「4 个快捷键」「跨域 iframe 不可控」；
- * - 2026-10-27 实读：连**短描述**都还是旧的（`_locales` 里的那一版），
- *   仓库里 2026-10-20 改写过的 115 字符新版**从未贴过**。
+ * - 2026-10-27 实读：短描述看似「没贴过新版」，其实**它根本没有输入框** ——
+ *   Dashboard 标成「软件包中的摘要」，只读，取自 `_locales`。线上与包内一致就是对的。
  *
  * 也就是说：漂的不是「文案写错了」，而是「**贴的那一下**没有闸门」。
  * 这个脚本把「拆」这一步从**手工**变成**脚本产出**：
@@ -34,10 +34,10 @@ const root = resolve(__dirname, '..');
 export const SOURCE_DOC = resolve(root, 'CHROMEWEBSTORE.md');
 export const OUT_DIR = resolve(root, 'store-assets/listing');
 
-/** 粘贴件的文件名 → 这个文件该贴到 Dashboard 的哪一栏。 */
+/** 粘贴件的文件名 → 这个文件该贴到 Dashboard 的哪一栏（贴不了的写明为什么）。 */
 export const FILES = {
-  'short-description-zh_CN.txt': 'Short Description（zh_CN 那一栏）',
-  'short-description-en.txt': 'Short Description（en 那一栏）',
+  'short-description-zh_CN.txt': '⛔ 贴不了 —— 只读的「软件包中的摘要」，随 _locales 走',
+  'short-description-en.txt': '⛔ 贴不了 —— 只读的「软件包中的摘要」，随 _locales 走',
   'description-zh_CN.txt': 'Detailed Description（zh_CN 那一栏）',
   'description-en.txt': 'Detailed Description（en 那一栏）',
 };
@@ -109,13 +109,22 @@ const fieldValue = (lines, label) => {
 };
 
 /**
- * 短描述是「中英拼在一行」的（自检按「中英拼接后一起算」计数）。
- * 拆成两半：中文到第一个句号为止，剩下是英文。
+ * 短描述是「中文一行、英文一行」并列写的（Dashboard 里也是两个独立的值，
+ * 各自 ≤132 字符）。
+ *
+ * ⚠️ 不要按句号拆：中文那句**不以句号结尾**（`extensionDescription` 里就是没有），
+ * 按标点猜边界会拆错 —— 2026-10-27 踩过，拆出来的英文是空的。
+ * 按行拆是确定的：第一行中文，第二行英文。
  */
 const splitShortDescription = (text) => {
-  const stop = text.indexOf('。');
-  if (stop < 0) return { zh: text, en: '' };
-  return { zh: text.slice(0, stop + 1), en: text.slice(stop + 1).trim() };
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (lines.length !== 2) {
+    throw new Error(
+      `短描述应该是「中文一行 + 英文一行」，实际是 ${lines.length} 行：\n${text}\n` +
+        '（两行各对应 Dashboard 里的一个独立值，不能合成一行）',
+    );
+  }
+  return { zh: lines[0], en: lines[1] };
 };
 
 /** 详细描述用单独一行 `---` 分隔中英两段。 */
