@@ -30,6 +30,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { resolve } from 'node:path';
 import { SHORTCUT_DEFINITIONS } from '../src/shared/types';
+import { FILES, LIMITS, buildFiles, checkFiles } from './listing-files.mjs';
 
 const repoRoot = process.cwd();
 
@@ -596,3 +597,128 @@ const readLocaleMessage = (description: string): string => {
   ) as Record<string, { message?: string }>;
   return messages[key]?.message ?? description;
 };
+
+/**
+ * 商店文案：**按 locale 拆好的粘贴件**不许与唯一来源跑偏。
+ *
+ * ## 这一组守的是什么
+ *
+ * 商店文案只能人工去 Dashboard 粘贴（CWS API 没有 metadata 字段），
+ * 而 Dashboard 里 zh_CN 与 en 是**两个独立的输入框**。
+ * 于是「先拼在一份文档里、粘贴时再拆开」这一步天然会出错 ——
+ * 而且**贴错了没有任何东西会拦**：
+ *
+ * - 2026-10-23 实读：线上中文那份还写着能控制**音频**（与事实相反），
+ *   英文那份还写着「4 个快捷键」「跨域 iframe 不可控」；
+ * - 2026-10-27 实读：连**短描述**都还是 `_locales` 里的旧版，
+ *   仓库里 2026-10-20 改写过的 115 字符新版**从未贴过**。
+ *
+ * 漂的不是「文案写错了」，是「**贴的那一下**没有闸门」。
+ * 所以把「拆」变成脚本产出（`scripts/listing-files.mjs`），
+ * 这一组守的是「粘贴件 == CHROMEWEBSTORE.md」以及两份粘贴件本身的合法性。
+ *
+ * ⚠️ 它**不能**证明线上那份是对的 —— 线上那份是 Dashboard 里的副本，
+ * 任何守卫都看不见它。贴完仍然要人逐字核（见 CHROMEWEBSTORE.md 的
+ * 「商店页要改的完整清单」）。
+ */
+describe('商店文案：粘贴件不许跑偏', () => {
+  const storeDoc = readFileSync(resolve(repoRoot, 'CHROMEWEBSTORE.md'), 'utf8');
+  const files = buildFiles(storeDoc);
+
+  it('四个粘贴件都在，且与 CHROMEWEBSTORE.md 逐字一致', () => {
+    expect(
+      Object.keys(files).sort(),
+      '粘贴件的文件名变了 —— 守卫与生成脚本对不上，先把它们对齐',
+    ).toEqual(Object.keys(FILES).sort());
+
+    const drift = checkFiles(files);
+    expect(
+      drift,
+      `粘贴件与 CHROMEWEBSTORE.md 已经跑偏：\n${drift.join('\n')}\n` +
+        '跑 `node scripts/listing-files.mjs` 重新生成。',
+    ).toEqual([]);
+  });
+
+  it('短描述：中英两半各自都在 CWS 上限内', () => {
+    // 上限 132 字符，**每个 locale 各算各的**。
+    // 文档里那一栏是中英拼在一起的（自检按「中英拼接后一起算」计数），
+    // 所以两半都得单独核 —— 只核拼接后的长度会漏掉「英文那半超了」这种。
+    const shortZh = files['short-description-zh_CN.txt']!.replace(/\n$/, '');
+    const shortEn = files['short-description-en.txt']!.replace(/\n$/, '');
+
+    expect(shortZh.length, '中文短描述是空的').toBeGreaterThan(0);
+    expect(shortEn.length, '英文短描述是空的').toBeGreaterThan(0);
+    expect(
+      [...shortZh].length,
+      `中文短描述 ${[...shortZh].length} 字符，超出 CWS 的 ${LIMITS.shortDescription}`,
+    ).toBeLessThanOrEqual(LIMITS.shortDescription);
+    expect(
+      [...shortEn].length,
+      `英文短描述 ${[...shortEn].length} 字符，超出 CWS 的 ${LIMITS.shortDescription}`,
+    ).toBeLessThanOrEqual(LIMITS.shortDescription);
+  });
+
+  it('详细描述：中英两份都在 CWS 上限内', () => {
+    const zh = files['description-zh_CN.txt']!.replace(/\n$/, '');
+    const en = files['description-en.txt']!.replace(/\n$/, '');
+
+    expect([...zh].length).toBeLessThanOrEqual(LIMITS.detailedDescription);
+    expect([...en].length).toBeLessThanOrEqual(LIMITS.detailedDescription);
+  });
+
+  it('详细描述：中英两份逐段对齐（段落数相同、标题一一对应）', () => {
+    // 这是 `INCONSISTENT_LOCALE_METADATA` 警告的直接成因 ——
+    // 6.0.6 / 6.0.8 / 6.2.0 三次发布都带它。
+    //
+    // 「看起来对齐」不算对齐：这里比的是**结构**（段落数 + 标题位置），
+    // 内容语义仍然要人读一遍（CHROMEWEBSTORE.md 里记着上一轮就有一处
+    // 「中文多了一个分句、英文没有」是这么漏出来的）。
+    const zhBlocks = files['description-zh_CN.txt']!.replace(/\n$/, '').split('\n\n');
+    const enBlocks = files['description-en.txt']!.replace(/\n$/, '').split('\n\n');
+
+    expect(
+      zhBlocks.length,
+      `中英段落数不同：中文 ${zhBlocks.length} 段，英文 ${enBlocks.length} 段`,
+    ).toBe(enBlocks.length);
+
+    // 标题 = 块里的短行（下面紧跟正文的那种），例如「主要功能」/「What it does」。
+    const isHeading = (block: string) => {
+      const lines = block.split('\n');
+      return lines.length > 1 && lines[0]!.trim().length < 20;
+    };
+
+    const mismatches: string[] = [];
+    zhBlocks.forEach((zhBlock, index) => {
+      const enBlock = enBlocks[index] ?? '';
+      if (isHeading(zhBlock) !== isHeading(enBlock)) {
+        mismatches.push(
+          `第 ${index + 1} 段：中文是${isHeading(zhBlock) ? '标题段' : '正文段'}，` +
+            `英文是${isHeading(enBlock) ? '标题段' : '正文段'}\n` +
+            `  中文：${zhBlock.split('\n')[0]!.slice(0, 40)}\n` +
+            `  英文：${enBlock.split('\n')[0]?.slice(0, 40) ?? '(缺)'}`,
+        );
+      }
+    });
+
+    expect(
+      mismatches,
+      `中英两份的段落结构对不上：\n${mismatches.join('\n')}\n` +
+        '这会让 CWS 再报一次 INCONSISTENT_LOCALE_METADATA。',
+    ).toEqual([]);
+  });
+
+  it('粘贴件里没有 markdown 星号（CWS 会剥离 markdown）', () => {
+    // 这一栏是**手工粘贴**的，没有 CI 参与 —— 粘贴那一刻没人检查。
+    // 源文档那一份已有守卫（见上面「要贴进商店的正文里没有 markdown 星号」），
+    // 这里守的是**拆分之后**的那一份：拆分有可能把注释里的标记带进来。
+    const offenders = Object.entries(files)
+      .filter(([, content]) => content.includes('**'))
+      .map(([name]) => name);
+
+    expect(
+      offenders,
+      `这些粘贴件里出现了 markdown 星号：\n${offenders.join('\n')}\n` +
+        'CWS 会剥离 markdown —— 用户会看到字面的星号。',
+    ).toEqual([]);
+  });
+});

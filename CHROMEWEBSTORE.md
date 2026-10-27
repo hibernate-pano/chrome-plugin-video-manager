@@ -880,12 +880,74 @@ upload / fetchStatus / publish / cancelSubmission），所以只能人工在 Das
 
 ### 发布后仍要人来点的（Dashboard 内操作，API 改不了）
 
-- [ ] 把本文件 **Detailed Description** 的中文段与英文段分别贴进
-      Dashboard 的 zh_CN 与 en 详情（**两段都要**，并逐段核一遍）
+- [ ] 把 `store-assets/listing/` 下的**四个粘贴件**分别贴进 Dashboard 的
+      zh_CN 与 en 两栏（**四个都要**，并逐段核一遍）——
+      拆分的规矩见 `store-assets/listing/README.md`，
+      ⚠️ **不要从本文件里手挑段落**（中英拼在一起，手拆就是历次漂移的源头）
 - [ ] 核对 Extension Name 显示为 `Video Speed Controller — Fullscreen & Keys`
       （与 `manifest.json` 的 `name` 一致，实测 42 字符 —— 已核对）
+- [ ] Category：`Tools` → `Functionality & UI`
 - [ ] Support URL → <https://github.com/hibernate-pano/chrome-plugin-video-manager/issues>
 - [ ] Homepage URL → <https://github.com/hibernate-pano/chrome-plugin-video-manager>
+
+---
+
+## 2026-10-27 复核：版本一致，**但文案仍然漂着**（连短描述也漂了）
+
+> 起因：被问「云端的商店版本和当前版本一致吗？有没有需要更新的内容？」
+> 查完的结论是 —— **版本完全一致，代码侧没有任何待发的东西；
+> 真正需要更新的是商店页文案，而且其中三个字段 API 改不了，只能人工在 Dashboard 改。**
+>
+> 下面是**今天实读**的结果（逐个 locale 读的：`?hl=zh_CN` 与 `?hl=en` 两个页面都抓了）。
+
+### 一、版本：一致，且**没有待发的新包** ⇒ 不需要提审
+
+| 判据 | 实读结果 |
+|---|---|
+| 商店公开页 | `Version 6.2.0` · `Updated October 23, 2026` · `87.83KiB` |
+| v2 API `fetchStatus` | `publishedItemRevisionStatus = { state: PUBLISHED, deployPercentage: 100, crxVersion: 6.2.0 }`；**没有** `submittedItemRevisionStatus` ⇒ **无待审版本**，发布窗口干净 |
+| 仓库 | `manifest.json` / `package.json` 都是 `6.2.0` |
+| **产物比对**（决定性） | 重新 `pnpm build` 出来的 14 个文件，与 `release/video-speed-controller-v6.2.0.zip` **逐字节一致** |
+
+最后一行是决定性的：**6.2.0 之后仓库里没有任何产品代码变更** ——
+那几个 commit 只给常量加了 `export` 供测试引用，外加注释订正，打包后字节相同。
+
+所以：
+
+- ✅ **不需要提审** —— 没有新的包可发；
+- ⛔ 而且**提不了**：`scripts/store-publish.mjs` 的版本号闸门要求包版本
+  **严格高于**线上版本，同为 6.2.0 会被直接拒掉。
+  要硬发只能造一个 6.2.1 的空版本 —— 白白消耗一次审核周期，版本号还会失真。
+- ✅ 发布闸门本身是好的：`npx vitest run scripts/` **5 文件 / 78 条全绿**
+  （含版本号一致性与商店文案漂移两组守卫）。
+
+### 二、要更新的是商店文案：**4 个字段，其中 3 个只能人工改**
+
+| 字段 | 线上实读（2026-10-27） | 仓库里该是多少 | 能不能用 API 改 |
+|---|---|---|---|
+| Detailed Description（中） | 「Video & Audio Speed Controller 是一款…控制网页上任何视频和**音频**的播放速度」「适用于所有HTML5视频和音频元素」「自定义播放速度范围」，全文没提网页全屏 | `store-assets/listing/description-zh_CN.txt` | ❌ 只能 Dashboard |
+| Detailed Description（英） | `Customize four shortcuts`（实为 7 个动作）、`Hot-reload updated shortcuts`、`Cross-origin iframe videos may not be directly controllable`（6.1.0 起完全支持） | `store-assets/listing/description-en.txt` | ❌ 只能 Dashboard |
+| **Short Description（中/英）** | `极简的键盘快捷键与干净的网页全屏播放器，只控制你正在看的那个视频` / `Minimal keyboard shortcuts and a clean page-fullscreen player…` —— **这是 `_locales` 里的那一版** | `store-assets/listing/short-description-{zh_CN,en}.txt`（2026-10-20 改写的 115 字符版，**从未贴过**） | ❌ 只能 Dashboard |
+| **Category** | `Tools` | `Functionality & UI`（竞品榜首在那个分类；商店排序吃分类与评分） | ❌ 只能 Dashboard |
+
+> ⚠️ **下面那条「Short Description 不需要改」是错的**（2026-10-27 订正）：
+> 它把两件不同的东西当成了一件 —— 线上那份**是**与 `messages.json` 一致
+> （zh 32 字符 / en 107 字符），但仓库 `CHROMEWEBSTORE.md` 里写的那一栏
+> 是 2026-10-20 改写过的 115 字符版，**两者不是同一份**，
+> 而那一版**从未贴进 Dashboard**。要贴的是仓库那一版。
+
+> ⚠️ 商店页实读的其他数字（2026-10-27）：`21 users` / `0 out of 5` / `No ratings`
+> （10-23 那次读到的是 23 users —— 用户数会浮动）· `2 languages` · `Tools` 分类。
+
+### 三、怎么改：粘贴件已经备好了
+
+`CHROMEWEBSTORE.md` 是唯一来源；`store-assets/listing/` 下有四个**按 locale 拆好的粘贴件**
+（由 `scripts/listing-files.mjs` 生成，`scripts/release-content.test.ts` 盯着它们不跑偏）。
+每个文件整体复制到 Dashboard 对应的一栏里，一个字都不要改 ——
+**Dashboard 里中英是两个独立输入框，手工拆这一步正是历次漂移的源头。**
+
+步骤见 `store-assets/listing/README.md`。要点：改文案**不需要出新包**，
+在 Dashboard 里 Save → **Publish** 提交审核即可，版本号仍是 6.2.0。
 
 ---
 
@@ -974,27 +1036,43 @@ Video & Audio Speed Controller 是一款简单易用的浏览器扩展，让您�
 这一条已经发生过一次（「6.0.9 与 6.1.0 从未单独发布过」是版本问题，
 这一条是**文案从来没贴过**的问题，两者后果一样：商店上摆着的不等于我们做的东西）。
 
-### 商店页要改的完整清单（2026-10-23 竞品分析后追加）
+### 商店页要改的完整清单（2026-10-23 竞品分析后追加；2026-10-27 订正）
 
 > 背景与数据见仓库根目录 `DEEP_RESEARCH_CHROME_STORE_COMPETITORS.md`。
 > 那一节把商店页的每个可改字段都对照了一遍，下面是结论。
+>
+> ⚠️ **2026-10-27 订正**：这一节原来写着「Short Description 不需要改」——
+> 那句把两件不同的东西当成了一件。线上那份**确实**与 `messages.json` 一致
+> （zh 32 字符 / en 107 字符），但本文件里那一栏是 **2026-10-20 改写过的
+> 115 字符版**，两者不是同一份，而那一版**从未贴进 Dashboard**。
+> ⇒ 短描述**也要换**，换成这一版（见上面「2026-10-27 复核」那一节的对照表）。
 
-- [ ] **Description 字段（英文）**：把本文件 Detailed Description 的英文段贴进去，替换掉上面那段旧英文
-- [ ] **Description 字段（中文）**：把中文段贴进去。⚠️ **这一份漂得更远** ——
+- [ ] **Description 字段（英文）**：把 `store-assets/listing/description-en.txt` 贴进去，
+      替换掉上面那段旧英文
+- [ ] **Description 字段（中文）**：把 `store-assets/listing/description-zh_CN.txt` 贴进去。
+      ⚠️ **这一份漂得更远** ——
       它现在还写着「适用于所有 HTML5 视频和**音频**元素」（我们不控制音频）、
       自报名还是旧名 `Video & Audio Speed Controller`、宣称有「自定义播放速度范围」（已砍掉），
       而且**一个字没提网页全屏**。**两份都要换，只换英文那份不算改完。**
 - [ ] **Category**：`Tools` → **`Functionality & UI`**（竞品榜首在这个分类；
       商店排序吃分类与评分 —— Chrome 官方文档：「ranked based on a number of criteria」，
       含 "ratings from users as well as usage statistics"）
-- [ ] **Short Description**：中英**都已**是当前版本（115 字符 / 与 `messages.json` 一致），**不需要改**
+- [ ] **Short Description（中/英）**：贴 `store-assets/listing/short-description-zh_CN.txt`
+      与 `store-assets/listing/short-description-en.txt`。
+      ⚠️ 线上还是 `_locales` 里的旧版（2026-10-27 实读）
+- [ ] **Single Purpose / Support URL / Homepage URL**：在 Dashboard 里核一遍 ——
+      本文件 Store Listing 一节里有值（Support URL → GitHub issues，
+      Homepage URL → GitHub 仓库）
 - [ ] **向现有用户请求评分**（详见下节，这是排序信号的唯一来源）
 - [ ] **取 Dashboard 的展示量 → 安装转化率**（零开发，最优先）
 
-### 关于「0 评分」这件事（2026-10-23 实读）
+### 关于「0 评分」这件事（2026-10-23 实读；2026-10-27 复核）
 
-**我们商店页今天显示的是 `23 users` / `0 out of 5` / `No ratings`**（领衔代理用真实浏览器直读，
+**我们商店页显示的是 `0 out of 5` / `No ratings`**（领衔代理用真实浏览器直读，
 与 shields.io 第三方镜像一致）。同一屏的竞品卡片写着 4.0 / 4.7 / 4.8 / 4.7。
+
+⚠️ 用户数在动：10-23 实读 `23 users`，10-27 实读 `21 users` ——
+**引用这个数字时必须带日期**，别拿它当常量。
 
 更糟的一条：**我们商店页底部的 "You might also like…" 推荐的正是这四个竞品**
 （Video Speed Controller 300 万用户 / Video Speed Controller – Playback Speed for Any Video /
