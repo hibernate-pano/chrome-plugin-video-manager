@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { FullscreenControls, formatTime } from './fullscreenControls';
 import { resetExtensionDom } from './testDom';
 
@@ -130,13 +130,13 @@ describe('formatTime', () => {
 
 describe('FullscreenControls', () => {
   let video: MockVideo;
-  let onExit: ReturnType<typeof vi.fn>;
+  let onExit: Mock<() => void>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     resetExtensionDom();
     video = createMockVideo();
-    onExit = vi.fn();
+    onExit = vi.fn<() => void>();
   });
 
   afterEach(() => {

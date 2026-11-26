@@ -88,7 +88,7 @@ const createSendMessageStub = (
   messageListeners: MessageListener[],
   owners: OwnerAnswers = {},
   onMissingFrame?: (frameId: number) => void,
-): Mock<any[]> => {
+): Mock => {
   /** 第一次广播的时刻 —— 各 frame 的「能回答的时刻」以它为原点。 */
   let firstAskAt = 0;
 
@@ -130,7 +130,7 @@ const createSendMessageStub = (
       onMissingFrame(frameOptions.frameId);
     }
     done?.();
-  }) as unknown as Mock<any[]>;
+  }) as unknown as Mock;
 };
 
 /**
@@ -144,7 +144,7 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe('background action click', () => {
   const stubChrome = (
     clickListeners: ClickListener[],
-    sendMessage: Mock<any[]>,
+    sendMessage: Mock,
     messageListeners: MessageListener[] = [],
     storage = createStorageStub(),
   ) => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { KeyboardController } from './keyboardController';
 import { publishAmbientPreview } from './ambientPreview';
 import {
@@ -110,9 +110,9 @@ describe('KeyboardController', () => {
   let video: HTMLVideoElement | null;
   let toggleFullscreen: (video: HTMLVideoElement | null) => boolean;
   let canToggleFullscreen: (video: HTMLVideoElement | null) => boolean;
-  let exitFullscreen: ReturnType<typeof vi.fn>;
-  let showSpeedFeedback: ReturnType<typeof vi.fn>;
-  let notifyTakeoverUnavailable: ReturnType<typeof vi.fn>;
+  let exitFullscreen: Mock<() => void>;
+  let showSpeedFeedback: Mock<(rate: number, video: HTMLVideoElement) => void>;
+  let notifyTakeoverUnavailable: Mock<(video: HTMLVideoElement | null) => void>;
   let lastToggledVideo: HTMLVideoElement | null | undefined;
   let controller: KeyboardController;
 
@@ -146,9 +146,9 @@ describe('KeyboardController', () => {
       return true;
     };
     canToggleFullscreen = () => true;
-    exitFullscreen = vi.fn();
-    showSpeedFeedback = vi.fn();
-    notifyTakeoverUnavailable = vi.fn();
+    exitFullscreen = vi.fn<() => void>();
+    showSpeedFeedback = vi.fn<(rate: number, video: HTMLVideoElement) => void>();
+    notifyTakeoverUnavailable = vi.fn<(video: HTMLVideoElement | null) => void>();
     createController();
   });
 
@@ -1274,12 +1274,12 @@ describe('KeyboardController', () => {
    * 键盘控制器只负责说「发生了什么」，文案由运行时决定。
    */
   describe('动作语义的回报', () => {
-    let onPlaybackStateChange: ReturnType<typeof vi.fn>;
-    let onSeek: ReturnType<typeof vi.fn>;
+    let onPlaybackStateChange: Mock<(playing: boolean) => void>;
+    let onSeek: Mock<(positionSeconds: number, deltaSeconds: number, direction: 'forward' | 'back') => void>;
 
     const useReportingController = () => {
-      onPlaybackStateChange = vi.fn();
-      onSeek = vi.fn();
+      onPlaybackStateChange = vi.fn<(playing: boolean) => void>();
+      onSeek = vi.fn<(positionSeconds: number, deltaSeconds: number, direction: 'forward' | 'back') => void>();
       controller = new KeyboardController({
         getSettings: () => settings,
         getWatchedTarget: () => (video ? { video, permission: 'full' } : null),
