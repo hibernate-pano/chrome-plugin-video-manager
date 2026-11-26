@@ -46,19 +46,19 @@ Video Speed Controller — Fullscreen & Keys
 > 详见文末「改名执行清单」。
 
 **Short Description** [REQUIRED]
-<!-- Max 132 characters. Shown in search results and tiles. Be specific about function. -->
+<!-- Max 132 characters. Shown in search results and tiles. Be specific about function.
+     ⚠️ 这一栏**在 Dashboard 里改不了** —— 它是「软件包中的摘要」，只读，
+     值来自 manifest 的 description（_locales/*/messages.json 的 extensionDescription）。
+     所以这里写的必须与 _locales 那两个值**逐字一致**，守卫盯着（见下）。 -->
 
-网页视频一键全屏，字幕跟着走；倍速档位可点选，快捷键可改绑。Fullscreen for web video: subtitles follow, clickable speed presets, rebindable keys.
+极简的键盘快捷键与干净的网页全屏播放器，只控制你正在看的那个视频
+Minimal keyboard shortcuts and a clean page-fullscreen player that only controls the video you are watching
 
-<!-- 实测 115 字符（上限 132）。2026-10-20 改写。
-     为什么改：旧文案只说了「控制条自动隐藏」，而 6.0.9 最有辨识度的三件事
-     ——字幕跟着视频走、倍速能点档位、只接管你正在看的那个视频——一件都没出现。
-     商店搜索结果里能看到的只有这一句，写什么就等于承诺什么。
-     为什么是这 115 个字符：把它留给「字幕跟着走」+「倍速可点档位」，
-     因为这两条是 6.0.9 真正的差异点，也最容易让人误以为做不到；
-     「只接管你正在看的视频」信息量足但太长（加上就超 132），留到详细描述里讲。
-     「控制条自动隐藏」相对弱，且详细描述里有，不占这里的名额。
-     实测命令见文件末尾的「提交前自检」。 -->
+<!-- 这是**当前随包发布的真实值**（zh 32 字符 / en 107 字符，各自都在 132 以内）。
+     2026-10-27 订正：这一栏原先写的是 2026-10-20 改写过的 115 字符版
+     —— 但那一版**从未进过包**，也进不了 Dashboard（短描述没有输入框）。
+     换言之它只是一份纸面文案，而真正的短描述一直跟着 manifest 走。
+     现在把两处对齐到真实值；想换短描述 = 改 _locales + 升版本 + 出新包。 -->
 
 **Detailed Description** [REQUIRED]
 <!-- Max 16,000 characters. CWS 会剥离 markdown，所以用换行而不是 bullet 语法。
@@ -616,14 +616,9 @@ changed while you were in it.
 改文案或素材前先跑一遍，避免又出现「本地过、商店挂」：
 
 ```bash
-# 短描述字符数（上限 132，中英拼接后一起算）
-python3 - <<'PY'
-import re
-s = open('CHROMEWEBSTORE.md', encoding='utf8').read()
-# 注意用 [^\n]+ 而不是 .+ ：后者配 re.S 会贪婪地吞掉整个文件，算出几万字符
-m = re.search(r'\*\*Short Description\*\*[^\n]*\n(?:<!--.*?-->\n)?\s*\n([^\n]+)', s, re.S)
-print('短描述字符数:', len(m.group(1).strip()))
-PY
+# 文案字符数（短描述上限 132 **每个 locale 各算一次**，详细描述上限 16000）
+# 不要手写正则去数：这个脚本自己解析本文件、按 locale 拆开、逐个报字符数。
+node scripts/listing-files.mjs --check
 
 # 素材尺寸（截图必须 1280x800 或 640x400；promo tile 必须 440x280）
 pnpm icons && pnpm store:assets
@@ -633,7 +628,10 @@ pnpm icons && pnpm store:assets
 grep -n "any" scripts/generate-store-assets.mjs scripts/render-icons.mjs
 ```
 
-- [x] 短描述 ≤ 132 字符 —— **实测 115**（2026-10-20）
+- [x] 短描述 ≤ 132 字符（**每个 locale 各自算**）—— 实测 zh_CN 32 / en 107（2026-10-27）。
+      ⚠️ 这两个数就是**包内**的值（`_locales/*/messages.json`），Dashboard 里改不了；
+      2026-10-20 那版 115 字符是**中英拼成一行的单串**，从没进过 `_locales`，别照抄。
+
 - [x] 详细描述不含实现细节（API / 库 / 框架 / 代码模式）
 - [x] 详细描述不罗列站点名清单（keyword spam）
 - [x] 不出现绝对化表述（「支持所有网站」「无广告」）—— 6.0.9 起 Single Purpose
@@ -880,12 +878,93 @@ upload / fetchStatus / publish / cancelSubmission），所以只能人工在 Das
 
 ### 发布后仍要人来点的（Dashboard 内操作，API 改不了）
 
-- [ ] 把本文件 **Detailed Description** 的中文段与英文段分别贴进
-      Dashboard 的 zh_CN 与 en 详情（**两段都要**，并逐段核一遍）
+- [ ] 把 `store-assets/listing/` 下的**四个粘贴件**分别贴进 Dashboard 的
+      zh_CN 与 en 两栏（**四个都要**，并逐段核一遍）——
+      拆分的规矩见 `store-assets/listing/README.md`，
+      ⚠️ **不要从本文件里手挑段落**（中英拼在一起，手拆就是历次漂移的源头）
 - [ ] 核对 Extension Name 显示为 `Video Speed Controller — Fullscreen & Keys`
       （与 `manifest.json` 的 `name` 一致，实测 42 字符 —— 已核对）
+- [ ] Category：`Tools` → `Functionality & UI`
 - [ ] Support URL → <https://github.com/hibernate-pano/chrome-plugin-video-manager/issues>
 - [ ] Homepage URL → <https://github.com/hibernate-pano/chrome-plugin-video-manager>
+
+---
+
+## 2026-10-27 复核：版本一致，文案已送审（短描述不是 listing 字段）
+
+> 起因：被问「云端的商店版本和当前版本一致吗？有没有需要更新的内容？」
+> 查完的结论是 —— **版本完全一致，代码侧没有任何待发的东西；
+> 真正需要更新的是商店页文案，而且其中三个字段 API 改不了，只能人工在 Dashboard 改。**
+>
+> 下面是**今天实读**的结果（逐个 locale 读的：`?hl=zh_CN` 与 `?hl=en` 两个页面都抓了）。
+
+### 一、版本：一致，且**没有待发的新包** ⇒ 不需要提审
+
+| 判据 | 实读结果 |
+|---|---|
+| 商店公开页 | `Version 6.2.0` · `Updated October 23, 2026` · `87.83KiB` |
+| v2 API `fetchStatus` | `publishedItemRevisionStatus = { state: PUBLISHED, deployPercentage: 100, crxVersion: 6.2.0 }`；**没有** `submittedItemRevisionStatus` ⇒ **无待审版本**，发布窗口干净 |
+| 仓库 | `manifest.json` / `package.json` 都是 `6.2.0` |
+| **产物比对**（决定性） | 重新 `pnpm build` 出来的 14 个文件，与 `release/video-speed-controller-v6.2.0.zip` **逐字节一致** |
+
+最后一行是决定性的：**6.2.0 之后仓库里没有任何产品代码变更** ——
+那几个 commit 只给常量加了 `export` 供测试引用，外加注释订正，打包后字节相同。
+
+所以：
+
+- ✅ **不需要提审** —— 没有新的包可发；
+- ⛔ 而且**提不了**：`scripts/store-publish.mjs` 的版本号闸门要求包版本
+  **严格高于**线上版本，同为 6.2.0 会被直接拒掉。
+  要硬发只能造一个 6.2.1 的空版本 —— 白白消耗一次审核周期，版本号还会失真。
+- ✅ 发布闸门本身是好的：`npx vitest run scripts/` **5 文件 / 78 条全绿**
+  （含版本号一致性与商店文案漂移两组守卫）。
+
+### 二、要更新的商店文案：**3 个字段能改，短描述改不了**
+
+> ⚠️ **2026-10-27 订正（重要）**：这一节最初写着「短描述也漂了，要贴仓库那版」——
+> **那是错的，已在真实 Dashboard 里核实推翻。**
+>
+> Dashboard 的「商品详情」页把短描述标成 **「软件包中的摘要」**，
+> 渲染成一个只读 `<p>`（**旁边没有输入框**），值来自 `manifest.json` 的
+> `description`（即 `_locales/*/messages.json` 的 `extensionDescription`）。
+> 也就是说：**短描述根本不是 listing 字段，它跟着包走** ——
+> 要改它只能出新包（改 `_locales` + 升版本号 + 重新提审）。
+>
+> 所以线上短描述与 `_locales` 一致**本来就是对的**，那不是漂移。
+> 仓库里 2026-10-20 改写的那 115 字符版是**中英拼成一行的单串**，本身就不能进
+> `_locales`；6.2.0 的包用的是另写的一版（zh 32 / en 107）。
+
+| 字段 | 线上实读（2026-10-27 改前） | 改成 | 能不能用 API 改 |
+|---|---|---|---|
+| Detailed Description（中） | 「Video & Audio Speed Controller 是一款…控制网页上任何视频和**音频**的播放速度」「适用于所有HTML5视频和音频元素」「自定义播放速度范围」，全文没提网页全屏（235 字符） | `description-zh_CN.txt`（1,700 字符） | ❌ 只能 Dashboard |
+| Detailed Description（英） | `Customize four shortcuts`（实为 7 个动作）、`Hot-reload updated shortcuts`、`Cross-origin iframe videos may not be directly controllable`（6.1.0 起完全支持）（640 字符） | `description-en.txt`（5,199 字符） | ❌ 只能 Dashboard |
+| **Category** | `工具`（Tools） | `功能与界面`（Functionality & UI） | ❌ 只能 Dashboard |
+| 首页网址 / 支持信息页面网址 | **两个都是空的** | GitHub 仓库 / GitHub issues | ❌ 只能 Dashboard |
+| ~~Short Description~~ | 与 `_locales` 一致 | **改不了** —— 「软件包中的摘要」，只读，随包走 | ⛔ 不是 listing 字段 |
+
+> ⚠️ 商店页实读的其他数字（2026-10-27）：`21 users` / `0 out of 5` / `No ratings`
+> （10-23 那次读到的是 23 users —— 用户数会浮动）· `2 languages` · `工具` 分类。
+
+### 三、✅ 已提交审核（2026-10-27）
+
+四处改动**已通过 Dashboard 提交送审**（在 Jasper 本人的 Chrome 里操作的，
+listet 一次提交、一次审核）。证据：
+
+| 判据 | 结果 |
+|---|---|
+| Dashboard 回执 | 弹窗「**已将您的扩展程序提交送审**」 |
+| v2 API `fetchStatus` | `submittedItemRevisionStatus = { state: **PENDING_REVIEW**, deployPercentage: 100, crxVersion: 6.2.0 }`（提交前该字段**不存在**） |
+| `publishedItemRevisionStatus` | 仍是 `{ state: PUBLISHED, deployPercentage: 100, crxVersion: 6.2.0 }` —— **线上版本没变**，这次只动 listing |
+| 提交时勾选 | 「审核通过后自动发布它」✅ |
+
+⚠️ **「已提交审核」≠「已上线」**。审核通过前，商店公开页显示的仍是旧文案。
+过审后要**逐个 locale 重读商店页**核实，再把结果记到这一节下面 ——
+这才是「文案真的换了」的唯一证据。
+
+`store-assets/listing/` 下那四个按 locale 拆好的粘贴件仍保留：
+它们是**下一次**要贴时的来源（也提醒着当年是怎么漂的）。
+生成/校验：`node scripts/listing-files.mjs [--check]`，
+`scripts/release-content.test.ts` 盯着它们不跑偏。
 
 ---
 
@@ -974,27 +1053,46 @@ Video & Audio Speed Controller 是一款简单易用的浏览器扩展，让您�
 这一条已经发生过一次（「6.0.9 与 6.1.0 从未单独发布过」是版本问题，
 这一条是**文案从来没贴过**的问题，两者后果一样：商店上摆着的不等于我们做的东西）。
 
-### 商店页要改的完整清单（2026-10-23 竞品分析后追加）
+### 商店页要改的完整清单（2026-10-23 竞品分析后追加；2026-10-27 订正）
 
 > 背景与数据见仓库根目录 `DEEP_RESEARCH_CHROME_STORE_COMPETITORS.md`。
 > 那一节把商店页的每个可改字段都对照了一遍，下面是结论。
+>
+> ⚠️ **2026-10-27 订正**：这一节原来写着「Short Description 不需要改」，
+> 后来又改成「短描述也要换，换成 2026-10-20 那版 115 字符」——**两次都错**。
+> Dashboard 里短描述叫「软件包中的摘要」，是个**只读段落**，
+> 值来自 `manifest.json` 的 `description` → `_locales/*/messages.json` 的
+> `extensionDescription`（现为 zh_CN 32 / en 107，6.2.0 起的包）。
+> ⇒ 短描述**在这一栏里改不了**：它随包走，要改只能改 `_locales` + 升版本 + 出新包。
+> 那版 115 字符是**中英拼成一行的单串**，本身也不符合「每个 locale 各一个值」，
+> 从未进过 `_locales`，今后也别照抄 —— 要用它的内容，必须按 locale 拆开写进 `_locales`。
 
-- [ ] **Description 字段（英文）**：把本文件 Detailed Description 的英文段贴进去，替换掉上面那段旧英文
-- [ ] **Description 字段（中文）**：把中文段贴进去。⚠️ **这一份漂得更远** ——
+- [ ] **Description 字段（英文）**：把 `store-assets/listing/description-en.txt` 贴进去，
+      替换掉上面那段旧英文
+- [ ] **Description 字段（中文）**：把 `store-assets/listing/description-zh_CN.txt` 贴进去。
+      ⚠️ **这一份漂得更远** ——
       它现在还写着「适用于所有 HTML5 视频和**音频**元素」（我们不控制音频）、
       自报名还是旧名 `Video & Audio Speed Controller`、宣称有「自定义播放速度范围」（已砍掉），
       而且**一个字没提网页全屏**。**两份都要换，只换英文那份不算改完。**
 - [ ] **Category**：`Tools` → **`Functionality & UI`**（竞品榜首在这个分类；
       商店排序吃分类与评分 —— Chrome 官方文档：「ranked based on a number of criteria」，
       含 "ratings from users as well as usage statistics"）
-- [ ] **Short Description**：中英**都已**是当前版本（115 字符 / 与 `messages.json` 一致），**不需要改**
+- [ ] **Short Description（中/英）**：贴 `store-assets/listing/short-description-zh_CN.txt`
+      与 `store-assets/listing/short-description-en.txt`。
+      ⚠️ 线上还是 `_locales` 里的旧版（2026-10-27 实读）
+- [ ] **Single Purpose / Support URL / Homepage URL**：在 Dashboard 里核一遍 ——
+      本文件 Store Listing 一节里有值（Support URL → GitHub issues，
+      Homepage URL → GitHub 仓库）
 - [ ] **向现有用户请求评分**（详见下节，这是排序信号的唯一来源）
 - [ ] **取 Dashboard 的展示量 → 安装转化率**（零开发，最优先）
 
-### 关于「0 评分」这件事（2026-10-23 实读）
+### 关于「0 评分」这件事（2026-10-23 实读；2026-10-27 复核）
 
-**我们商店页今天显示的是 `23 users` / `0 out of 5` / `No ratings`**（领衔代理用真实浏览器直读，
+**我们商店页显示的是 `0 out of 5` / `No ratings`**（领衔代理用真实浏览器直读，
 与 shields.io 第三方镜像一致）。同一屏的竞品卡片写着 4.0 / 4.7 / 4.8 / 4.7。
+
+⚠️ 用户数在动：10-23 实读 `23 users`，10-27 实读 `21 users` ——
+**引用这个数字时必须带日期**，别拿它当常量。
 
 更糟的一条：**我们商店页底部的 "You might also like…" 推荐的正是这四个竞品**
 （Video Speed Controller 300 万用户 / Video Speed Controller – Playback Speed for Any Video /
@@ -1020,7 +1118,7 @@ Video Speed Control / HTML5 Speed Controller）。
 | 字段 | 改了什么 | 为什么 |
 |---|---|---|
 | `Last Updated` | 2026-10-04 → 2026-10-20 | 本轮整体重写了文案 |
-| `Short Description` | 重写，**实测 115 字符**（旧 96） | 旧文案只说了「控制条自动隐藏」，6.0.9 最有辨识度的三件事一件都没出现 |
+| `Short Description` | 本文件重写成 115 字符（旧 96）—— ⚠️ **这一栏改不到商店**，Dashboard 里是只读的「软件包中的摘要」 | 旧文案只说了「控制条自动隐藏」，6.0.9 最有辨识度的三件事一件都没出现 |
 | `Detailed Description` | 中英**逐段对齐**重写，各 17 段 | 补 6 项新功能 + 对齐（治 `INCONSISTENT_LOCALE_METADATA`） |
 | `Single Purpose` | "any web video" → "the web video you are watching" | `any` 可被读成「所有网站」，属绝对化表述 |
 | `Graphics & Assets` | 5 张截图 + promo tile 全部重新生成，状态 → ✅ Ready | 磁盘上的截图 PNG 还是 6.0.8 那版，控制条已重做；promo tile 的副标题有 `any` 歧义 |
@@ -1061,7 +1159,8 @@ Video Speed Control / HTML5 Speed Controller）。
 
 ### Dashboard 内操作清单（API 改不了 metadata）
 
-- [ ] Short Description → 复制上面那一行（115 字符，**别让编辑器自动换行**）
+- [ ] ~~Short Description~~ → **这一栏不存在**。Dashboard 里叫「软件包中的摘要」，
+      是只读段落，取自 `_locales`；要改它得改 `_locales` + 升版本 + 出新包（2026-10-27 实读）
 - [ ] 详细描述（中文）→ 复制 `---` 之前的那一段
 - [ ] 详细描述（English）→ 复制 `---` 之后的那一段
 - [ ] 粘贴后**逐段数一遍**：中文 18 段，英文 18 段，一一对应

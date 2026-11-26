@@ -450,10 +450,10 @@ describe('buildGuideText', () => {
 
 describe('FirstRunHint', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
-  let recordFailedAttempt: Mock<[], Promise<void>>;
-  let isInCooldown: Mock<[], Promise<boolean>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
+  let recordFailedAttempt: Mock<() => Promise<void>>;
+  let isInCooldown: Mock<() => Promise<boolean>>;
   let hint: FirstRunHint;
 
   const start = async (video: HTMLVideoElement) => {
@@ -719,8 +719,8 @@ describe('FirstRunHint', () => {
  */
 describe('FirstRunHint：装饰性自动播放视频', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
   let hint: FirstRunHint | undefined;
 
   /**
@@ -1055,10 +1055,10 @@ describe('FirstRunHint：装饰性自动播放视频', () => {
  */
 describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
-  let recordFailedAttempt: Mock<[], Promise<void>>;
-  let isInCooldown: Mock<[], Promise<boolean>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
+  let recordFailedAttempt: Mock<() => Promise<void>>;
+  let isInCooldown: Mock<() => Promise<boolean>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -1152,11 +1152,11 @@ describe('FirstRunHint：看不见的视频不消耗那唯一一次机会', () =
  */
 describe('FirstRunHint：「已展示」在显示的当下就落盘', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
-  let recordFailedAttempt: Mock<[], Promise<void>>;
-  let resetFailedAttempts: Mock<[], Promise<void>>;
-  let isInCooldown: Mock<[], Promise<boolean>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
+  let recordFailedAttempt: Mock<() => Promise<void>>;
+  let resetFailedAttempts: Mock<() => Promise<void>>;
+  let isInCooldown: Mock<() => Promise<boolean>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -1558,8 +1558,8 @@ describe('FirstRunHint：连续失败之后不再打扰，但机会还在', () =
  */
 describe('FirstRunHint：窗口期里的按键不取消等待', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -1625,8 +1625,8 @@ describe('FirstRunHint：窗口期里的按键不取消等待', () => {
  */
 describe('FirstRunHint：shadow DOM 里的视频', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -1695,10 +1695,10 @@ describe('FirstRunHint：shadow DOM 里的视频', () => {
  */
 describe('FirstRunHint：关闭按钮的焦点环', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
-  let recordFailedAttempt: Mock<[], Promise<void>>;
-  let isInCooldown: Mock<[], Promise<boolean>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
+  let recordFailedAttempt: Mock<() => Promise<void>>;
+  let isInCooldown: Mock<() => Promise<boolean>>;
   let hint: FirstRunHint | undefined;
 
   const create = async () => {
@@ -1787,8 +1787,8 @@ describe('FirstRunHint：关闭按钮的焦点环', () => {
  */
 describe('FirstRunHint：面板位置', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
   let hint: FirstRunHint | undefined;
 
   beforeEach(() => {
@@ -1846,8 +1846,8 @@ describe('FirstRunHint：面板位置', () => {
  */
 describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
   let hint: FirstRunHint;
 
   /**
@@ -2052,10 +2052,10 @@ describe('FirstRunHint：引导要放得下（嵌入框里的小视口）', () =
 
 describe('FirstRunHint：引导归「拥有视频的那个 frame」', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
-  let recordFailedAttempt: Mock<[], Promise<void>>;
-  let isInCooldown: Mock<[], Promise<boolean>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
+  let recordFailedAttempt: Mock<() => Promise<void>>;
+  let isInCooldown: Mock<() => Promise<boolean>>;
   /** 本次用例里建过的运行时（afterEach 统一销毁）。 */
   const hints: FirstRunHint[] = [];
 
@@ -2457,10 +2457,10 @@ describe('认领的原子性：两个实例同时抢，只有一个赢', () => {
  */
 describe('FirstRunHint：设置页重置之后，同一个标签页里能再看到一次引导', () => {
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
-  let recordFailedAttempt: Mock<[], Promise<void>>;
-  let isInCooldown: Mock<[], Promise<boolean>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
+  let recordFailedAttempt: Mock<() => Promise<void>>;
+  let isInCooldown: Mock<() => Promise<boolean>>;
   let hint: FirstRunHint;
   let storageListeners: Array<
     (changes: Record<string, chrome.storage.StorageChange>, namespace: string) => void
@@ -2619,8 +2619,8 @@ describe('接缝：判定只有一份（VideoRegistry 代答）', () => {
   let registry: VideoRegistry;
   let hint: FirstRunHint | undefined;
   let shortcuts: ShortcutSettings;
-  let wasShown: Mock<[], Promise<boolean>>;
-  let markShown: Mock<[], Promise<void>>;
+  let wasShown: Mock<() => Promise<boolean>>;
+  let markShown: Mock<() => Promise<void>>;
 
   /** 按**生产接线**建一个引导：判定由 registry 代答。 */
   const create = async () => {

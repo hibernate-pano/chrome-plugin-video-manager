@@ -40,7 +40,7 @@ const createVideo = () => {
 describe('内容脚本回答「谁有视频」', () => {
   let runtime: ContentRuntime;
   let store: Map<string, unknown>;
-  let sendMessage: Mock<any[]>;
+  let sendMessage: Mock;
 
   const setup = async () => {
     vi.useFakeTimers();
@@ -133,7 +133,7 @@ describe('内容脚本回答「谁有视频」', () => {
 describe('快捷键在本层没有目标时的解释', () => {
   let runtime: ContentRuntime;
   let store: Map<string, unknown>;
-  let sendMessage: Mock<any[]>;
+  let sendMessage: Mock;
 
   /** background 对「别的 frame 有没有视频」的回答。 */
   let queryAnswer: unknown = null;

@@ -1,0 +1,1 @@
+Minimal keyboard shortcuts and a clean page-fullscreen player that only controls the video you are watching
